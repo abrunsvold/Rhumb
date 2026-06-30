@@ -1,0 +1,118 @@
+use crate::sse::SseParser;
+use futures_util::StreamExt;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use tauri::ipc::Channel;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Default)]
+pub struct StreamState {
+    pub agent: Mutex<HashMap<String, CancellationToken>>,
+    pub registry: Mutex<Option<CancellationToken>>,
+}
+
+async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
+    let resp = match reqwest::get(&url).await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut stream = resp.bytes_stream();
+    let mut parser = SseParser::new();
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => break,
+            chunk = stream.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        if let Ok(text) = std::str::from_utf8(&bytes) {
+                            for payload in parser.push(text) {
+                                if let Ok(v) = serde_json::from_str::<Value>(&payload) {
+                                    let _ = on_event.send(v);
+                                }
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn send_message(
+    agent_base: String,
+    turn_id: String,
+    prompt: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let url = format!("{}/messages", agent_base.trim_end_matches('/'));
+    let mut body = serde_json::json!({ "turnId": turn_id, "prompt": prompt });
+    if let Some(sid) = session_id {
+        body["sessionId"] = Value::String(sid);
+    }
+    reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_agent_stream(
+    state: tauri::State<'_, StreamState>,
+    agent_base: String,
+    turn_id: String,
+    on_event: Channel<Value>,
+) -> Result<(), String> {
+    let token = CancellationToken::new();
+    if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
+        old.cancel();
+    }
+    let url = format!("{}/turns/{}/stream", agent_base.trim_end_matches('/'), turn_id);
+    tokio::spawn(async move { pump(url, on_event, token).await });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_agent_stream(state: tauri::State<'_, StreamState>, turn_id: String) {
+    if let Some(tok) = state.agent.lock().unwrap().remove(&turn_id) {
+        tok.cancel();
+    }
+}
+
+#[tauri::command]
+pub async fn get_registry(dashboard_base: String) -> Result<Value, String> {
+    let url = format!("{}/registry", dashboard_base.trim_end_matches('/'));
+    reqwest::get(&url)
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_registry_stream(
+    state: tauri::State<'_, StreamState>,
+    dashboard_base: String,
+    on_update: Channel<Value>,
+) -> Result<(), String> {
+    let token = CancellationToken::new();
+    if let Some(old) = state.registry.lock().unwrap().replace(token.clone()) {
+        old.cancel();
+    }
+    let url = format!("{}/registry/stream", dashboard_base.trim_end_matches('/'));
+    tokio::spawn(async move { pump(url, on_update, token).await });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_registry_stream(state: tauri::State<'_, StreamState>) {
+    if let Some(tok) = state.registry.lock().unwrap().take() {
+        tok.cancel();
+    }
+}

@@ -25,6 +25,17 @@ function subsFor(map: Map<string, Set<Response>>, id: string): Set<Response> {
   return set;
 }
 
+export function pruneSubscriber(
+  map: Map<string, Set<Response>>,
+  id: string,
+  res: Response,
+): void {
+  const set = map.get(id);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) map.delete(id);
+}
+
 export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
@@ -44,17 +55,17 @@ export function createServer(deps: {
   app.get("/sessions/:id/stream", (req: Request, res: Response) => {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
-    const set = subsFor(subscribers, req.params.id);
-    set.add(res);
-    req.on("close", () => set.delete(res));
+    const id = req.params.id;
+    subsFor(subscribers, id).add(res);
+    req.on("close", () => pruneSubscriber(subscribers, id, res));
   });
 
   app.get("/turns/:turnId/stream", (req: Request, res: Response) => {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
-    const set = subsFor(turnSubscribers, req.params.turnId);
-    set.add(res);
-    req.on("close", () => set.delete(res));
+    const turnId = req.params.turnId;
+    subsFor(turnSubscribers, turnId).add(res);
+    req.on("close", () => pruneSubscriber(turnSubscribers, turnId, res));
   });
 
   app.post("/messages", (req: Request, res: Response) => {

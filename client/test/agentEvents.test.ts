@@ -55,4 +55,14 @@ describe("reduceAgent", () => {
     expect(before.messages).toEqual([]);
     expect(after).not.toBe(before);
   });
+
+  it("renders an errored result as an error message", () => {
+    const s = run([{ type: "result", result: "failed run", isError: true }]);
+    expect(s.messages).toEqual([{ kind: "error", text: "failed run" }]);
+  });
+
+  it("still renders a successful result as a result message", () => {
+    const s = run([{ type: "result", result: "done", isError: false }]);
+    expect(s.messages).toEqual([{ kind: "result", text: "done" }]);
+  });
 });
