@@ -39,7 +39,13 @@ export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
     case "session":
       return { ...state, sessionId: event.sessionId };
     case "result":
-      return { ...state, messages: [...state.messages, { kind: "result", text: event.result }] };
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { kind: event.isError ? "error" : "result", text: event.result },
+        ],
+      };
     case "error":
       return { ...state, messages: [...state.messages, { kind: "error", text: event.message }] };
     case "raw": {
