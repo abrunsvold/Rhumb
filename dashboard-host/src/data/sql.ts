@@ -47,5 +47,7 @@ export function buildSql(op: DataOp): { text: string; params: unknown[] } {
       const conds = whereKeys.map((k) => `${ident(k)} = ${push(op.where[k])}`).join(" AND ");
       return { text: `DELETE FROM ${ident(op.table)} WHERE ${conds}`, params };
     }
+    default:
+      throw new Error(`unsupported op kind: ${(op as { kind?: string }).kind}`);
   }
 }

@@ -14,9 +14,15 @@ export interface DataRouterDeps {
   now: () => string;
 }
 
-function surfaceIdFromReferer(req: Request): string | null {
+export function surfaceIdFromReferer(req: Request): string | null {
   const ref = req.get("referer") ?? "";
-  const m = ref.match(/\/surfaces\/([A-Za-z0-9._-]+)(?:\/|$)/);
+  let pathname: string;
+  try {
+    pathname = new URL(ref).pathname;
+  } catch {
+    return null;
+  }
+  const m = pathname.match(/^\/surfaces\/([A-Za-z0-9._-]+)(?:\/|$)/);
   return m ? m[1] : null;
 }
 

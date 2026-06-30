@@ -51,4 +51,9 @@ describe("buildSql", () => {
     expect(() => buildSql({ kind: "insert", table: "t", values: {} })).toThrow(/values/);
     expect(() => buildSql({ kind: "update", table: "t", values: {}, where: { id: 1 } })).toThrow(/values/);
   });
+
+  it("throws on an unknown op kind", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => buildSql({ kind: "truncate", table: "t" } as any)).toThrow(/unsupported op/);
+  });
 });

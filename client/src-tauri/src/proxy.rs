@@ -19,19 +19,34 @@ impl Utf8Buffer {
 
     pub fn push(&mut self, bytes: &[u8]) -> String {
         self.buf.extend_from_slice(bytes);
-        match std::str::from_utf8(&self.buf) {
-            Ok(s) => {
-                let out = s.to_string();
-                self.buf.clear();
-                out
-            }
-            Err(e) => {
-                let valid = e.valid_up_to();
-                let out = String::from_utf8_lossy(&self.buf[..valid]).to_string();
-                self.buf.drain(..valid);
-                out
+        let mut out = String::new();
+        loop {
+            match std::str::from_utf8(&self.buf) {
+                Ok(s) => {
+                    out.push_str(s);
+                    self.buf.clear();
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    out.push_str(std::str::from_utf8(&self.buf[..valid]).unwrap());
+                    match e.error_len() {
+                        Some(bad) => {
+                            // genuinely invalid byte(s): emit a replacement and skip past them
+                            out.push('\u{FFFD}');
+                            self.buf.drain(..valid + bad);
+                            // continue loop to process remaining bytes
+                        }
+                        None => {
+                            // incomplete trailing sequence: keep it buffered for the next chunk
+                            self.buf.drain(..valid);
+                            break;
+                        }
+                    }
+                }
             }
         }
+        out
     }
 }
 
@@ -51,6 +66,16 @@ mod utf8_tests {
     fn passes_ascii_through() {
         let mut b = Utf8Buffer::new();
         assert_eq!(b.push(b"data: 1\n\n"), "data: 1\n\n");
+    }
+
+    #[test]
+    fn skips_an_invalid_byte_instead_of_stalling() {
+        let mut b = Utf8Buffer::new();
+        // 0xFF is never valid UTF-8; output must still advance and include later data
+        let out = b.push(&[b'a', 0xFF, b'b']);
+        assert!(out.starts_with('a'));
+        assert!(out.ends_with('b'));
+        assert_eq!(b.push(b"c"), "c"); // not stalled
     }
 }
 
