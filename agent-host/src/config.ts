@@ -13,8 +13,19 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
         "(uses your Claude subscription). RHUMBR does not use ANTHROPIC_API_KEY.",
     );
   }
+  let port = 8787;
+  if (env.RHUMBR_PORT) {
+    const parsed = Number.parseInt(env.RHUMBR_PORT, 10);
+    if (Number.isNaN(parsed)) {
+      throw new Error(
+        `RHUMBR_PORT must be a number, got "${env.RHUMBR_PORT}"`,
+      );
+    }
+    port = parsed;
+  }
+
   return {
-    port: env.RHUMBR_PORT ? Number(env.RHUMBR_PORT) : 8787,
+    port,
     model: env.RHUMBR_MODEL?.trim() || "claude-opus-4-8",
     workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
     oauthToken,

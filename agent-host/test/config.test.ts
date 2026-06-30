@@ -36,4 +36,10 @@ describe("loadConfig", () => {
       oauthToken: "tok",
     });
   });
+
+  it("throws when RHUMBR_PORT is not numeric", () => {
+    expect(() =>
+      loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMBR_PORT: "abc" }),
+    ).toThrow(/RHUMBR_PORT/);
+  });
 });
