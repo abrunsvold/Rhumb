@@ -208,6 +208,8 @@ client treats it exactly like a `file` surface — a persistent, interactive tab
 - Assumes **Tailscale + Proxmox are already set up**.
 
 ### Explicitly deferred (YAGNI for v1)
+- **Fast service spin-up** — base-image/template caching to avoid per-spawn
+  dependency installs. Services may be slow to start in v1; that's acceptable.
 - Multi-user, dashboard sharing / marketplace.
 - Mobile clients.
 - Tailscale / Proxmox auto-provisioning or install wizard.
