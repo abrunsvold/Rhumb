@@ -51,3 +51,22 @@ export function openRegistryStream(
   void invoke("start_registry_stream", { dashboardBase, onUpdate: channel });
   return () => void invoke("stop_registry_stream");
 }
+
+export function openPendingStream(
+  dashboardBase: string,
+  onPending: (e: unknown) => void,
+): () => void {
+  const channel = new Channel<unknown>();
+  channel.onmessage = onPending;
+  void invoke("start_pending_stream", { dashboardBase, onPending: channel });
+  return () => void invoke("stop_pending_stream");
+}
+
+export function resolvePending(
+  dashboardBase: string,
+  pendingId: string,
+  decision: "approve" | "deny",
+  trustSurface: boolean,
+): Promise<void> {
+  return invoke("resolve_pending", { dashboardBase, pendingId, decision, trustSurface });
+}

@@ -58,6 +58,7 @@ mod utf8_tests {
 pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
     pub registry: Mutex<Option<CancellationToken>>,
+    pub pending: Mutex<Option<CancellationToken>>,
 }
 
 async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
@@ -163,4 +164,43 @@ pub fn stop_registry_stream(state: tauri::State<'_, StreamState>) {
     if let Some(tok) = state.registry.lock().unwrap().take() {
         tok.cancel();
     }
+}
+
+#[tauri::command]
+pub async fn start_pending_stream(
+    state: tauri::State<'_, StreamState>,
+    dashboard_base: String,
+    on_pending: Channel<Value>,
+) -> Result<(), String> {
+    let token = CancellationToken::new();
+    if let Some(old) = state.pending.lock().unwrap().replace(token.clone()) {
+        old.cancel();
+    }
+    let url = format!("{}/data/pending/stream", dashboard_base.trim_end_matches('/'));
+    tokio::spawn(async move { pump(url, on_pending, token).await });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_pending_stream(state: tauri::State<'_, StreamState>) {
+    if let Some(tok) = state.pending.lock().unwrap().take() {
+        tok.cancel();
+    }
+}
+
+#[tauri::command]
+pub async fn resolve_pending(
+    dashboard_base: String,
+    pending_id: String,
+    decision: String,
+    trust_surface: bool,
+) -> Result<(), String> {
+    let url = format!("{}/data/pending/{}/resolve", dashboard_base.trim_end_matches('/'), pending_id);
+    reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface }))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
