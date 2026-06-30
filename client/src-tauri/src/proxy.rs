@@ -6,6 +6,54 @@ use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
+/// Accumulates raw bytes and yields the largest valid UTF-8 prefix as a String,
+/// keeping any trailing incomplete multibyte sequence buffered for the next call.
+pub struct Utf8Buffer {
+    buf: Vec<u8>,
+}
+
+impl Utf8Buffer {
+    pub fn new() -> Self {
+        Utf8Buffer { buf: Vec::new() }
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) -> String {
+        self.buf.extend_from_slice(bytes);
+        match std::str::from_utf8(&self.buf) {
+            Ok(s) => {
+                let out = s.to_string();
+                self.buf.clear();
+                out
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                let out = String::from_utf8_lossy(&self.buf[..valid]).to_string();
+                self.buf.drain(..valid);
+                out
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod utf8_tests {
+    use super::*;
+
+    #[test]
+    fn reassembles_a_multibyte_char_split_across_chunks() {
+        // '✅' is E2 9C 85
+        let mut b = Utf8Buffer::new();
+        assert_eq!(b.push(&[0xE2, 0x9C]), ""); // incomplete, nothing yet
+        assert_eq!(b.push(&[0x85]), "✅");
+    }
+
+    #[test]
+    fn passes_ascii_through() {
+        let mut b = Utf8Buffer::new();
+        assert_eq!(b.push(b"data: 1\n\n"), "data: 1\n\n");
+    }
+}
+
 #[derive(Default)]
 pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
@@ -19,17 +67,17 @@ async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
     };
     let mut stream = resp.bytes_stream();
     let mut parser = SseParser::new();
+    let mut decoder = Utf8Buffer::new();
     loop {
         tokio::select! {
             _ = token.cancelled() => break,
             chunk = stream.next() => {
                 match chunk {
                     Some(Ok(bytes)) => {
-                        if let Ok(text) = std::str::from_utf8(&bytes) {
-                            for payload in parser.push(text) {
-                                if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-                                    let _ = on_event.send(v);
-                                }
+                        let text = decoder.push(&bytes);
+                        for payload in parser.push(&text) {
+                            if let Ok(v) = serde_json::from_str::<Value>(&payload) {
+                                let _ = on_event.send(v);
                             }
                         }
                     }
