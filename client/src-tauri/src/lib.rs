@@ -1,4 +1,5 @@
 mod config;
+mod proxy;
 mod sse;
 
 use tauri::Manager;
@@ -42,7 +43,18 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_config, set_config, check_health])
+        .manage(proxy::StreamState::default())
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            set_config,
+            check_health,
+            proxy::send_message,
+            proxy::start_agent_stream,
+            proxy::stop_agent_stream,
+            proxy::get_registry,
+            proxy::start_registry_stream,
+            proxy::stop_registry_stream,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
