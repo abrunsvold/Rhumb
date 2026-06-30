@@ -1,6 +1,9 @@
 export interface Config {
   port: number;
   workspace: string;
+  dataSourcesPath: string;
+  dataTrustPath: string;
+  dataAuditPath: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -14,8 +17,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     }
     port = parsed;
   }
+  const workspace = env.RHUMBR_WORKSPACE?.trim() || "./workspace";
   return {
     port,
-    workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
+    workspace,
+    dataSourcesPath: env.RHUMBR_DATA_SOURCES?.trim() || `${workspace}/data-sources.json`,
+    dataTrustPath: env.RHUMBR_DATA_TRUST?.trim() || `${workspace}/data-trust.json`,
+    dataAuditPath: env.RHUMBR_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
   };
 }
