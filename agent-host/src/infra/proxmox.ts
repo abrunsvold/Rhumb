@@ -4,15 +4,18 @@ import type { ProxmoxClient, InfraConfig, Vm, VmStatus } from "./types.js";
 // Proxmox VE API (qemu under /nodes/{node}/qemu). Live-verified against the operator's PVE.
 export function createProxmoxClient(cfg: NonNullable<InfraConfig["proxmox"]>): ProxmoxClient {
   const base = `${cfg.baseUrl.replace(/\/$/, "")}/api2/json`;
-  const headers = { Authorization: `PVEAPIToken=${cfg.tokenId}=${cfg.tokenSecret}`, "Content-Type": "application/x-www-form-urlencoded" };
+  const authHeader = `PVEAPIToken=${cfg.tokenId}=${cfg.tokenSecret}`;
   const node = cfg.node;
 
   async function call(method: string, path: string, body?: Record<string, unknown>): Promise<unknown> {
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers,
-      body: body ? new URLSearchParams(body as Record<string, string>).toString() : undefined,
-    });
+    // Encode the body as form-urlencoded (Proxmox expects this for POSTs), coercing
+    // numeric fields to strings explicitly. Only send Content-Type when there is a body.
+    const encoded = body
+      ? new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v)])).toString()
+      : undefined;
+    const headers: Record<string, string> = { Authorization: authHeader };
+    if (encoded !== undefined) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const res = await fetch(`${base}${path}`, { method, headers, body: encoded });
     if (!res.ok) throw new Error(`proxmox ${method} ${path}: ${res.status} ${await res.text()}`);
     return ((await res.json()) as { data: unknown }).data;
   }
