@@ -218,8 +218,19 @@ client treats it exactly like a `file` surface — a persistent, interactive tab
 
 ## 6. Key assumptions
 - **Name:** RHUMBR.
-- **"Existing Claude subscription"** = Claude Code's normal interactive login
-  running on the server, not API keys.
+- **Auth = Claude subscription, personal-tool framing.** The agent host runs the
+  Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) authenticated with a
+  long-lived OAuth token from `claude setup-token`, supplied via the
+  `CLAUDE_CODE_OAUTH_TOKEN` environment variable — i.e. the operator's own Claude
+  subscription, not an API key.
+- **Compliance note (must ship in docs/README):** Anthropic's terms state that,
+  without prior approval, third-party developers may not *offer* claude.ai login
+  or rate limits in their products, **including agents built on the Claude Agent
+  SDK**. RHUMBR is therefore framed and distributed as a **self-hosted personal
+  tool**: each operator runs it on their own hardware with their own credentials;
+  RHUMBR does not broker, proxy, or "offer" login to anyone. The README must state
+  this plainly and direct anyone wanting a distributed/multi-tenant offering to
+  seek Anthropic approval first.
 - Single user (the operator) for v1.
 - Tailscale provides the trust boundary; the box's services are reachable only on
   the tailnet.
