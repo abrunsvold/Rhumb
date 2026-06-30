@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import request from "supertest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Response } from "express";
@@ -93,5 +93,16 @@ describe("dashboard-host server", () => {
   it("404s a missing surface", async () => {
     const res = await request(app()).get("/surfaces/nope/");
     expect(res.status).toBe(404);
+  });
+
+  it("does not follow a symlink that escapes the surface folder", async () => {
+    writeSurface("d1");
+    symlinkSync(
+      join(workspace, "secret.txt"),
+      join(workspace, "surfaces", "d1", "leak.txt"),
+    );
+    const res = await request(app()).get("/surfaces/d1/leak.txt");
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain("TOP SECRET");
   });
 });

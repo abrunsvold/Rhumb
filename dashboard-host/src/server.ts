@@ -1,5 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import { resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
 import { readSurfaceMeta } from "./registry.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
@@ -41,14 +42,8 @@ export function createServer(deps: {
       return;
     }
     const surfaceDir = resolve(surfacesRoot, id);
-    // Decode and normalize the sub-path; default to the surface's entry.
-    let rel = "";
-    try {
-      rel = decodeURIComponent((req.params[0] as string | undefined) ?? "");
-    } catch {
-      res.sendStatus(404);
-      return;
-    }
+    // Splat sub-path (already URL-decoded by Express); default to the entry.
+    let rel = (req.params[0] as string | undefined) ?? "";
     if (rel === "" || rel.endsWith("/")) {
       const meta = readSurfaceMeta(surfaceDir);
       if (!meta) {
@@ -58,12 +53,27 @@ export function createServer(deps: {
       rel = rel + meta.entry;
     }
     const target = resolve(surfaceDir, rel);
-    const within = target === surfaceDir || target.startsWith(surfaceDir + sep);
-    if (!within) {
+    // Lexical pre-filter: reject path strings that escape the surface dir.
+    if (!(target === surfaceDir || target.startsWith(surfaceDir + sep))) {
       res.sendStatus(404);
       return;
     }
-    res.sendFile(target, (err) => {
+    // Filesystem confinement: resolve symlinks and re-check, so a symlink
+    // inside the surface cannot point outside it. Any resolution failure → 404.
+    let realRoot: string;
+    let realTarget: string;
+    try {
+      realRoot = realpathSync(surfaceDir);
+      realTarget = realpathSync(target);
+    } catch {
+      res.sendStatus(404);
+      return;
+    }
+    if (!(realTarget === realRoot || realTarget.startsWith(realRoot + sep))) {
+      res.sendStatus(404);
+      return;
+    }
+    res.sendFile(realTarget, (err) => {
       if (err) res.sendStatus(404);
     });
   };
