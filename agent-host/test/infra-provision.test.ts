@@ -25,6 +25,13 @@ describe("appendDataSource", () => {
     const out = appendDataSource(p, { id: "new", type: "postgres", mode: "read-write", connectionString: "z" });
     expect(out.map((s) => s.id)).toEqual(["old", "new"]);
   });
+
+  it("treats a corrupt file as empty", () => {
+    const p = join(dir, "ds.json");
+    writeFileSync(p, "not json{");
+    const e = { id: "a", type: "postgres" as const, mode: "read-write" as const, connectionString: "x" };
+    expect(appendDataSource(p, e)).toEqual([e]);
+  });
 });
 
 describe("provisionDatabase", () => {
@@ -51,5 +58,11 @@ describe("provisionDatabase", () => {
     await expect(
       provisionDatabase({ admin, dataSourcesPath: join(dir, "ds.json"), password: () => "pw" }, "bad; drop"),
     ).rejects.toThrow(/identifier/);
+  });
+
+  it("rejects a password containing a single quote", async () => {
+    await expect(
+      provisionDatabase({ admin, dataSourcesPath: join(dir, "ds.json"), password: () => "bad'pw" }, "ok"),
+    ).rejects.toThrow(/password/);
   });
 });
