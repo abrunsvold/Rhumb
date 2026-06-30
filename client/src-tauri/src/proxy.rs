@@ -69,7 +69,9 @@ pub async fn start_agent_stream(
     on_event: Channel<Value>,
 ) -> Result<(), String> {
     let token = CancellationToken::new();
-    state.agent.lock().unwrap().insert(turn_id.clone(), token.clone());
+    if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
+        old.cancel();
+    }
     let url = format!("{}/turns/{}/stream", agent_base.trim_end_matches('/'), turn_id);
     tokio::spawn(async move { pump(url, on_event, token).await });
     Ok(())
@@ -100,7 +102,9 @@ pub async fn start_registry_stream(
     on_update: Channel<Value>,
 ) -> Result<(), String> {
     let token = CancellationToken::new();
-    *state.registry.lock().unwrap() = Some(token.clone());
+    if let Some(old) = state.registry.lock().unwrap().replace(token.clone()) {
+        old.cancel();
+    }
     let url = format!("{}/registry/stream", dashboard_base.trim_end_matches('/'));
     tokio::spawn(async move { pump(url, on_update, token).await });
     Ok(())

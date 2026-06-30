@@ -5,11 +5,12 @@ import type { AgentEvent } from "../src/lib/types";
 import { AgentPanel } from "../src/components/AgentPanel";
 
 let capturedOnEvent: ((e: AgentEvent) => void) | null = null;
+const stopSpy = vi.fn();
 
 vi.mock("../src/lib/tauri", () => ({
   openAgentStream: vi.fn((_base: string, _turnId: string, onEvent: (e: AgentEvent) => void) => {
     capturedOnEvent = onEvent;
-    return () => {};
+    return stopSpy;
   }),
   sendMessage: vi.fn().mockResolvedValue(undefined),
 }));
@@ -38,5 +39,13 @@ describe("AgentPanel", () => {
     // a streamed result event renders
     capturedOnEvent?.({ type: "result", result: "the answer", isError: false });
     expect(await screen.findByText("the answer")).toBeTruthy();
+  });
+
+  it("stops the stream when the turn's result arrives", async () => {
+    render(<AgentPanel agentBase="http://a:8787" />);
+    await userEvent.type(screen.getByRole("textbox"), "hi");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    capturedOnEvent?.({ type: "result", result: "x", isError: false });
+    expect(stopSpy).toHaveBeenCalledTimes(1);
   });
 });
