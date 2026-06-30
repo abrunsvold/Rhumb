@@ -29,6 +29,9 @@ others can stand up their own.
 - **Runs on your own compute, your own data.** Nothing lives in a hosted SaaS.
 - **The agent operates your infrastructure** — it can manage VMs and provision
   databases to support complex work, not just read data.
+- **The agent can build full applications, not just static dashboards** — it can
+  spawn complete backend services (any stack), each isolated in its own
+  Proxmox-managed container.
 - **A persistent ontology** gives the agent (and you) a coherent, browsable model
   of both your environment and your domain data.
 
@@ -67,12 +70,20 @@ Runs Claude Code via its programmatic/streaming interface (Agent SDK /
 API over the tailnet: start/resume a session, send a message, stream events
 (text, tool calls, results). Owns the workspace folder.
 
-**3.2 Dashboard host**
-Watches the workspace folder. Serves each Claude-built artifact (HTML/JS) at a
-**stable tailnet URL**. Exposes a **registry** — a JSON manifest of available
-dashboards (`id`, `title`, `url`, `created`, `updated`). The registry contract is
-kept clean so that later agent-spawned full services (deferred) can register the
-same way.
+**3.2 Dashboard host + service router**
+Watches the workspace folder. Exposes a **registry** — a JSON manifest of
+available surfaces (`id`, `title`, `url`, `kind`, `created`, `updated`) — and
+serves them at **stable tailnet URLs**. A surface comes in two `kind`s, both
+rendered identically by the client:
+- **`file`** — a static-ish artifact (HTML/JS) the host serves directly. Live only
+  via calls to the data endpoint.
+- **`service`** — a full app running in its own container (see 3.4). The host runs
+  a **reverse proxy** mapping the surface's stable tailnet URL to the container's
+  port, so a running app looks identical to a served file from the client's side.
+
+**Files and services converge here:** the agent picks the simplest `kind` that
+does the job, and everything downstream (registry, client rendering, persistence)
+is the same.
 
 **3.3 Data endpoint**
 A sanctioned API that dashboards call for **live data**, so they are never static.
@@ -96,6 +107,22 @@ the agent panel and is auditable.
 - **Guardrails:** destructive/infra ops (create, resize, destroy) require a
   confirmation in the client; reads/listing do not. Everything appends to the
   audit log. Scoped credentials cap the worst case.
+
+**Spawned services (container-isolated).** A `service` surface is "a dashboard
+whose runtime is a Proxmox container the agent provisioned." The agent:
+- Writes the app code + a **service manifest** (`type: service`, `start` command,
+  `port`, optional `resources`) into the workspace.
+- Provisions a dedicated **Proxmox LXC/container** as the runtime — so isolation,
+  CPU/RAM limits, and lifecycle (start/stop/restart/destroy) come from the infra
+  capability above, not from new bespoke machinery.
+- Registers the service in the **registry** via the dashboard host's reverse proxy
+  (3.2), which maps a stable tailnet URL to the container's port.
+- **Container = blast-radius boundary.** Arbitrary long-running code is allowed,
+  but only inside its container; the scoped token, audit log, and confirmations
+  still apply. **Raw processes on the host are not permitted** — every service is
+  containerized.
+- The host applies a **health/restart policy** (restart on crash, restore on
+  reboot) and cleans up dead services.
 
 **3.5 Ontology**
 The system's central, persistent memory — a knowledge graph stored as
@@ -152,6 +179,12 @@ hosts; manages reconnection.
 6. For complex tasks, the agent may use **infrastructure tools** (provision a DB,
    adjust a VM) — each gated, audited, and reflected in the **ontology**.
 
+**Service variant of the loop:** when a static file isn't enough, at step 2 the
+agent instead writes app code + a service manifest, provisions a **container**,
+and starts the app. The dashboard host's reverse proxy maps a stable URL to the
+container port and registers it as a `service` surface. From step 4 onward the
+client treats it exactly like a `file` surface — a persistent, interactive tab.
+
 ---
 
 ## 5. Scope
@@ -165,13 +198,16 @@ hosts; manages reconnection.
 - Infrastructure capability: **full VM lifecycle** (incl. destroy) with strong
   confirmations + scoped token; **database provisioning** that auto-registers as a
   data source.
+- **Agent-spawned full backend services**, each isolated in its own
+  **Proxmox-managed container**, registered through the dashboard host's reverse
+  proxy and rendered identically to file dashboards. Includes the routing proxy +
+  health/restart policy. (Raw host processes are *not* permitted — containers
+  only.)
 - Ontology: **system + domain layers, linked**, stored as Obsidian-style markdown.
 - Tauri client: chat-first agent panel + flexible canvas with detachable windows.
 - Assumes **Tailscale + Proxmox are already set up**.
 
 ### Explicitly deferred (YAGNI for v1)
-- Agent-spawned full backend services (arbitrary stacks/ports) — registry contract
-  stays clean so this can slot in later.
 - Multi-user, dashboard sharing / marketplace.
 - Mobile clients.
 - Tailscale / Proxmox auto-provisioning or install wizard.
@@ -200,3 +236,9 @@ hosts; manages reconnection.
   the agent mutates it (idempotent writes, conflict handling).
 - **Dashboard ↔ data-endpoint contract:** how a served page authenticates to the
   data endpoint over the tailnet.
+- **Service routing & health:** the reverse-proxy URL→container-port mapping,
+  health-check/restart policy, restore-on-reboot, and cleanup of dead services.
+- **Container build cost:** dependency installs (`npm`/`pip`) and image/template
+  reuse so spawning a service isn't slow every time.
+- **Service blast radius:** containerization bounds it, but confirm the container
+  template's default network access on the tailnet is appropriately limited.
