@@ -22,7 +22,13 @@ export function makeCanUseTool(deps: { pending: PendingActions; auditPath: strin
     }
     const gatedTool = toolName.replace("mcp__infra__", "") as GatedTool;
     const { decision } = deps.pending.enqueue(gatedTool, input);
-    const d = await decision;
+    let d: "approve" | "deny";
+    try {
+      d = await decision;
+    } catch (e) {
+      appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input, decision: "error", error: String(e) });
+      return { behavior: "deny", message: "Infrastructure action could not be confirmed." };
+    }
     appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input, decision: d === "approve" ? "approved" : "denied" });
     return d === "approve"
       ? { behavior: "allow", updatedInput: input }

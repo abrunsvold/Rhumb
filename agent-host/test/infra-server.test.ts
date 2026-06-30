@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeCanUseTool, GATED_TOOLS } from "../src/infra/server.js";
@@ -41,6 +41,17 @@ describe("makeCanUseTool", () => {
     const r = await promise;
     expect(r.behavior).toBe("deny");
     expect(JSON.parse(readFileSync(auditPath, "utf8").trim()).decision).toBe("denied");
+  });
+
+  it("fails closed (deny + error audit) if the decision promise rejects", async () => {
+    const auditPath = join(dir, "a.jsonl");
+    const fakePending = {
+      enqueue: () => ({ action: { pendingId: "x", tool: "destroy_vm", input: {}, createdAt: "T" }, decision: Promise.reject(new Error("boom")) }),
+    } as unknown as PendingActions;
+    const canUse = makeCanUseTool({ pending: fakePending, auditPath, now: () => "T" });
+    const r = await canUse("mcp__infra__destroy_vm", { id: 1 }, {} as never);
+    expect(r.behavior).toBe("deny");
+    expect(JSON.parse(readFileSync(auditPath, "utf8").trim()).decision).toBe("error");
   });
 
   it("GATED_TOOLS lists the six destructive/provisioning tools", () => {
