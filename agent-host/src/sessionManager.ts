@@ -9,11 +9,18 @@ export class SessionManager {
   private readonly query: QueryFn;
   private readonly model: string;
   private readonly workspace: string;
+  private readonly permissionMode: string;
 
-  constructor(opts: { query: QueryFn; model: string; workspace: string }) {
+  constructor(opts: {
+    query: QueryFn;
+    model: string;
+    workspace: string;
+    permissionMode?: string;
+  }) {
     this.query = opts.query;
     this.model = opts.model;
     this.workspace = opts.workspace;
+    this.permissionMode = opts.permissionMode ?? "acceptEdits";
   }
 
   async run(
@@ -24,7 +31,7 @@ export class SessionManager {
     const options: Record<string, unknown> = {
       model: this.model,
       cwd: this.workspace,
-      permissionMode: "acceptEdits",
+      permissionMode: this.permissionMode,
     };
     if (sessionId) options.resume = sessionId;
 
@@ -34,7 +41,7 @@ export class SessionManager {
         if (message?.type === "system" && message?.subtype === "init") {
           resolvedId = message.session_id;
           onEvent({ type: "session", sessionId: resolvedId });
-        } else if (message && "result" in message) {
+        } else if (message?.type === "result") {
           onEvent({
             type: "result",
             result: String(message.result ?? ""),

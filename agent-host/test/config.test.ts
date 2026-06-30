@@ -19,6 +19,7 @@ describe("loadConfig", () => {
       model: "claude-opus-4-8",
       workspace: "./workspace",
       oauthToken: "tok",
+      permissionMode: "acceptEdits",
     });
   });
 
@@ -34,6 +35,7 @@ describe("loadConfig", () => {
       model: "claude-sonnet-4-6",
       workspace: "/srv/ws",
       oauthToken: "tok",
+      permissionMode: "acceptEdits",
     });
   });
 
@@ -41,5 +43,22 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMBR_PORT: "abc" }),
     ).toThrow(/RHUMBR_PORT/);
+  });
+
+  it("honors RHUMBR_PERMISSION_MODE override", () => {
+    const cfg = loadConfig({
+      CLAUDE_CODE_OAUTH_TOKEN: "tok",
+      RHUMBR_PERMISSION_MODE: "plan",
+    });
+    expect(cfg.permissionMode).toBe("plan");
+  });
+
+  it("throws when RHUMBR_PERMISSION_MODE is invalid", () => {
+    expect(() =>
+      loadConfig({
+        CLAUDE_CODE_OAUTH_TOKEN: "tok",
+        RHUMBR_PERMISSION_MODE: "turbo",
+      }),
+    ).toThrow(/RHUMBR_PERMISSION_MODE/);
   });
 });

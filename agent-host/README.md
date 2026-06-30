@@ -30,7 +30,23 @@ Then export it before starting the host:
 
 Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMBR_PORT`
 (default 8787), `RHUMBR_MODEL` (default `claude-opus-4-8`), `RHUMBR_WORKSPACE`
-(default `./workspace`).
+(default `./workspace`), `RHUMBR_PERMISSION_MODE` (default `acceptEdits`).
+
+## Security
+
+The agent host runs Claude Code autonomously with Bash and Write access to the
+operator's machine. The `permissionMode` controls how much is gated:
+
+- **`acceptEdits`** (default) — Claude may auto-accept file edits; dangerous
+  Bash commands are still gated and require confirmation.
+- **`default`** — standard interactive mode; most actions require approval.
+- **`plan`** — Claude proposes a plan before executing; useful for review.
+- **`bypassPermissions`** — removes all permission gating. **WARNING:** with
+  this setting Claude Code can execute any Bash command or file write without
+  confirmation. Only use in fully trusted, isolated environments.
+
+Set via the `RHUMBR_PERMISSION_MODE` environment variable
+(`default` | `acceptEdits` | `bypassPermissions` | `plan`).
 
 ## API
 

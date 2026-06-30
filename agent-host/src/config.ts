@@ -3,7 +3,15 @@ export interface Config {
   model: string;
   workspace: string;
   oauthToken: string;
+  permissionMode: string;
 }
+
+const VALID_PERMISSION_MODES = new Set([
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+]);
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const oauthToken = env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
@@ -24,10 +32,22 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     port = parsed;
   }
 
+  let permissionMode = "acceptEdits";
+  if (env.RHUMBR_PERMISSION_MODE) {
+    const value = env.RHUMBR_PERMISSION_MODE.trim();
+    if (!VALID_PERMISSION_MODES.has(value)) {
+      throw new Error(
+        `RHUMBR_PERMISSION_MODE must be one of default|acceptEdits|bypassPermissions|plan, got "${value}"`,
+      );
+    }
+    permissionMode = value;
+  }
+
   return {
     port,
     model: env.RHUMBR_MODEL?.trim() || "claude-opus-4-8",
     workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
     oauthToken,
+    permissionMode,
   };
 }

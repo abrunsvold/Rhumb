@@ -5,7 +5,7 @@ import { buildApp } from "../src/index.js";
 describe("buildApp wiring", () => {
   it("builds an app whose /messages drives the injected query and streams a result", async () => {
     const app = buildApp({
-      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok" },
+      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits" },
       query: () =>
         (async function* () {
           yield { type: "system", subtype: "init", session_id: "sess-7" };

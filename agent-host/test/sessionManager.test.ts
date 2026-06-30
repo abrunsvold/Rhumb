@@ -63,4 +63,25 @@ describe("SessionManager.run", () => {
 
     expect(events.at(-1)).toEqual({ type: "error", message: "boom" });
   });
+
+  it("uses permissionMode from constructor opts when provided", async () => {
+    const calls: any[] = [];
+    const query: QueryFn = (args) => {
+      calls.push(args);
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sess-4" };
+        yield { type: "result", result: "", is_error: false };
+      })();
+    };
+    const mgr = new SessionManager({
+      query,
+      model: "m",
+      workspace: "./ws",
+      permissionMode: "plan",
+    });
+    await mgr.run("test", undefined, () => {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.permissionMode).toBe("plan");
+  });
 });
