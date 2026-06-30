@@ -2,14 +2,23 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import chokidar from "chokidar";
-import type { Express, Response } from "express";
+import express, { type Express, type Response } from "express";
 import { loadConfig, type Config } from "./config.js";
 import { createServer } from "./server.js";
 import { startWatcher, type WatchFn } from "./watcher.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
+import { loadDataSources } from "./data/sources.js";
+import { createPgExecutor } from "./data/pgExecutor.js";
+import { PendingQueue } from "./data/writes.js";
+import { createDataRouter } from "./data/router.js";
+import type { QueryExecutor, DataSource } from "./data/types.js";
 
-export function buildApp(deps: { config: Config; watch: WatchFn }): Express {
+export function buildApp(deps: {
+  config: Config;
+  watch: WatchFn;
+  executorFor?: (source: DataSource) => QueryExecutor;
+}): Express {
   const surfacesRoot = resolve(deps.config.workspace, "surfaces");
   const subscribers = new Set<Response>();
   let current: RegistrySnapshot = { surfaces: [] };
@@ -20,6 +29,8 @@ export function buildApp(deps: { config: Config; watch: WatchFn }): Express {
     subscribers,
   });
 
+  app.use(express.json());
+
   startWatcher({
     root: surfacesRoot,
     watch: deps.watch,
@@ -28,6 +39,35 @@ export function buildApp(deps: { config: Config; watch: WatchFn }): Express {
       for (const r of subscribers) writeSseEvent(r, { type: "registry", ...snap });
     },
   });
+
+  const sources = loadDataSources(deps.config.dataSourcesPath);
+  const executorFor = deps.executorFor ?? createPgExecutor;
+  const executorCache = new Map<string, QueryExecutor>();
+  const getExecutor = (sourceId: string): QueryExecutor => {
+    let ex = executorCache.get(sourceId);
+    if (!ex) {
+      const src = sources.find((s) => s.id === sourceId);
+      if (!src) throw new Error(`unknown source: ${sourceId}`);
+      ex = executorFor(src);
+      executorCache.set(sourceId, ex);
+    }
+    return ex;
+  };
+
+  const now = () => new Date().toISOString();
+  const queue = new PendingQueue({ getExecutor, auditPath: deps.config.dataAuditPath, now, id: () => crypto.randomUUID() });
+
+  app.use(
+    "/data",
+    createDataRouter({
+      sources,
+      getExecutor,
+      queue,
+      trustPath: deps.config.dataTrustPath,
+      auditPath: deps.config.dataAuditPath,
+      now,
+    }),
+  );
 
   return app;
 }

@@ -6,10 +6,84 @@ use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
+/// Accumulates raw bytes and yields the largest valid UTF-8 prefix as a String,
+/// keeping any trailing incomplete multibyte sequence buffered for the next call.
+pub struct Utf8Buffer {
+    buf: Vec<u8>,
+}
+
+impl Utf8Buffer {
+    pub fn new() -> Self {
+        Utf8Buffer { buf: Vec::new() }
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) -> String {
+        self.buf.extend_from_slice(bytes);
+        let mut out = String::new();
+        loop {
+            match std::str::from_utf8(&self.buf) {
+                Ok(s) => {
+                    out.push_str(s);
+                    self.buf.clear();
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    out.push_str(std::str::from_utf8(&self.buf[..valid]).unwrap());
+                    match e.error_len() {
+                        Some(bad) => {
+                            // genuinely invalid byte(s): emit a replacement and skip past them
+                            out.push('\u{FFFD}');
+                            self.buf.drain(..valid + bad);
+                            // continue loop to process remaining bytes
+                        }
+                        None => {
+                            // incomplete trailing sequence: keep it buffered for the next chunk
+                            self.buf.drain(..valid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod utf8_tests {
+    use super::*;
+
+    #[test]
+    fn reassembles_a_multibyte_char_split_across_chunks() {
+        // '✅' is E2 9C 85
+        let mut b = Utf8Buffer::new();
+        assert_eq!(b.push(&[0xE2, 0x9C]), ""); // incomplete, nothing yet
+        assert_eq!(b.push(&[0x85]), "✅");
+    }
+
+    #[test]
+    fn passes_ascii_through() {
+        let mut b = Utf8Buffer::new();
+        assert_eq!(b.push(b"data: 1\n\n"), "data: 1\n\n");
+    }
+
+    #[test]
+    fn skips_an_invalid_byte_instead_of_stalling() {
+        let mut b = Utf8Buffer::new();
+        // 0xFF is never valid UTF-8; output must still advance and include later data
+        let out = b.push(&[b'a', 0xFF, b'b']);
+        assert!(out.starts_with('a'));
+        assert!(out.ends_with('b'));
+        assert_eq!(b.push(b"c"), "c"); // not stalled
+    }
+}
+
 #[derive(Default)]
 pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
     pub registry: Mutex<Option<CancellationToken>>,
+    pub pending: Mutex<Option<CancellationToken>>,
 }
 
 async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
@@ -19,17 +93,17 @@ async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
     };
     let mut stream = resp.bytes_stream();
     let mut parser = SseParser::new();
+    let mut decoder = Utf8Buffer::new();
     loop {
         tokio::select! {
             _ = token.cancelled() => break,
             chunk = stream.next() => {
                 match chunk {
                     Some(Ok(bytes)) => {
-                        if let Ok(text) = std::str::from_utf8(&bytes) {
-                            for payload in parser.push(text) {
-                                if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-                                    let _ = on_event.send(v);
-                                }
+                        let text = decoder.push(&bytes);
+                        for payload in parser.push(&text) {
+                            if let Ok(v) = serde_json::from_str::<Value>(&payload) {
+                                let _ = on_event.send(v);
                             }
                         }
                     }
@@ -115,4 +189,43 @@ pub fn stop_registry_stream(state: tauri::State<'_, StreamState>) {
     if let Some(tok) = state.registry.lock().unwrap().take() {
         tok.cancel();
     }
+}
+
+#[tauri::command]
+pub async fn start_pending_stream(
+    state: tauri::State<'_, StreamState>,
+    dashboard_base: String,
+    on_pending: Channel<Value>,
+) -> Result<(), String> {
+    let token = CancellationToken::new();
+    if let Some(old) = state.pending.lock().unwrap().replace(token.clone()) {
+        old.cancel();
+    }
+    let url = format!("{}/data/pending/stream", dashboard_base.trim_end_matches('/'));
+    tokio::spawn(async move { pump(url, on_pending, token).await });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_pending_stream(state: tauri::State<'_, StreamState>) {
+    if let Some(tok) = state.pending.lock().unwrap().take() {
+        tok.cancel();
+    }
+}
+
+#[tauri::command]
+pub async fn resolve_pending(
+    dashboard_base: String,
+    pending_id: String,
+    decision: String,
+    trust_surface: bool,
+) -> Result<(), String> {
+    let url = format!("{}/data/pending/{}/resolve", dashboard_base.trim_end_matches('/'), pending_id);
+    reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface }))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }

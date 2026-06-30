@@ -54,6 +54,9 @@ pub fn run() {
             proxy::get_registry,
             proxy::start_registry_stream,
             proxy::stop_registry_stream,
+            proxy::start_pending_stream,
+            proxy::stop_pending_stream,
+            proxy::resolve_pending,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

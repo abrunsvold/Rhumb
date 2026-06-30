@@ -25,7 +25,16 @@ afterEach(() => {
 describe("buildApp wiring", () => {
   it("serves the registry seeded by the initial watcher scan and the surface entry", async () => {
     const noopWatch: WatchFn = () => ({ close() {} });
-    const app = buildApp({ config: { port: 0, workspace }, watch: noopWatch });
+    const app = buildApp({
+      config: {
+        port: 0,
+        workspace,
+        dataSourcesPath: join(workspace, "data-sources.json"),
+        dataTrustPath: join(workspace, "data-trust.json"),
+        dataAuditPath: join(workspace, "data-audit.jsonl"),
+      },
+      watch: noopWatch,
+    });
 
     const reg = await request(app).get("/registry");
     expect(reg.status).toBe(200);
@@ -35,5 +44,26 @@ describe("buildApp wiring", () => {
     const page = await request(app).get("/surfaces/d1/");
     expect(page.status).toBe(200);
     expect(page.text).toContain("<h1>one</h1>");
+  });
+
+  it("mounts the data router", async () => {
+    // write a data-sources.json into the temp workspace with one source
+    writeFileSync(join(workspace, "data-sources.json"), JSON.stringify([
+      { id: "ops", type: "postgres", mode: "read-write", connectionString: "x" },
+    ]));
+    const app = buildApp({
+      config: {
+        port: 0,
+        workspace,
+        dataSourcesPath: join(workspace, "data-sources.json"),
+        dataTrustPath: join(workspace, "data-trust.json"),
+        dataAuditPath: join(workspace, "data-audit.jsonl"),
+      } as never,
+      watch: () => ({ close() {} }),
+      executorFor: () => ({ async run() { return { rows: [], rowCount: 0 }; } }),
+    });
+    const res = await request(app).get("/data/pending");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ pending: [] });
   });
 });
