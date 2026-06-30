@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ConnectionScreen } from "./components/ConnectionScreen";
 import { Workspace } from "./components/Workspace";
+import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { getConfig, type AppConfig } from "./lib/tauri";
 
 export function App() {
@@ -16,5 +17,10 @@ export function App() {
 
   if (!loaded) return <div>Loading…</div>;
   if (!config) return <ConnectionScreen onConnected={setConfigState} />;
-  return <Workspace agentBase={config.agentBase} dashboardBase={config.dashboardBase} />;
+  return (
+    <>
+      <Workspace agentBase={config.agentBase} dashboardBase={config.dashboardBase} />
+      <ConfirmationDialog dashboardBase={config.dashboardBase} />
+    </>
+  );
 }
