@@ -36,6 +36,29 @@ describe("agent-host server", () => {
       .post("/messages")
       .send({ sessionId: "sess-9", prompt: "hi" });
     expect(res.status).toBe(202);
-    expect(res.body).toEqual({ sessionId: "sess-9" });
+    expect(res.body).toEqual({ sessionId: "sess-9", turnId: "" });
+  });
+
+  it("fans turn events to a /turns subscriber registered for that turnId", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const turnSubscribers = new Map<string, Set<import("express").Response>>();
+    turnSubscribers.set("t1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([
+        { type: "session", sessionId: "s1" },
+        { type: "result", result: "ok", isError: false },
+      ]),
+      turnSubscribers,
+    });
+
+    const res = await request(app).post("/messages").send({ turnId: "t1", prompt: "hi" });
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ sessionId: "", turnId: "t1" });
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"session"');
+    expect(frames).toContain('"type":"result"');
   });
 });
