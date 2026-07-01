@@ -2,7 +2,7 @@
 
 **A self-hosted platform that turns Claude Code into a persistent, interactive workspace running on your own hardware.**
 
-Tools like OpenClaw trap a capable agent inside a linear chat transcript. The agent underneath can build dashboards and live-data UIs — but you never get to *keep* or *interact with* what it makes. Rhumb lets the agent **materialize durable, interactive surfaces** that run as real services on your box, reachable from a desktop client over a [Tailscale](https://tailscale.com) mesh, and persist across sessions.
+Most ways of working with a coding agent leave you with a chat transcript. The agent can build dashboards and live-data UIs, but the moment the session ends you can't *keep* or *interact with* what it made. Rhumb lets the agent **materialize durable, interactive surfaces** that run as real services on your box, reachable from a desktop client over a [Tailscale](https://tailscale.com) mesh, and persist across sessions.
 
 > **Status:** early, actively built, not yet production-hardened. **All seven roadmap subsystems are now implemented** — the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, the Tauri v2 desktop client, and the persistent ontology (see [Roadmap](#roadmap)).
 
@@ -22,25 +22,24 @@ Tools like OpenClaw trap a capable agent inside a linear chat transcript. The ag
 
 **People who already self-host.** If you've got a Proxmox node in a closet and a backlog of little jobs that deserve a real tool but never get one — a 3D-printer tracker, a runbook wiki, a homelab status board — Rhumb is a **homelab-native internal-tools builder**: you describe the tool, an agent builds it, provisions its backend, and leaves it running on your own hardware.
 
-The useful comparison isn't the AI app-builders (v0, bolt) — it's internal-tools platforms like **Retool / Budibase / Appsmith**. The difference: those make *you* wire a UI to a backend you already have; Rhumb has the agent **stand up the backend *and* the UI *and* register them together**, on a box you own.
+What sets Rhumb apart is that the agent **stands up the backend *and* the UI *and* registers them together**, on a box you own — you describe the tool, you don't wire it up yourself.
 
 The on-ramp is homelab-grade (Proxmox + Tailscale + your own subscription), so the honest framing is *fast internal tools for people who already self-host* — not for everyone.
 
-**→ See [docs/positioning.md](docs/positioning.md)** for the full persona, the Retool/Budibase comparison, and 8 example tools (each mapping to a Rhumb subsystem).
+**→ See [docs/positioning.md](docs/positioning.md)** for the full persona and 8 example tools (each mapping to a Rhumb subsystem).
 
 ---
 
-## ⚠️ This is a personal tool, by design — please read
+## Before you deploy: the "personal tool" shape comes from Anthropic's terms
 
-Rhumb authenticates Claude with **your own Claude subscription** via an OAuth token from `claude setup-token`, **not** an API key.
+The code is [Apache-2.0](LICENSE) — you're free to read, run, modify, and redistribute it, including commercially. That much this repository grants you outright.
 
-Anthropic's terms state that, without prior approval, third-party developers may not **offer** claude.ai login or rate limits in their products — including agents built on the Claude Agent SDK. Rhumb is therefore deliberately shaped as a **self-hosted personal tool**:
+The one thing to understand first is a constraint between **you and Anthropic**, not something this license adds or removes: Rhumb authenticates Claude with **your own Claude subscription**, via an OAuth token from `claude setup-token` (not an API key). Anthropic's terms restrict third-party developers from **offering** claude.ai login or rate limits to other people inside their own products. So Rhumb is built around the single-operator model, because that's the clean path through those terms:
 
 - You run it on **your own hardware**, with **your own credentials**.
-- It does **not** broker, proxy, multiplex, or offer Claude login to anyone else.
-- There is **no hosted Rhumb** and no "sign in with Claude" convenience layer, by design.
+- Out of the box it doesn't broker, proxy, or multiplex Claude login to anyone else, and there's no "sign in with Claude" layer.
 
-**This project is open source so that you can read, run, and adapt it for yourself — not so that it can be operated as a service for third parties.** If you want to build a multi-tenant or hosted offering on top of it, that is your responsibility to clear with Anthropic first. See [COMPLIANCE.md](COMPLIANCE.md) for the full reasoning.
+If you want to build a multi-tenant or hosted offering on top of it, clearing that with Anthropic is yours to do — the license won't do it for you. See [COMPLIANCE.md](COMPLIANCE.md) for the full reasoning.
 
 ---
 
@@ -137,6 +136,24 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 
 ---
 
+## Goals
+
+**Guiding principles** — what stays true regardless of what gets built:
+
+- **Durable by default.** Everything the agent makes is a real, persistent service, not a disposable chat artifact. If you can't keep it and come back to it, it doesn't belong in Rhumb.
+- **Your compute, your data.** Nothing durable lives in a hosted SaaS. The agent, your data, and the tools it builds all run on hardware you control.
+- **The agent operates the system, not just reads it.** The aim is an agent that can provision databases, manage containers, and stand up services — each gated behind confirmation, but genuinely operational.
+- **Single-operator by design.** Rhumb is shaped for one person running it on their own credentials (see [the note above](#before-you-deploy-the-personal-tool-shape-comes-from-anthropics-terms)). That constraint keeps the security model honest.
+
+**Near-term priorities** — where the work points now that all seven subsystems ship:
+
+- **Harden for less-trusted networks.** Rhumb currently assumes a private tailnet. Tighten the agent-host permission model, the unauthenticated dashboard host, and workspace path handling so a mistake costs less.
+- **Smooth the on-ramp.** Setup is still homelab-grade. Better first-run docs, clearer defaults, and fewer manual steps between `clone` and a running tool.
+- **Dogfood real tools.** Build and run actual internal tools on Rhumb and let what breaks drive the roadmap — rather than adding subsystems for their own sake.
+- **Stability over surface area.** With the seven subsystems in place, the emphasis shifts from new capabilities to making the existing ones reliable and well-tested.
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome. By submitting a contribution you agree it is licensed under the terms below (Apache-2.0, §5).
@@ -149,4 +166,4 @@ When working in a package, match its existing conventions and keep the test cove
 
 [Apache License 2.0](LICENSE). Copyright 2026 Rhumb contributors.
 
-Apache-2.0 was chosen for its explicit patent grant and clear contributor terms, maximizing how freely you can read, run, and adapt Rhumb for your own use. Using it does not grant any rights in Anthropic's or Tailscale's trademarks, and does not change your obligations under Anthropic's terms — see [the personal-tool note above](#️-this-is-a-personal-tool-by-design--please-read).
+Apache-2.0 was chosen for its explicit patent grant and clear contributor terms, maximizing how freely you can read, run, and adapt Rhumb. It grants no rights in Anthropic's or Tailscale's trademarks, and it doesn't change your obligations under Anthropic's terms — see [the note above](#before-you-deploy-the-personal-tool-shape-comes-from-anthropics-terms).
