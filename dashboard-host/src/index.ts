@@ -14,6 +14,7 @@ import { loadDataSources } from "./data/sources.js";
 import { createPgExecutor } from "./data/pgExecutor.js";
 import { PendingQueue } from "./data/writes.js";
 import { createDataRouter } from "./data/router.js";
+import { resolveSurfaceToken } from "./surfaces/token.js";
 import type { QueryExecutor, DataSource } from "./data/types.js";
 import { startProbe, tcpProbe, makeStatusWriter } from "./services/probe.js";
 
@@ -75,6 +76,7 @@ export function buildApp(deps: {
       auditPath: deps.config.dataAuditPath,
       now,
       controlToken: deps.config.controlToken,
+      resolveToken: (t) => resolveSurfaceToken(surfacesRoot, t),
     }),
   );
 
