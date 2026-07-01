@@ -90,8 +90,8 @@ describe("buildApp wiring", () => {
       watch: () => ({ close() {} }),
       executorFor: () => ({ async run() { return { rows: [{ ok: 1 }], rowCount: 1 }; } }),
     });
-    // not present yet → 404 (source check happens before auth check)
-    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(404);
+    // not present yet and no token → 401 (auth check runs before source lookup to prevent source enumeration)
+    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(401);
     // add it
     writeFileSync(dsPath, JSON.stringify([{ id: "late", type: "postgres", mode: "read-write", connectionString: "x" }]));
     // now found — present the surface token so the auth check passes
