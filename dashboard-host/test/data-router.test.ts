@@ -165,9 +165,9 @@ describe("data router", () => {
       expect(res.status).toBe(401);
     });
 
-    it("leaves surface-facing query and write open (no token required)", async () => {
+    it("the control-token guard does not block surface query or write", async () => {
       const a = guardedApp();
-      const q = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+      const q = await request(a).post("/data/ops/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "select", table: "t" } });
       expect(q.status).toBe(200);
       const w = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
         .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
