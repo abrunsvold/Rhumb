@@ -43,6 +43,14 @@ function app(snap: RegistrySnapshot = snapshot) {
 }
 
 describe("dashboard-host server", () => {
+  it("never serves the .surface-token sidecar (dotfile guard)", async () => {
+    writeSurface("d1");
+    writeFileSync(join(workspace, "surfaces", "d1", ".surface-token"), "SECRETTOKEN");
+    const res = await request(app()).get("/surfaces/d1/.surface-token");
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain("SECRETTOKEN");
+  });
+
   it("GET /healthz returns ok", async () => {
     const res = await request(app()).get("/healthz");
     expect(res.status).toBe(200);
