@@ -31,6 +31,23 @@ export function createServiceOps(deps: {
     return loadServices(config.servicesPath).find((s) => s.id === id);
   }
 
+  // Proxmox stop returns a task and completes asynchronously; PVE refuses to
+  // DELETE a still-running container. Poll status until it is actually stopped
+  // (bounded) before destroying.
+  async function waitStopped(containerId: number): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      let st: { status: string };
+      try {
+        st = await lxc.status(containerId);
+      } catch {
+        return; // container likely already gone
+      }
+      if (st.status === "stopped") return;
+      await sleep(1500);
+    }
+  }
+
   return {
     async spawn(id: string): Promise<ServiceEntry> {
       assertServiceId(id);                       // reject traversal before any fs/path use
@@ -68,6 +85,9 @@ export function createServiceOps(deps: {
         appendService(config.servicesPath, entry);
         return entry;
       } catch (e) {
+        // Best-effort rollback: a running container can't be DELETEd on PVE, so
+        // stop it first, then destroy. Both are swallowed — the original error wins.
+        try { await lxc.stop(containerId); await waitStopped(containerId); } catch { /* may not be running */ }
         try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
         throw e;
       }
@@ -86,6 +106,7 @@ export function createServiceOps(deps: {
       const e = entryFor(id);
       if (!e) throw new Error(`unknown service: ${id}`);
       try { await lxc.stop(e.containerId); } catch { /* may already be stopped */ }
+      await waitStopped(e.containerId);
       await lxc.destroy(e.containerId);
       removeService(config.servicesPath, id);
     },

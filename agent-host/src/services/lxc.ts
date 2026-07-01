@@ -43,7 +43,13 @@ export function createLxcClient(cfg: NonNullable<InfraConfig["proxmox"]>): LxcCl
       return { id, status: d.status };
     },
     async ip(id): Promise<string | null> {
-      const ifaces = (await call("GET", `/nodes/${node}/lxc/${id}/interfaces`)) as Array<{ name: string; inet?: string }>;
+      // Right after start, the container has no IP yet and PVE returns data:null
+      // for /interfaces. Treat any non-array response as "not ready" so the
+      // caller's poll retries rather than crashing.
+      const ifaces = (await call("GET", `/nodes/${node}/lxc/${id}/interfaces`)) as
+        | Array<{ name: string; inet?: string }>
+        | null;
+      if (!Array.isArray(ifaces)) return null;
       const eth = ifaces.find((i) => i.name === "eth0" && i.inet) ?? ifaces.find((i) => i.inet && i.name !== "lo");
       if (!eth?.inet) return null;
       return eth.inet.split("/")[0]; // strip CIDR suffix
