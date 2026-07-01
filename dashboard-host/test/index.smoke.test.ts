@@ -8,6 +8,8 @@ import type { WatchFn } from "../src/watcher.js";
 
 let workspace: string;
 
+const SURFACE_TOKEN = "smoke-test-surface-token";
+
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), "rhumb-idx-"));
   const dir = join(workspace, "surfaces", "d1");
@@ -17,6 +19,7 @@ beforeEach(() => {
     JSON.stringify({ id: "d1", title: "Dash One", kind: "file", entry: "index.html", created: "t", updated: "t" }),
   );
   writeFileSync(join(dir, "index.html"), "<h1>one</h1>");
+  writeFileSync(join(dir, ".surface-token"), SURFACE_TOKEN);
 });
 afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
@@ -87,11 +90,11 @@ describe("buildApp wiring", () => {
       watch: () => ({ close() {} }),
       executorFor: () => ({ async run() { return { rows: [{ ok: 1 }], rowCount: 1 }; } }),
     });
-    // not present yet → 404
-    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(404);
+    // not present yet and no token → 401 (auth check runs before source lookup to prevent source enumeration)
+    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(401);
     // add it
     writeFileSync(dsPath, JSON.stringify([{ id: "late", type: "postgres", mode: "read-write", connectionString: "x" }]));
-    // now found
-    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(200);
+    // now found — present the surface token so the auth check passes
+    expect((await request(app).post("/data/late/query").set("X-Rhumb-Surface-Token", SURFACE_TOKEN).send({ op: { kind: "select", table: "t" } })).status).toBe(200);
   });
 });

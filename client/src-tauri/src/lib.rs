@@ -4,11 +4,29 @@ mod sse;
 
 use tauri::Manager;
 
-fn config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+pub(crate) fn config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     app.path()
         .app_config_dir()
         .expect("app config dir")
         .join("config.json")
+}
+
+/// Load the persisted config. Used by proxy commands to pin their target host to
+/// the operator-configured base rather than trusting a per-call argument.
+pub(crate) fn load_config(app: &tauri::AppHandle) -> config::AppConfig {
+    config::read_config(&config_path(app))
+}
+
+// A base must be an http(s) URL. Reject other schemes so a stored base cannot
+// smuggle a non-http target; empty is allowed (unconfigured).
+fn valid_base(base: &str) -> bool {
+    if base.is_empty() {
+        return true;
+    }
+    match reqwest::Url::parse(base) {
+        Ok(u) => matches!(u.scheme(), "http" | "https") && u.host().is_some(),
+        Err(_) => false,
+    }
 }
 
 #[tauri::command]
@@ -18,6 +36,9 @@ fn get_config(app: tauri::AppHandle) -> config::AppConfig {
 
 #[tauri::command]
 fn set_config(app: tauri::AppHandle, config: config::AppConfig) -> Result<(), String> {
+    if !valid_base(&config.agent_base) || !valid_base(&config.dashboard_base) {
+        return Err("agentBase and dashboardBase must be http(s) URLs".into());
+    }
     config::write_config(&config_path(&app), &config).map_err(|e| e.to_string())
 }
 

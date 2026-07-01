@@ -43,10 +43,24 @@ tailnet**. Several design choices only hold under that assumption:
 See [`README.md`](README.md) and [`COMPLIANCE.md`](COMPLIANCE.md) for the full
 operational security and compliance model.
 
+### Surface data authorization
+
+Surfaces authenticate to the data endpoint (`/data/*`) with a **per-surface
+capability token** that the dashboard injects into each surface's served HTML;
+the token — not the `Referer` header — identifies the calling surface and gates
+read/write access. Because surfaces are served openly on the tailnet, this is not
+perfectly unforgeable: **an attacker who can `GET` a specific surface can scrape
+that surface's token and act as that surface.** That is inherent to serving
+surfaces on an unauthenticated host, and it is the accepted limit. The dangerous
+*actions* — approving pending writes and infrastructure operations — remain gated
+by the separate control token (`RHUMB_CONTROL_TOKEN`), which is never served to a
+surface.
+
 ### Known hardening gaps
 
-Rhumb is **not yet hardened for hostile networks**. Known gaps we are tracking
-(all mitigated in practice by the tailnet-only, single-operator assumption
-above) include: unauthenticated control-plane endpoints, surface isolation that
-relies on the browser/webview origin, and `Referer`-based write authorization.
-Do not deploy Rhumb anywhere the tailnet-only assumption does not hold.
+Rhumb is **not yet hardened for hostile networks**. Remaining gaps we are tracking
+(all mitigated in practice by the tailnet-only, single-operator assumption above)
+include: the control plane is authenticated only when `RHUMB_CONTROL_TOKEN` is
+set, and surface isolation relies on the browser/webview origin plus the
+per-surface token described above. Do not deploy Rhumb anywhere the tailnet-only
+assumption does not hold.

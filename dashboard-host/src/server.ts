@@ -1,9 +1,12 @@
 import express, { type Express, type Request, type Response } from "express";
-import { resolve, sep } from "node:path";
-import { realpathSync } from "node:fs";
+import { resolve, sep, basename } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
 import { readSurfaceMeta } from "./registry.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
+import { getOrCreateSurfaceToken } from "./surfaces/token.js";
+import { renderShim, injectShim } from "./surfaces/shim.js";
+import { surfaceHeaders } from "./surfaces/headers.js";
 
 const ID_RE = /^[A-Za-z0-9._-]+$/;
 
@@ -11,9 +14,11 @@ export function createServer(deps: {
   getSnapshot: () => RegistrySnapshot;
   workspace: string;
   subscribers: Set<Response>;
+  appOrigins?: string[];
 }): Express {
   const app = express();
   const surfacesRoot = resolve(deps.workspace, "surfaces");
+  const headers = surfaceHeaders(deps.appOrigins ?? []);
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
@@ -71,6 +76,21 @@ export function createServer(deps: {
     }
     if (!(realTarget === realRoot || realTarget.startsWith(realRoot + sep))) {
       res.sendStatus(404);
+      return;
+    }
+    // Never serve dotfiles. This is defense-in-depth for the `.surface-token`
+    // sidecar: the HTML branch below reads files directly (not via sendFile's
+    // dotfiles:'ignore' default), so make the protection explicit here.
+    if (basename(realTarget).startsWith(".")) {
+      res.sendStatus(404);
+      return;
+    }
+    res.set(headers);
+    if (/\.html?$/i.test(realTarget)) {
+      let html: string;
+      try { html = readFileSync(realTarget, "utf8"); } catch { res.sendStatus(404); return; }
+      const token = getOrCreateSurfaceToken(surfaceDir);
+      res.type("html").send(injectShim(html, renderShim(id, token)));
       return;
     }
     res.sendFile(realTarget, (err) => {

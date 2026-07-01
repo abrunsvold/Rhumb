@@ -25,6 +25,7 @@ function app() {
   const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "audit.jsonl"), now, id: () => `p${++n}` });
   const router = createDataRouter({
     getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"), auditPath: join(dir, "audit.jsonl"), now,
+    resolveToken: () => "d1",
   });
   const a = express();
   a.use(express.json());
@@ -37,19 +38,19 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("data router", () => {
   it("query runs a select and returns rows", async () => {
-    const res = await request(app()).post("/data/ops/query").send({ op: { kind: "select", table: "t", where: { id: 1 } } });
+    const res = await request(app()).post("/data/ops/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "select", table: "t", where: { id: 1 } } });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ rows: [{ id: 1 }] });
     expect(calls[0].text).toContain("SELECT");
   });
 
   it("query rejects a non-select op", async () => {
-    const res = await request(app()).post("/data/ops/query").send({ op: { kind: "delete", table: "t", where: { id: 1 } } });
+    const res = await request(app()).post("/data/ops/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "delete", table: "t", where: { id: 1 } } });
     expect(res.status).toBe(400);
   });
 
   it("query 404s an unknown source", async () => {
-    const res = await request(app()).post("/data/missing/query").send({ op: { kind: "select", table: "t" } });
+    const res = await request(app()).post("/data/missing/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "select", table: "t" } });
     expect(res.status).toBe(404);
   });
 
@@ -100,9 +101,10 @@ describe("data router", () => {
       getSources: () => sources, getExecutor: () => throwing,
       queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
       trustPath: join(dir, "trust.json"), auditPath: join(dir, "a.jsonl"), now: () => "T",
+      resolveToken: () => "d1",
     });
     const a = express(); a.use(express.json()); a.use("/data", router);
-    const res = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+    const res = await request(a).post("/data/ops/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "select", table: "t" } });
     expect(res.status).toBe(500);
     expect(JSON.stringify(res.body)).not.toContain("secret_users");
     expect(res.body.error).toBe("query failed");
@@ -119,9 +121,10 @@ describe("data router", () => {
       getSources: () => sources, getExecutor: () => throwing,
       queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
       trustPath, auditPath: join(dir, "a.jsonl"), now: () => "T",
+      resolveToken: () => "d1",
     });
     const a = express(); a.use(express.json()); a.use("/data", router);
-    const res = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
+    const res = await request(a).post("/data/ops/write").set("X-Rhumb-Surface-Token", "x")
       .send({ op: { kind: "insert", table: "people", values: { ssn: "x" } } });
     expect(res.status).toBe(500);
     expect(JSON.stringify(res.body)).not.toContain("ssn");
@@ -146,6 +149,7 @@ describe("data router", () => {
       const router = createDataRouter({
         getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"),
         auditPath: join(dir, "audit.jsonl"), now, controlToken: token,
+        resolveToken: () => "d1",
       });
       const a = express(); a.use(express.json()); a.use("/data", router);
       return a;
@@ -161,9 +165,9 @@ describe("data router", () => {
       expect(res.status).toBe(401);
     });
 
-    it("leaves surface-facing query and write open (no token required)", async () => {
+    it("the control-token guard does not block surface query or write", async () => {
       const a = guardedApp();
-      const q = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+      const q = await request(a).post("/data/ops/query").set("X-Rhumb-Surface-Token", "x").send({ op: { kind: "select", table: "t" } });
       expect(q.status).toBe(200);
       const w = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
         .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
@@ -177,6 +181,52 @@ describe("data router", () => {
       const r = await request(a).post(`/data/pending/${w.body.pendingId}/resolve`)
         .set("Authorization", `Bearer ${token}`).send({ decision: "approve" });
       expect(r.status).toBe(200);
+    });
+  });
+
+  describe("token-based data auth", () => {
+    // resolveToken maps the fixed test token to surface "d1"
+    const TOKEN = "surface-d1-token";
+    function tokenApp() {
+      let n = 0;
+      const now = () => "T";
+      const getExecutor = () => executor;
+      const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "a.jsonl"), now, id: () => `p${++n}` });
+      const router = createDataRouter({
+        getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"),
+        auditPath: join(dir, "a.jsonl"), now,
+        resolveToken: (t) => (t === TOKEN ? "d1" : null),
+      });
+      const a = express(); a.use(express.json()); a.use("/data", router);
+      return a;
+    }
+
+    it("query without a valid surface token is 401", async () => {
+      const res = await request(tokenApp()).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+      expect(res.status).toBe(401);
+    });
+
+    it("query with a valid surface token returns rows", async () => {
+      const res = await request(tokenApp()).post("/data/ops/query")
+        .set("X-Rhumb-Surface-Token", TOKEN).send({ op: { kind: "select", table: "t" } });
+      expect(res.status).toBe(200);
+    });
+
+    it("a forged Referer without a token cannot get a direct write (it enqueues)", async () => {
+      const res = await request(tokenApp()).post("/data/ops/write")
+        .set("Referer", "http://h/surfaces/d1/x") // forged, no token
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      expect(res.status).toBe(202); // untrusted → enqueued, not executed
+    });
+
+    it("a trusted surface writes directly when it presents its token", async () => {
+      const { addTrust } = await import("../src/data/trust.js");
+      addTrust(join(dir, "trust.json"), { source: "ops", surfaceId: "d1" });
+      const res = await request(tokenApp()).post("/data/ops/write")
+        .set("X-Rhumb-Surface-Token", TOKEN)
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("executed");
     });
   });
 });

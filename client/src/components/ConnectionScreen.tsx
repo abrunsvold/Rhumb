@@ -4,6 +4,7 @@ import { checkHealth, setConfig, type AppConfig } from "../lib/tauri";
 export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) => void }) {
   const [agentBase, setAgentBase] = useState("");
   const [dashboardBase, setDashboardBase] = useState("");
+  const [controlToken, setControlToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -16,7 +17,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
       setBusy(false);
       return;
     }
-    const cfg: AppConfig = { agentBase, dashboardBase };
+    const cfg: AppConfig = { agentBase, dashboardBase, controlToken: controlToken.trim() || undefined };
     await setConfig(cfg);
     setBusy(false);
     onConnected(cfg);
@@ -29,6 +30,8 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
       <input id="agent" value={agentBase} onChange={(e) => setAgentBase(e.target.value)} />
       <label htmlFor="dash">Dashboard host</label>
       <input id="dash" value={dashboardBase} onChange={(e) => setDashboardBase(e.target.value)} />
+      <label htmlFor="token">Control token (optional)</label>
+      <input id="token" type="password" value={controlToken} onChange={(e) => setControlToken(e.target.value)} />
       <button onClick={connect} disabled={busy}>Connect</button>
       {error && <p role="alert">{error}</p>}
     </div>
