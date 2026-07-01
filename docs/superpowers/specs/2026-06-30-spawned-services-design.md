@@ -37,7 +37,7 @@ interface LxcClient {
 
 `LxcSpec` includes: `ostemplate` (a stock Ubuntu template on the operator's storage), `storage`, `cores`, `memory`, `net` (dhcp on the operator's bridge), `sshPublicKeys` (RHUMBR's **deploy public key**), `onboot: 1`, `unprivileged: 1`, optional `features` (e.g. `nesting`). The real implementation calls the PVE LXC REST API; the tool handlers depend only on the interface, so they are unit-tested with a fake. The real path is **build-verified + live-verified**.
 
-Proxmox's `VM.*` privileges (`VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`) apply to **both** QEMU VMs and LXC containers, so the Plan-5 scoped token/role already authorizes container lifecycle — no new privilege class is required (verified against the operator's `RhumbrInfra` role during the Plan-5 live run). This is called out in config docs so operators using a narrower token know to include CT coverage.
+Proxmox's `VM.*` privileges apply to **both** QEMU VMs and LXC containers, but the **Plan-6 live run found the Plan-5 token role needed two more privileges** to create a *networked* LXC (Plan 5's VM-create test used no network config, so it never hit them): **`VM.Config.Network`** (to attach `net0`) and, on **PVE 9's SDN layer, `SDN.Use`** on the bridge's zone (to use `vmbr0`). So the operator's scoped role must include, beyond the Plan-5 set: **`VM.Config.Network`, `VM.Config.Cloudinit`, `SDN.Use`** (plus the existing `VM.Allocate`, `VM.Config.CPU/Memory/Disk/Options`, `VM.PowerMgmt`, `VM.Audit`, `VM.Console`, `Datastore.AllocateSpace/Audit`, `Sys.Audit`). Called out in config docs.
 
 ### 2.2 SSH deployer (seam)
 
