@@ -15,7 +15,7 @@ describe("loadConfig", () => {
 
   it("honors overrides", () => {
     expect(
-      loadConfig({ RHUMBR_DASHBOARD_PORT: "9100", RHUMBR_WORKSPACE: "/srv/ws" }),
+      loadConfig({ RHUMB_DASHBOARD_PORT: "9100", RHUMB_WORKSPACE: "/srv/ws" }),
     ).toEqual({
       port: 9100,
       workspace: "/srv/ws",
@@ -26,9 +26,9 @@ describe("loadConfig", () => {
     });
   });
 
-  it("throws when RHUMBR_DASHBOARD_PORT is not numeric", () => {
-    expect(() => loadConfig({ RHUMBR_DASHBOARD_PORT: "abc" })).toThrow(
-      /RHUMBR_DASHBOARD_PORT/,
+  it("throws when RHUMB_DASHBOARD_PORT is not numeric", () => {
+    expect(() => loadConfig({ RHUMB_DASHBOARD_PORT: "abc" })).toThrow(
+      /RHUMB_DASHBOARD_PORT/,
     );
   });
 });

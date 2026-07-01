@@ -1,8 +1,8 @@
-# RHUMBR Client Shell Implementation Plan (Plan 3b of 7)
+# Rhumb Client Shell Implementation Plan (Plan 3b of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the runnable RHUMBR client — a Tauri v2 desktop shell with a Rust control-plane proxy (Channel-streamed SSE) and a React UI (connection screen, agent panel, canvas with detachable surfaces) on top of the 3a foundation.
+**Goal:** Build the runnable Rhumb client — a Tauri v2 desktop shell with a Rust control-plane proxy (Channel-streamed SSE) and a React UI (connection screen, agent panel, canvas with detachable surfaces) on top of the 3a foundation.
 
 **Architecture:** The React webview is the only IPC context; the Rust side proxies all HTTP/SSE to the two tailnet hosts (no CORS needed). Streaming uses Tauri Channels. Detached surfaces are native `WebviewWindow`s whose labels appear in no capability, so they get zero IPC.
 
@@ -213,8 +213,8 @@ Run:
 
 ```bash
 cd client && npx tauri init --ci \
-  --app-name rhumbr \
-  --window-title "RHUMBR" \
+  --app-name rhumb \
+  --window-title "Rhumb" \
   --frontend-dist ../dist \
   --dev-url http://localhost:5173 \
   --before-dev-command "npm run dev" \
@@ -361,14 +361,14 @@ mod tests {
 
     #[test]
     fn missing_file_yields_default() {
-        let dir = std::env::temp_dir().join(format!("rhumbr-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-{}", std::process::id()));
         let path = dir.join("does-not-exist.json");
         assert_eq!(read_config(&path), AppConfig::default());
     }
 
     #[test]
     fn write_then_read_round_trips() {
-        let dir = std::env::temp_dir().join(format!("rhumbr-cfg-rt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-rt-{}", std::process::id()));
         let path = dir.join("config.json");
         let cfg = AppConfig {
             agent_base: "http://host-a:8787".into(),
@@ -759,7 +759,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
 
   return (
     <div>
-      <h1>Connect RHUMBR</h1>
+      <h1>Connect Rhumb</h1>
       <label htmlFor="agent">Agent host</label>
       <input id="agent" value={agentBase} onChange={(e) => setAgentBase(e.target.value)} />
       <label htmlFor="dash">Dashboard host</label>

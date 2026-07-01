@@ -1,4 +1,4 @@
-# RHUMBR Client Foundation Implementation Plan (Plan 3 of 7 — part A)
+# Rhumb Client Foundation Implementation Plan (Plan 3 of 7 — part A)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -203,7 +203,7 @@ git commit -m "feat(agent-host): turn-scoped stream-first session streaming"
 
 ```json
 {
-  "name": "rhumbr-client",
+  "name": "rhumb-client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -268,7 +268,7 @@ export default defineConfig({
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>RHUMBR</title>
+    <title>Rhumb</title>
   </head>
   <body>
     <div id="root"></div>
@@ -284,7 +284,7 @@ import { createRoot } from "react-dom/client";
 
 const el = document.getElementById("root");
 if (el) {
-  createRoot(el).render(<div>RHUMBR client (foundation)</div>);
+  createRoot(el).render(<div>Rhumb client (foundation)</div>);
 }
 ```
 

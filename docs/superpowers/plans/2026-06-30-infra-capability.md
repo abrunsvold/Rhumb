@@ -1,4 +1,4 @@
-# RHUMBR Infrastructure Capability Implementation Plan (Plan 5 of 7)
+# Rhumb Infrastructure Capability Implementation Plan (Plan 5 of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -14,7 +14,7 @@
 - **Gating split:** read tools (`mcp__infra__list_vms`, `mcp__infra__vm_status`) go in `allowedTools`. Gated tools (`create_vm`, `start_vm`, `stop_vm`, `resize_vm`, `destroy_vm`, `provision_database`) are omitted → confirmed via the pending-action queue. The `canUseTool` callback **passes through (allows) every non-gated tool** so the agent's existing surface-building autonomy is preserved.
 - **No raw SQL / shell from inputs:** `provision_database` validates the db/role identifiers against `^[A-Za-z_][A-Za-z0-9_]*$` and quotes them; no value interpolation.
 - **Seams:** `interface ProxmoxClient` and `interface AdminExecutor` (PG admin) are the only code that touches the real Proxmox/Postgres; everything else depends on the interfaces and is unit-tested with fakes. The real implementations are build-verified + live-verified.
-- **Audit:** every gated action (approved/denied/error) appends to `RHUMBR_INFRA_AUDIT` (default `<workspace>/infra-audit.jsonl`).
+- **Audit:** every gated action (approved/denied/error) appends to `RHUMB_INFRA_AUDIT` (default `<workspace>/infra-audit.jsonl`).
 - **Credentials** (scoped Proxmox token, PG admin connection) live only on the agent host. The client receives only the pending action's `{tool, input}` for display.
 - **Node ≥ 20, TS strict, ES modules; agent-host/dashboard-host imports use `.js`; client (Vite) imports use no suffix.**
 - **Reuse:** the agent host's `writeSseEvent`/SSE pattern and the client's Channel proxy + the generalized confirmation surface (extends Plan 4).
@@ -97,12 +97,12 @@ import { loadInfraConfig } from "../src/infra/config.js";
 import { appendInfraAudit } from "../src/infra/audit.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-infra-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-infra-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("loadInfraConfig", () => {
   it("defaults paths under the workspace and leaves optional creds undefined", () => {
-    const cfg = loadInfraConfig({ RHUMBR_WORKSPACE: "/srv/ws" });
+    const cfg = loadInfraConfig({ RHUMB_WORKSPACE: "/srv/ws" });
     expect(cfg.auditPath).toBe("/srv/ws/infra-audit.jsonl");
     expect(cfg.dataSourcesPath).toBe("/srv/ws/data-sources.json");
     expect(cfg.proxmox).toBeUndefined();
@@ -111,14 +111,14 @@ describe("loadInfraConfig", () => {
 
   it("reads proxmox + pg-admin settings when present", () => {
     const cfg = loadInfraConfig({
-      RHUMBR_WORKSPACE: "/srv/ws",
-      RHUMBR_PROXMOX_URL: "https://pve:8006",
-      RHUMBR_PROXMOX_TOKEN_ID: "rhumbr@pve!t1",
-      RHUMBR_PROXMOX_TOKEN_SECRET: "secret",
-      RHUMBR_PROXMOX_NODE: "pve",
-      RHUMBR_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_PROXMOX_URL: "https://pve:8006",
+      RHUMB_PROXMOX_TOKEN_ID: "rhumb@pve!t1",
+      RHUMB_PROXMOX_TOKEN_SECRET: "secret",
+      RHUMB_PROXMOX_NODE: "pve",
+      RHUMB_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
     });
-    expect(cfg.proxmox).toEqual({ baseUrl: "https://pve:8006", tokenId: "rhumbr@pve!t1", tokenSecret: "secret", node: "pve" });
+    expect(cfg.proxmox).toEqual({ baseUrl: "https://pve:8006", tokenId: "rhumb@pve!t1", tokenSecret: "secret", node: "pve" });
     expect(cfg.pgAdmin).toEqual({ connectionString: "postgres://admin:pw@pg:5432/postgres" });
   });
 });
@@ -138,21 +138,21 @@ describe("appendInfraAudit", () => {
 import type { InfraConfig } from "./types.js";
 
 export function loadInfraConfig(env: NodeJS.ProcessEnv): InfraConfig {
-  const workspace = env.RHUMBR_WORKSPACE?.trim() || "./workspace";
+  const workspace = env.RHUMB_WORKSPACE?.trim() || "./workspace";
   const cfg: InfraConfig = {
-    auditPath: env.RHUMBR_INFRA_AUDIT?.trim() || `${workspace}/infra-audit.jsonl`,
-    dataSourcesPath: env.RHUMBR_DATA_SOURCES?.trim() || `${workspace}/data-sources.json`,
+    auditPath: env.RHUMB_INFRA_AUDIT?.trim() || `${workspace}/infra-audit.jsonl`,
+    dataSourcesPath: env.RHUMB_DATA_SOURCES?.trim() || `${workspace}/data-sources.json`,
   };
-  const { RHUMBR_PROXMOX_URL, RHUMBR_PROXMOX_TOKEN_ID, RHUMBR_PROXMOX_TOKEN_SECRET, RHUMBR_PROXMOX_NODE } = env;
-  if (RHUMBR_PROXMOX_URL && RHUMBR_PROXMOX_TOKEN_ID && RHUMBR_PROXMOX_TOKEN_SECRET && RHUMBR_PROXMOX_NODE) {
+  const { RHUMB_PROXMOX_URL, RHUMB_PROXMOX_TOKEN_ID, RHUMB_PROXMOX_TOKEN_SECRET, RHUMB_PROXMOX_NODE } = env;
+  if (RHUMB_PROXMOX_URL && RHUMB_PROXMOX_TOKEN_ID && RHUMB_PROXMOX_TOKEN_SECRET && RHUMB_PROXMOX_NODE) {
     cfg.proxmox = {
-      baseUrl: RHUMBR_PROXMOX_URL.trim(),
-      tokenId: RHUMBR_PROXMOX_TOKEN_ID.trim(),
-      tokenSecret: RHUMBR_PROXMOX_TOKEN_SECRET.trim(),
-      node: RHUMBR_PROXMOX_NODE.trim(),
+      baseUrl: RHUMB_PROXMOX_URL.trim(),
+      tokenId: RHUMB_PROXMOX_TOKEN_ID.trim(),
+      tokenSecret: RHUMB_PROXMOX_TOKEN_SECRET.trim(),
+      node: RHUMB_PROXMOX_NODE.trim(),
     };
   }
-  if (env.RHUMBR_PG_ADMIN?.trim()) cfg.pgAdmin = { connectionString: env.RHUMBR_PG_ADMIN.trim() };
+  if (env.RHUMB_PG_ADMIN?.trim()) cfg.pgAdmin = { connectionString: env.RHUMB_PG_ADMIN.trim() };
   return cfg;
 }
 ```
@@ -342,7 +342,7 @@ import { appendDataSource, provisionDatabase } from "../src/infra/provision.js";
 import type { AdminExecutor } from "../src/infra/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-prov-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-prov-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("appendDataSource", () => {
@@ -498,7 +498,7 @@ import { makeCanUseTool, GATED_TOOLS } from "../src/infra/server.js";
 import { PendingActions } from "../src/infra/pending.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-gate-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-gate-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("makeCanUseTool", () => {
@@ -1174,7 +1174,7 @@ git commit -m "feat(client): infra-pending IPC and generalized confirmation dial
 
 ## Live verification (driver-run, against your Proxmox)
 
-Set on the agent host: `RHUMBR_PROXMOX_URL`, `RHUMBR_PROXMOX_TOKEN_ID`, `RHUMBR_PROXMOX_TOKEN_SECRET`, `RHUMBR_PROXMOX_NODE` (a scoped PVE token), and `RHUMBR_PG_ADMIN` (a Postgres admin connection on the Proxmox box).
+Set on the agent host: `RHUMB_PROXMOX_URL`, `RHUMB_PROXMOX_TOKEN_ID`, `RHUMB_PROXMOX_TOKEN_SECRET`, `RHUMB_PROXMOX_NODE` (a scoped PVE token), and `RHUMB_PG_ADMIN` (a Postgres admin connection on the Proxmox box).
 1. Ask the agent to "provision a database called demo and build a dashboard that lists its rows." → the confirmation dialog pops for `provision_database` → approve → the DB exists, a `data-sources.json` entry appears, the dashboard host serves it, and the surface reads it (this also completes Plan 4's live verification).
 2. Ask the agent to "create a small VM, then destroy it." → each gated op pops a confirmation → approve → the VM appears/disappears in Proxmox; check `infra-audit.jsonl`. Deny a destroy → the VM stays.
 3. Confirm `list_vms`/`vm_status` run without a confirmation dialog (allowlisted).

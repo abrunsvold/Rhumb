@@ -54,7 +54,7 @@ export function createServiceOps(deps: {
       const manifest = deps.readManifest(id);
       if (manifest.id !== id) throw new Error(`manifest id "${manifest.id}" does not match requested id "${id}"`);
       const spec = {
-        name: `rhumbr-${manifest.id}`,
+        name: `rhumb-${manifest.id}`,
         cores: manifest.resources?.cores ?? 1,
         memory: manifest.resources?.memory ?? 512,
         ostemplate: config.ostemplate,

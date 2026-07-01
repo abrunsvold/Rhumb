@@ -7,7 +7,7 @@ import { loadTrust, isTrusted, addTrust } from "../src/data/trust.js";
 import type { AuditEntry } from "../src/data/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-at-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-at-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("appendAudit", () => {

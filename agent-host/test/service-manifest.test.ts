@@ -22,17 +22,17 @@ describe("validateManifest", () => {
 
 describe("loadServiceConfig", () => {
   it("returns undefined when required fields are absent", () => {
-    expect(loadServiceConfig({ RHUMBR_WORKSPACE: "/srv/ws" })).toBeUndefined();
+    expect(loadServiceConfig({ RHUMB_WORKSPACE: "/srv/ws" })).toBeUndefined();
   });
 
   it("reads a full config", () => {
     const cfg = loadServiceConfig({
-      RHUMBR_WORKSPACE: "/srv/ws",
-      RHUMBR_DEPLOY_KEY: "/keys/id",
-      RHUMBR_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
-      RHUMBR_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
-      RHUMBR_LXC_STORAGE: "local-lvm",
-      RHUMBR_LXC_BRIDGE: "vmbr0",
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_DEPLOY_KEY: "/keys/id",
+      RHUMB_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
+      RHUMB_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
+      RHUMB_LXC_STORAGE: "local-lvm",
+      RHUMB_LXC_BRIDGE: "vmbr0",
     });
     expect(cfg).toMatchObject({
       deployKeyPath: "/keys/id",

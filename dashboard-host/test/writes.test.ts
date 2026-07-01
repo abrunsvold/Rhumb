@@ -16,7 +16,7 @@ function deps(): WriteDeps {
 }
 const op: DataOp = { kind: "delete", table: "t", where: { id: 1 } };
 
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-w-")); calls = []; n = 0; });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-w-")); calls = []; n = 0; });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("executeWrite", () => {

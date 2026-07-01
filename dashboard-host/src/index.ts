@@ -91,7 +91,7 @@ export function main(): void {
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
   app.listen(config.port, () => {
-    console.log(`rhumbr dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
+    console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
   });
   startProbe(
     { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },

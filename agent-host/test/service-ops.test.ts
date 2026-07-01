@@ -7,7 +7,7 @@ import { loadServices, appendService, removeService } from "../src/services/regi
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest } from "../src/services/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-svc-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-svc-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 function cfg(): ServiceConfig {
@@ -48,7 +48,7 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     const entry = await ops.spawn("sales");
     expect(entry).toMatchObject({ id: "sales", containerId: 200, host: "10.0.0.9", port: 3000, basePath: "/services/sales", status: "healthy" });
-    expect(calls).toEqual(["create:rhumbr-sales", "start:200"]);
+    expect(calls).toEqual(["create:rhumb-sales", "start:200"]);
     expect(deployed).toEqual([`sales@${join(dir, "services", "sales")}`]);
     expect(loadServices(cfg().servicesPath).map((s) => s.id)).toEqual(["sales"]);
   });
@@ -59,7 +59,7 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer: badDeployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     await expect(ops.spawn("sales")).rejects.toThrow(/scp failed/);
     // rollback stops the (running) container before destroying it
-    expect(calls).toEqual(["create:rhumbr-sales", "start:200", "stop:200", "destroy:200"]);
+    expect(calls).toEqual(["create:rhumb-sales", "start:200", "stop:200", "destroy:200"]);
     expect(loadServices(cfg().servicesPath)).toEqual([]);
   });
 
@@ -68,7 +68,7 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     await ops.spawn("sales");
     await ops.destroy("sales");
-    expect(calls).toEqual(["create:rhumbr-sales", "start:200", "stop:200", "destroy:200"]);
+    expect(calls).toEqual(["create:rhumb-sales", "start:200", "stop:200", "destroy:200"]);
     expect(loadServices(cfg().servicesPath)).toEqual([]);
   });
 

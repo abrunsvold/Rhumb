@@ -32,14 +32,14 @@ mod tests {
 
     #[test]
     fn missing_file_yields_default() {
-        let dir = std::env::temp_dir().join(format!("rhumbr-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-{}", std::process::id()));
         let path = dir.join("does-not-exist.json");
         assert_eq!(read_config(&path), AppConfig::default());
     }
 
     #[test]
     fn write_then_read_round_trips() {
-        let dir = std::env::temp_dir().join(format!("rhumbr-cfg-rt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-rt-{}", std::process::id()));
         let path = dir.join("config.json");
         let cfg = AppConfig {
             agent_base: "http://host-a:8787".into(),

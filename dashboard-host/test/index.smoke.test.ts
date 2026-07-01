@@ -9,7 +9,7 @@ import type { WatchFn } from "../src/watcher.js";
 let workspace: string;
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), "rhumbr-idx-"));
+  workspace = mkdtempSync(join(tmpdir(), "rhumb-idx-"));
   const dir = join(workspace, "surfaces", "d1");
   mkdirSync(dir, { recursive: true });
   writeFileSync(

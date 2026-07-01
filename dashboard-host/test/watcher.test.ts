@@ -24,7 +24,7 @@ function writeSurface(id: string): void {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "rhumbr-watch-"));
+  root = mkdtempSync(join(tmpdir(), "rhumb-watch-"));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });

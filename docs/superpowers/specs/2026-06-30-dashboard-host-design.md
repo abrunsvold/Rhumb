@@ -1,8 +1,8 @@
-# Dashboard Host Design Spec (RHUMBR — Plan 2 of 7)
+# Dashboard Host Design Spec (Rhumb — Plan 2 of 7)
 
 **Date:** 2026-06-30
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.2)
-**Depends on:** the `RHUMBR_WORKSPACE` file-as-contract folder established by the agent host (Plan 1).
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.2)
+**Depends on:** the `RHUMB_WORKSPACE` file-as-contract folder established by the agent host (Plan 1).
 
 ---
 
@@ -17,7 +17,7 @@ This plan implements **`file` surfaces only**. The registry contract carries a `
 Claude Code (the agent) materializes a surface by writing a self-contained folder into the workspace:
 
 ```
-<RHUMBR_WORKSPACE>/surfaces/<id>/
+<RHUMB_WORKSPACE>/surfaces/<id>/
   surface.json        # metadata (see below)
   index.html          # the entry artifact (name set by surface.json.entry)
   ...                 # any other static assets it references
@@ -60,7 +60,7 @@ The host maintains an **in-memory registry** (a `Map<id, SurfaceMeta>`):
 
 ## 5. Components (files)
 
-- `dashboard-host/src/config.ts` — env: `RHUMBR_DASHBOARD_PORT` (default 8788), `RHUMBR_WORKSPACE` (default `./workspace`). No auth token (this host serves only over the tailnet trust boundary; it does not call Claude).
+- `dashboard-host/src/config.ts` — env: `RHUMB_DASHBOARD_PORT` (default 8788), `RHUMB_WORKSPACE` (default `./workspace`). No auth token (this host serves only over the tailnet trust boundary; it does not call Claude).
 - `dashboard-host/src/types.ts` — `SurfaceMeta`, `RegistrySnapshot`, and a `RegistryEvent` (`{ type: "registry"; surfaces: SurfaceMeta[] }`) wire type.
 - `dashboard-host/src/registry.ts` — the in-memory registry + `readSurfaceMeta(dir)` (parse/validate one `surface.json`) + `scanSurfaces(root)`; pure, unit-tested with a temp dir.
 - `dashboard-host/src/watcher.ts` — wraps the file watcher; calls back with registry changes (the watch source is injectable for tests).

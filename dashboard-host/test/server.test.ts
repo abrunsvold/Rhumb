@@ -26,7 +26,7 @@ const snapshot: RegistrySnapshot = {
 };
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), "rhumbr-srv-"));
+  workspace = mkdtempSync(join(tmpdir(), "rhumb-srv-"));
   // a secret file OUTSIDE the surface, to prove traversal is blocked
   writeFileSync(join(workspace, "secret.txt"), "TOP SECRET");
 });
