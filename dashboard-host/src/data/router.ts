@@ -3,6 +3,7 @@ import { findSource } from "./sources.js";
 import { buildSql } from "./sql.js";
 import { executeWrite, type PendingQueue } from "./writes.js";
 import { loadTrust, isTrusted, addTrust } from "./trust.js";
+import { createControlTokenGuard } from "../auth.js";
 import type { DataSource, DataOp, QueryExecutor } from "./types.js";
 
 export interface DataRouterDeps {
@@ -12,6 +13,7 @@ export interface DataRouterDeps {
   trustPath: string;
   auditPath: string;
   now: () => string;
+  controlToken?: string;
 }
 
 export function surfaceIdFromReferer(req: Request): string | null {
@@ -68,6 +70,11 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     const w = deps.queue.enqueue(source.id, op, surfaceId);
     res.status(202).json({ pendingId: w.pendingId, status: "pending" });
   });
+
+  // The pending-write approval control plane is operator-only: surfaces submit
+  // writes above (which get queued) but must never read the queue or resolve it.
+  // Guard everything under /pending with the control token.
+  router.use("/pending", createControlTokenGuard(deps.controlToken));
 
   router.get("/pending", (_req, res) => {
     res.json({ pending: deps.queue.list() });

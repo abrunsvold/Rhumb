@@ -73,6 +73,7 @@ export function buildApp(deps: {
       trustPath: deps.config.dataTrustPath,
       auditPath: deps.config.dataAuditPath,
       now,
+      controlToken: deps.config.controlToken,
     }),
   );
 
@@ -94,6 +95,13 @@ export function main(): void {
   const app = buildApp({ config, watch: chokidarWatch });
   app.listen(config.port, () => {
     console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
+    if (!config.controlToken) {
+      console.warn(
+        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the write-approval " +
+          "control plane (/data/pending) is UNAUTHENTICATED. Set a token (shared " +
+          "with the agent host and client) and keep this host on your tailnet only.",
+      );
+    }
   });
   startProbe(
     { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },

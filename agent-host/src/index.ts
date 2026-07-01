@@ -95,7 +95,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
   });
-  const app = createServer({ manager });
+  const app = createServer({ manager, controlToken: deps.config.controlToken });
 
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
@@ -119,6 +119,14 @@ export function main(): void {
   const app = buildApp({ config, query: realQuery });
   app.listen(config.port, () => {
     console.log(`rhumb agent-host listening on :${config.port} (model ${config.model})`);
+    if (!config.controlToken) {
+      console.warn(
+        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the control plane " +
+          "(/messages, /infra) is UNAUTHENTICATED. Any device that can reach this " +
+          "port can drive the agent and approve infrastructure actions. Set a token " +
+          "and keep this host on your tailnet only.",
+      );
+    }
   });
 }
 

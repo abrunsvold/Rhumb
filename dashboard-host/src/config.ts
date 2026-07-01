@@ -5,6 +5,7 @@ export interface Config {
   dataTrustPath: string;
   dataAuditPath: string;
   servicesPath: string;
+  controlToken?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -26,5 +27,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dataTrustPath: env.RHUMB_DATA_TRUST?.trim() || `${workspace}/data-trust.json`,
     dataAuditPath: env.RHUMB_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
     servicesPath: env.RHUMB_SERVICES?.trim() || `${workspace}/services.json`,
+    controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
   };
 }

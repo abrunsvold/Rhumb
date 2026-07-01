@@ -4,6 +4,7 @@ export interface Config {
   workspace: string;
   oauthToken: string;
   permissionMode: string;
+  controlToken?: string;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -49,5 +50,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
     oauthToken,
     permissionMode,
+    controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
   };
 }
