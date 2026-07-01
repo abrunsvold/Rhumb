@@ -84,6 +84,7 @@ pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
     pub registry: Mutex<Option<CancellationToken>>,
     pub pending: Mutex<Option<CancellationToken>>,
+    pub infra: Mutex<Option<CancellationToken>>,
 }
 
 async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
@@ -228,4 +229,28 @@ pub async fn resolve_pending(
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_infra_pending_stream(
+    state: tauri::State<'_, StreamState>,
+    agent_base: String,
+    on_pending: Channel<Value>,
+) -> Result<(), String> {
+    let token = CancellationToken::new();
+    if let Some(old) = state.infra.lock().unwrap().replace(token.clone()) { old.cancel(); }
+    let url = format!("{}/infra/pending/stream", agent_base.trim_end_matches('/'));
+    tokio::spawn(async move { pump(url, on_pending, token).await });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_infra_pending_stream(state: tauri::State<'_, StreamState>) {
+    if let Some(tok) = state.infra.lock().unwrap().take() { tok.cancel(); }
+}
+
+#[tauri::command]
+pub async fn resolve_infra_pending(agent_base: String, pending_id: String, decision: String) -> Result<(), String> {
+    let url = format!("{}/infra/pending/{}/resolve", agent_base.trim_end_matches('/'), pending_id);
+    reqwest::Client::new().post(&url).json(&serde_json::json!({ "decision": decision })).send().await.map(|_| ()).map_err(|e| e.to_string())
 }

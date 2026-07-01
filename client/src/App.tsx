@@ -20,7 +20,7 @@ export function App() {
   return (
     <>
       <Workspace agentBase={config.agentBase} dashboardBase={config.dashboardBase} />
-      <ConfirmationDialog dashboardBase={config.dashboardBase} />
+      <ConfirmationDialog agentBase={config.agentBase} dashboardBase={config.dashboardBase} />
     </>
   );
 }

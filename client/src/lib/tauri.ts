@@ -70,3 +70,14 @@ export function resolvePending(
 ): Promise<void> {
   return invoke("resolve_pending", { dashboardBase, pendingId, decision, trustSurface });
 }
+
+export function openInfraPendingStream(agentBase: string, onPending: (e: unknown) => void): () => void {
+  const channel = new Channel<unknown>();
+  channel.onmessage = onPending;
+  void invoke("start_infra_pending_stream", { agentBase, onPending: channel });
+  return () => void invoke("stop_infra_pending_stream");
+}
+
+export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<void> {
+  return invoke("resolve_infra_pending", { agentBase, pendingId, decision });
+}
