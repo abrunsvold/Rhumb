@@ -35,7 +35,9 @@ export function buildApp(deps: {
     subscribers,
   });
 
-  app.use(express.json());
+  // Bound request bodies: this host is unauthenticated on the tailnet, and data
+  // ops are small. An explicit cap keeps a hostile caller from posting huge bodies.
+  app.use(express.json({ limit: "64kb" }));
 
   startWatcher({
     root: surfacesRoot,

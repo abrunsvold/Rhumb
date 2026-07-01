@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { validateManifest, assertServiceId } from "../src/services/manifest.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { validateManifest, assertServiceId, readManifest } from "../src/services/manifest.js";
 import { loadServiceConfig } from "../src/services/config.js";
 
 describe("validateManifest", () => {
@@ -17,6 +20,25 @@ describe("validateManifest", () => {
   it("rejects a traversal id (.. or .)", () => {
     expect(() => validateManifest({ id: "..", type: "service", name: "x", start: "s", port: 1 })).toThrow(/invalid service id/);
     expect(() => validateManifest({ id: ".", type: "service", name: "x", start: "s", port: 1 })).toThrow(/invalid service id/);
+  });
+});
+
+describe("readManifest", () => {
+  let ws: string;
+  beforeEach(() => { ws = mkdtempSync(join(tmpdir(), "rhumb-rm-")); });
+  afterEach(() => { rmSync(ws, { recursive: true, force: true }); });
+
+  it("validates the id before touching the filesystem (traversal is refused)", () => {
+    // No file is created; a valid-id read would ENOENT, but a bad id must be
+    // rejected by the guard first — proving validation sits at the fs boundary.
+    expect(() => readManifest(ws, "../../etc")).toThrow(/invalid service id/);
+    expect(() => readManifest(ws, "..")).toThrow(/invalid service id/);
+  });
+
+  it("reads and validates a manifest for a valid id", () => {
+    mkdirSync(join(ws, "services", "sales"), { recursive: true });
+    writeFileSync(join(ws, "services", "sales", "service.json"), JSON.stringify({ id: "sales", type: "service", name: "Sales", start: "npm start", port: 3000 }));
+    expect(readManifest(ws, "sales")).toMatchObject({ id: "sales", name: "Sales", port: 3000 });
   });
 });
 
