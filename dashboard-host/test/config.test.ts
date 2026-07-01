@@ -10,6 +10,7 @@ describe("loadConfig", () => {
       dataTrustPath: "./workspace/data-trust.json",
       dataAuditPath: "./workspace/data-audit.jsonl",
       servicesPath: "./workspace/services.json",
+      appOrigins: ["tauri://localhost", "https://tauri.localhost"],
     });
   });
 
@@ -23,6 +24,7 @@ describe("loadConfig", () => {
       dataTrustPath: "/srv/ws/data-trust.json",
       dataAuditPath: "/srv/ws/data-audit.jsonl",
       servicesPath: "/srv/ws/services.json",
+      appOrigins: ["tauri://localhost", "https://tauri.localhost"],
     });
   });
 
@@ -30,5 +32,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ RHUMB_DASHBOARD_PORT: "abc" })).toThrow(
       /RHUMB_DASHBOARD_PORT/,
     );
+  });
+
+  it("defaults appOrigins to the Tauri origins and parses RHUMB_APP_ORIGINS", () => {
+    expect(loadConfig({}).appOrigins).toEqual(["tauri://localhost", "https://tauri.localhost"]);
+    expect(loadConfig({ RHUMB_APP_ORIGINS: "tauri://localhost, http://x:1" }).appOrigins)
+      .toEqual(["tauri://localhost", "http://x:1"]);
   });
 });
