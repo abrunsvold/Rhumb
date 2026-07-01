@@ -87,8 +87,44 @@ pub struct StreamState {
     pub infra: Mutex<Option<CancellationToken>>,
 }
 
-async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
-    let resp = match reqwest::get(&url).await {
+// Resolve a request target against the PERSISTED config, not the per-call base.
+// The webview passes the base it read from get_config; we require it to match the
+// stored value, so a compromised/hostile webview cannot redirect the proxy at an
+// arbitrary host (SSRF, e.g. the cloud metadata endpoint). Returns the full URL
+// and the control token to present as a Bearer header.
+fn agent_target(
+    app: &tauri::AppHandle,
+    passed: &str,
+    suffix: &str,
+) -> Result<(String, Option<String>), String> {
+    let cfg = crate::load_config(app);
+    let base = cfg.agent_base.trim_end_matches('/');
+    if base.is_empty() || passed.trim_end_matches('/') != base {
+        return Err("agent base does not match the configured host".into());
+    }
+    Ok((format!("{}{}", base, suffix), cfg.control_token))
+}
+
+fn dashboard_target(
+    app: &tauri::AppHandle,
+    passed: &str,
+    suffix: &str,
+) -> Result<(String, Option<String>), String> {
+    let cfg = crate::load_config(app);
+    let base = cfg.dashboard_base.trim_end_matches('/');
+    if base.is_empty() || passed.trim_end_matches('/') != base {
+        return Err("dashboard base does not match the configured host".into());
+    }
+    Ok((format!("{}{}", base, suffix), cfg.control_token))
+}
+
+async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, token: CancellationToken) {
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -117,38 +153,43 @@ async fn pump(url: String, on_event: Channel<Value>, token: CancellationToken) {
 
 #[tauri::command]
 pub async fn send_message(
+    app: tauri::AppHandle,
     agent_base: String,
     turn_id: String,
     prompt: String,
     session_id: Option<String>,
 ) -> Result<(), String> {
-    let url = format!("{}/messages", agent_base.trim_end_matches('/'));
+    let (url, bearer) = agent_target(&app, &agent_base, "/messages")?;
     let mut body = serde_json::json!({ "turnId": turn_id, "prompt": prompt });
     if let Some(sid) = session_id {
         body["sessionId"] = Value::String(sid);
     }
-    reqwest::Client::new()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url).json(&body);
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn start_agent_stream(
+    app: tauri::AppHandle,
     state: tauri::State<'_, StreamState>,
     agent_base: String,
     turn_id: String,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/turns/{}/stream", turn_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
         old.cancel();
     }
-    let url = format!("{}/turns/{}/stream", agent_base.trim_end_matches('/'), turn_id);
-    tokio::spawn(async move { pump(url, on_event, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_event, token).await });
     Ok(())
 }
 
@@ -160,9 +201,14 @@ pub fn stop_agent_stream(state: tauri::State<'_, StreamState>, turn_id: String) 
 }
 
 #[tauri::command]
-pub async fn get_registry(dashboard_base: String) -> Result<Value, String> {
-    let url = format!("{}/registry", dashboard_base.trim_end_matches('/'));
-    reqwest::get(&url)
+pub async fn get_registry(app: tauri::AppHandle, dashboard_base: String) -> Result<Value, String> {
+    let (url, bearer) = dashboard_target(&app, &dashboard_base, "/registry")?;
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    req.send()
         .await
         .map_err(|e| e.to_string())?
         .json::<Value>()
@@ -172,16 +218,17 @@ pub async fn get_registry(dashboard_base: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn start_registry_stream(
+    app: tauri::AppHandle,
     state: tauri::State<'_, StreamState>,
     dashboard_base: String,
     on_update: Channel<Value>,
 ) -> Result<(), String> {
+    let (url, bearer) = dashboard_target(&app, &dashboard_base, "/registry/stream")?;
     let token = CancellationToken::new();
     if let Some(old) = state.registry.lock().unwrap().replace(token.clone()) {
         old.cancel();
     }
-    let url = format!("{}/registry/stream", dashboard_base.trim_end_matches('/'));
-    tokio::spawn(async move { pump(url, on_update, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_update, token).await });
     Ok(())
 }
 
@@ -194,16 +241,17 @@ pub fn stop_registry_stream(state: tauri::State<'_, StreamState>) {
 
 #[tauri::command]
 pub async fn start_pending_stream(
+    app: tauri::AppHandle,
     state: tauri::State<'_, StreamState>,
     dashboard_base: String,
     on_pending: Channel<Value>,
 ) -> Result<(), String> {
+    let (url, bearer) = dashboard_target(&app, &dashboard_base, "/data/pending/stream")?;
     let token = CancellationToken::new();
     if let Some(old) = state.pending.lock().unwrap().replace(token.clone()) {
         old.cancel();
     }
-    let url = format!("{}/data/pending/stream", dashboard_base.trim_end_matches('/'));
-    tokio::spawn(async move { pump(url, on_pending, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_pending, token).await });
     Ok(())
 }
 
@@ -216,41 +264,66 @@ pub fn stop_pending_stream(state: tauri::State<'_, StreamState>) {
 
 #[tauri::command]
 pub async fn resolve_pending(
+    app: tauri::AppHandle,
     dashboard_base: String,
     pending_id: String,
     decision: String,
     trust_surface: bool,
 ) -> Result<(), String> {
-    let url = format!("{}/data/pending/{}/resolve", dashboard_base.trim_end_matches('/'), pending_id);
-    reqwest::Client::new()
+    let (url, bearer) = dashboard_target(&app, &dashboard_base, &format!("/data/pending/{}/resolve", pending_id))?;
+    let client = reqwest::Client::new();
+    let mut req = client
         .post(&url)
-        .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface }))
-        .send()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface }));
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("dashboard host returned {}", resp.status()));
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn start_infra_pending_stream(
+    app: tauri::AppHandle,
     state: tauri::State<'_, StreamState>,
     agent_base: String,
     on_pending: Channel<Value>,
 ) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, "/infra/pending/stream")?;
     let token = CancellationToken::new();
-    if let Some(old) = state.infra.lock().unwrap().replace(token.clone()) { old.cancel(); }
-    let url = format!("{}/infra/pending/stream", agent_base.trim_end_matches('/'));
-    tokio::spawn(async move { pump(url, on_pending, token).await });
+    if let Some(old) = state.infra.lock().unwrap().replace(token.clone()) {
+        old.cancel();
+    }
+    tokio::spawn(async move { pump(url, bearer, on_pending, token).await });
     Ok(())
 }
 
 #[tauri::command]
 pub fn stop_infra_pending_stream(state: tauri::State<'_, StreamState>) {
-    if let Some(tok) = state.infra.lock().unwrap().take() { tok.cancel(); }
+    if let Some(tok) = state.infra.lock().unwrap().take() {
+        tok.cancel();
+    }
 }
 
 #[tauri::command]
-pub async fn resolve_infra_pending(agent_base: String, pending_id: String, decision: String) -> Result<(), String> {
-    let url = format!("{}/infra/pending/{}/resolve", agent_base.trim_end_matches('/'), pending_id);
-    reqwest::Client::new().post(&url).json(&serde_json::json!({ "decision": decision })).send().await.map(|_| ()).map_err(|e| e.to_string())
+pub async fn resolve_infra_pending(
+    app: tauri::AppHandle,
+    agent_base: String,
+    pending_id: String,
+    decision: String,
+) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/infra/pending/{}/resolve", pending_id))?;
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url).json(&serde_json::json!({ "decision": decision }));
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    Ok(())
 }

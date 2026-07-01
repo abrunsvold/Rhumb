@@ -10,6 +10,12 @@ pub struct AppConfig {
     pub agent_base: String,
     #[serde(default)]
     pub dashboard_base: String,
+    // Shared operator secret (RHUMB_CONTROL_TOKEN on the hosts). Sent as a Bearer
+    // header on control-plane requests. Optional: absent when the hosts run
+    // unauthenticated. Kept in config (not passed per-call over IPC) so a surface
+    // cannot read it from a command argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_token: Option<String>,
 }
 
 pub fn read_config(path: &Path) -> AppConfig {
@@ -44,6 +50,7 @@ mod tests {
         let cfg = AppConfig {
             agent_base: "http://host-a:8787".into(),
             dashboard_base: "http://host-d:8788".into(),
+            control_token: Some("tok".into()),
         };
         write_config(&path, &cfg).unwrap();
         assert_eq!(read_config(&path), cfg);

@@ -4,6 +4,10 @@ import type { AgentEvent, RegistrySnapshot } from "./types";
 export interface AppConfig {
   agentBase: string;
   dashboardBase: string;
+  // Optional shared operator secret (RHUMB_CONTROL_TOKEN). The Rust proxy reads it
+  // from persisted config and sends it as a Bearer header on control-plane calls;
+  // it is never passed per-call over IPC.
+  controlToken?: string;
 }
 
 export function getConfig(): Promise<AppConfig> {
