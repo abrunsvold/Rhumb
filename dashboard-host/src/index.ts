@@ -9,6 +9,7 @@ import { startWatcher, type WatchFn } from "./watcher.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
 import { loadServices, serviceToRegistryEntry } from "./services/registry.js";
+import { createServiceProxy } from "./services/proxy.js";
 import { loadDataSources } from "./data/sources.js";
 import { createPgExecutor } from "./data/pgExecutor.js";
 import { PendingQueue } from "./data/writes.js";
@@ -71,6 +72,8 @@ export function buildApp(deps: {
       now,
     }),
   );
+
+  app.use("/services", createServiceProxy({ getServices: () => loadServices(servicesPath) }));
 
   return app;
 }
