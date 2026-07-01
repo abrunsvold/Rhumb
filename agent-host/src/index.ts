@@ -1,20 +1,57 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import express from "express";
 import { loadConfig, type Config } from "./config.js";
 import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { sanitizedEnv } from "./env.js";
+import { loadInfraConfig } from "./infra/config.js";
+import { createProxmoxClient } from "./infra/proxmox.js";
+import { createAdminExecutor } from "./infra/pgAdmin.js";
+import { PendingActions } from "./infra/pending.js";
+import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
+import { createInfraRouter } from "./infra/router.js";
 import type { Express } from "express";
 
 export function buildApp(deps: { config: Config; query: QueryFn }): Express {
+  const sessionExtraOptions: Record<string, unknown> = {};
+  const infra = loadInfraConfig(process.env);
+  let infraPending: PendingActions | undefined;
+
+  if (infra.proxmox && infra.pgAdmin) {
+    const now = () => new Date().toISOString();
+    const pending = new PendingActions({ now, id: () => randomUUID() });
+    const server = createInfraServer({
+      proxmox: createProxmoxClient(infra.proxmox),
+      admin: createAdminExecutor(infra.pgAdmin.connectionString),
+      dataSourcesPath: infra.dataSourcesPath,
+      auditPath: infra.auditPath,
+      now,
+      password: () => randomUUID().replace(/-/g, ""),
+      adminConnectionString: infra.pgAdmin.connectionString,
+    });
+    sessionExtraOptions.mcpServers = { infra: server };
+    sessionExtraOptions.allowedTools = [...READ_TOOL_NAMES];
+    sessionExtraOptions.canUseTool = makeCanUseTool({ pending, auditPath: infra.auditPath, now });
+    infraPending = pending;
+  }
+
   const manager = new SessionManager({
     query: deps.query,
     model: deps.config.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
+    extraOptions: sessionExtraOptions,
   });
-  return createServer({ manager });
+  const app = createServer({ manager });
+
+  if (infraPending) {
+    app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
+  }
+
+  return app;
 }
 
 // Wrap the SDK's query so it matches our narrowed QueryFn signature.

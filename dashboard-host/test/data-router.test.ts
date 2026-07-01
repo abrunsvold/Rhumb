@@ -24,7 +24,7 @@ function app() {
   const getExecutor = () => executor;
   const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "audit.jsonl"), now, id: () => `p${++n}` });
   const router = createDataRouter({
-    sources, getExecutor, queue, trustPath: join(dir, "trust.json"), auditPath: join(dir, "audit.jsonl"), now,
+    getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"), auditPath: join(dir, "audit.jsonl"), now,
   });
   const a = express();
   a.use(express.json());

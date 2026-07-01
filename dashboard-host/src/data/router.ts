@@ -6,7 +6,7 @@ import { loadTrust, isTrusted, addTrust } from "./trust.js";
 import type { DataSource, DataOp, QueryExecutor } from "./types.js";
 
 export interface DataRouterDeps {
-  sources: DataSource[];
+  getSources: () => DataSource[];
   getExecutor: (sourceId: string) => QueryExecutor;
   queue: PendingQueue;
   trustPath: string;
@@ -30,7 +30,7 @@ export function createDataRouter(deps: DataRouterDeps): Router {
   const router = express.Router();
 
   router.post("/:source/query", async (req: Request, res: Response) => {
-    const source = findSource(deps.sources, req.params.source);
+    const source = findSource(deps.getSources(), req.params.source);
     if (!source) return void res.sendStatus(404);
     const op = req.body?.op as DataOp | undefined;
     if (!op || op.kind !== "select") return void res.status(400).json({ error: "query requires a select op" });
@@ -43,7 +43,7 @@ export function createDataRouter(deps: DataRouterDeps): Router {
   });
 
   router.post("/:source/write", async (req: Request, res: Response) => {
-    const source = findSource(deps.sources, req.params.source);
+    const source = findSource(deps.getSources(), req.params.source);
     if (!source) return void res.sendStatus(404);
     if (source.mode !== "read-write") return void res.status(403).json({ error: "source is read-only" });
     const op = req.body?.op as DataOp | undefined;

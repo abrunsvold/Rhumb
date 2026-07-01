@@ -66,4 +66,20 @@ describe("buildApp wiring", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ pending: [] });
   });
+
+  it("picks up a data source added to data-sources.json after startup", async () => {
+    const dsPath = join(workspace, "data-sources.json");
+    writeFileSync(dsPath, JSON.stringify([])); // start empty
+    const app = buildApp({
+      config: { port: 0, workspace, dataSourcesPath: dsPath, dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl") } as never,
+      watch: () => ({ close() {} }),
+      executorFor: () => ({ async run() { return { rows: [{ ok: 1 }], rowCount: 1 }; } }),
+    });
+    // not present yet → 404
+    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(404);
+    // add it
+    writeFileSync(dsPath, JSON.stringify([{ id: "late", type: "postgres", mode: "read-write", connectionString: "x" }]));
+    // now found
+    expect((await request(app).post("/data/late/query").send({ op: { kind: "select", table: "t" } })).status).toBe(200);
+  });
 });

@@ -40,13 +40,12 @@ export function buildApp(deps: {
     },
   });
 
-  const sources = loadDataSources(deps.config.dataSourcesPath);
   const executorFor = deps.executorFor ?? createPgExecutor;
   const executorCache = new Map<string, QueryExecutor>();
   const getExecutor = (sourceId: string): QueryExecutor => {
     let ex = executorCache.get(sourceId);
     if (!ex) {
-      const src = sources.find((s) => s.id === sourceId);
+      const src = loadDataSources(deps.config.dataSourcesPath).find((s) => s.id === sourceId);
       if (!src) throw new Error(`unknown source: ${sourceId}`);
       ex = executorFor(src);
       executorCache.set(sourceId, ex);
@@ -60,7 +59,7 @@ export function buildApp(deps: {
   app.use(
     "/data",
     createDataRouter({
-      sources,
+      getSources: () => loadDataSources(deps.config.dataSourcesPath),
       getExecutor,
       queue,
       trustPath: deps.config.dataTrustPath,
