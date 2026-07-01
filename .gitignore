@@ -9,3 +9,13 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Agent workspace (default RHUMB_WORKSPACE=./workspace). Holds runtime data —
+# data-sources.json (contains DB connection strings WITH passwords), the trust
+# store, audit logs, the ontology vault, and spawned-service code. NEVER commit it.
+workspace/
+
+# Deploy keypairs, if generated in-tree.
+*.pem
+id_ed25519*
+id_rsa*
