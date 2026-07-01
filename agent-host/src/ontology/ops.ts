@@ -5,6 +5,8 @@ import { readNode, writeNode, listNodes } from "./vault.js";
 import { buildGraph } from "./graph.js";
 
 const ID = /^[A-Za-z0-9._-]+$/;
+const RESERVED_PREFIX = /^(datasource|service|container|vm|dashboard)-/;
+const hasNewline = (s: string) => /[\r\n]/.test(s);
 
 export type OntologyQuery =
   | { kind: "node"; id: string }
@@ -43,9 +45,16 @@ export function createOntologyOps(deps: OntologyOpsDeps): OntologyOps {
     },
     upsert(input) {
       if (!ID.test(input.id)) throw new Error(`invalid node id: ${input.id}`);
+      if (RESERVED_PREFIX.test(input.id)) {
+        throw new Error(`node id "${input.id}" uses a reserved system prefix (datasource-/service-/container-/vm-/dashboard-); choose a domain id`);
+      }
+      if (hasNewline(input.title)) throw new Error("node title must not contain newlines");
       const existing = existsSync(domainPath(input.id)) ? readNode(domainPath(input.id)) : null;
       const ts = deps.now();
       const props = { ...(input.subtype ? { subtype: input.subtype } : {}), ...(input.props ?? {}) };
+      for (const [k, v] of Object.entries(props)) {
+        if (hasNewline(k) || hasNewline(v)) throw new Error(`prop "${k}" must not contain newlines`);
+      }
       const node: OntologyNode = {
         type: "entity", id: input.id, title: input.title, managed: "domain",
         created: existing?.created ?? ts, updated: ts, props,

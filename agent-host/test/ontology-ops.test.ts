@@ -47,4 +47,16 @@ describe("ontology ops", () => {
       ["mcp__ontology__link", "mcp__ontology__query", "mcp__ontology__sync", "mcp__ontology__upsert_node"].sort(),
     );
   });
+
+  it("rejects a domain id that uses a reserved system prefix", () => {
+    const o = ops();
+    expect(() => o.upsert({ id: "service-demo", title: "X" })).toThrow(/reserved/);
+    expect(() => o.upsert({ id: "datasource-ops", title: "X" })).toThrow(/reserved/);
+  });
+
+  it("rejects newlines in title or prop values (frontmatter injection)", () => {
+    const o = ops();
+    expect(() => o.upsert({ id: "customer-2", title: "a\nmanaged: system" })).toThrow(/newline/);
+    expect(() => o.upsert({ id: "customer-2", title: "ok", props: { x: "a\nb" } })).toThrow(/newline/);
+  });
 });
