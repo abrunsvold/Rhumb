@@ -18,6 +18,18 @@ Tools like OpenClaw trap a capable agent inside a linear chat transcript. The ag
 
 ---
 
+## Who it's for — and what you'd build
+
+**People who already self-host.** If you've got a Proxmox node in a closet and a backlog of little jobs that deserve a real tool but never get one — a 3D-printer tracker, a runbook wiki, a homelab status board — Rhumb is a **homelab-native internal-tools builder**: you describe the tool, an agent builds it, provisions its backend, and leaves it running on your own hardware.
+
+The useful comparison isn't the AI app-builders (v0, bolt) — it's internal-tools platforms like **Retool / Budibase / Appsmith**. The difference: those make *you* wire a UI to a backend you already have; Rhumb has the agent **stand up the backend *and* the UI *and* register them together**, on a box you own.
+
+The on-ramp is homelab-grade (Proxmox + Tailscale + your own subscription), so the honest framing is *fast internal tools for people who already self-host* — not for everyone.
+
+**→ See [docs/positioning.md](docs/positioning.md)** for the full persona, the Retool/Budibase comparison, and 8 example tools (each mapping to a Rhumb subsystem).
+
+---
+
 ## ⚠️ This is a personal tool, by design — please read
 
 Rhumb authenticates Claude with **your own Claude subscription** via an OAuth token from `claude setup-token`, **not** an API key.
