@@ -93,6 +93,41 @@ describe("data router", () => {
     expect(w2.body.status).toBe("executed");
   });
 
+  it("does not leak the raw DB error message to the client on query failure", async () => {
+    const secret = 'relation "secret_users" does not exist';
+    const throwing: QueryExecutor = { async run() { throw new Error(secret); } };
+    const router = createDataRouter({
+      getSources: () => sources, getExecutor: () => throwing,
+      queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
+      trustPath: join(dir, "trust.json"), auditPath: join(dir, "a.jsonl"), now: () => "T",
+    });
+    const a = express(); a.use(express.json()); a.use("/data", router);
+    const res = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain("secret_users");
+    expect(res.body.error).toBe("query failed");
+  });
+
+  it("does not leak the raw DB error message to the client on write failure", async () => {
+    const secret = 'column "ssn" of relation "people" violates constraint';
+    const throwing: QueryExecutor = { async run() { throw new Error(secret); } };
+    const trustPath = join(dir, "trust.json");
+    // pre-trust d1 so the write executes directly and hits the throwing executor
+    const { addTrust } = await import("../src/data/trust.js");
+    addTrust(trustPath, { source: "ops", surfaceId: "d1" });
+    const router = createDataRouter({
+      getSources: () => sources, getExecutor: () => throwing,
+      queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
+      trustPath, auditPath: join(dir, "a.jsonl"), now: () => "T",
+    });
+    const a = express(); a.use(express.json()); a.use("/data", router);
+    const res = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "insert", table: "people", values: { ssn: "x" } } });
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain("ssn");
+    expect(res.body.error).toBe("write failed");
+  });
+
   it("GET /pending lists pending writes", async () => {
     const a = app();
     await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")

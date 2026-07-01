@@ -1,7 +1,6 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { loadConfig, type Config } from "./config.js";
@@ -19,7 +18,7 @@ import { createLxcClient } from "./services/lxc.js";
 import { createSshExec } from "./services/ssh.js";
 import { createDeployer } from "./services/deployer.js";
 import { createServiceOps } from "./services/ops.js";
-import { validateManifest } from "./services/manifest.js";
+import { readManifest } from "./services/manifest.js";
 import type { Express } from "express";
 
 export function buildApp(deps: { config: Config; query: QueryFn }): Express {
@@ -37,8 +36,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
           deployer: createDeployer(createSshExec()),
           config: svcCfg,
           now,
-          readManifest: (id) =>
-            validateManifest(JSON.parse(readFileSync(join(svcCfg.workspace, "services", id, "service.json"), "utf8"))),
+          readManifest: (id) => readManifest(svcCfg.workspace, id),
         })
       : undefined;
     const server = createInfraServer({
