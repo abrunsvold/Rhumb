@@ -34,7 +34,7 @@ describe("createServiceOps.spawn", () => {
       async start(id) { calls.push(`start:${id}`); },
       async stop(id) { calls.push(`stop:${id}`); },
       async destroy(id) { calls.push(`destroy:${id}`); },
-      async status(id) { return { id, status: "running" }; },
+      async status(id) { return { id, status: "stopped" }; }, // so waitStopped exits immediately in tests
       async ip() { return "10.0.0.9"; },
       ...overrides,
     };
