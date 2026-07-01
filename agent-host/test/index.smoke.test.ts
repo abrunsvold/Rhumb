@@ -31,4 +31,10 @@ describe("buildApp wiring", () => {
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
   });
+
+  it("boots with the ontology wired (no infra config required)", async () => {
+    const app = buildApp({ config: { port: 0, workspace: "./workspace" } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const res = await request(app).get("/healthz");
+    expect(res.status).toBe(200);
+  });
 });
