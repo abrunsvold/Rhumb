@@ -13,7 +13,7 @@ export function createServiceProxy(deps: { getServices: () => ServiceEntry[] }):
       changeOrigin: true,
       ws: true,
       // strip the /services/:id mount prefix so the app sees the remainder at its root
-      pathRewrite: (path) => path.replace(new RegExp(`^/services/${svc.id}`), "") || "/",
+      pathRewrite: (path) => path.replace(new RegExp(`^/services/${svc.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "") || "/",
       on: {
         error: (_err, _req, resu) => {
           const r = resu as Response;
