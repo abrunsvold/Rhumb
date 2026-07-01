@@ -67,6 +67,18 @@ describe("buildApp wiring", () => {
     expect(res.body).toEqual({ pending: [] });
   });
 
+  it("includes a service added to services.json in the registry snapshot", async () => {
+    const svcPath = join(workspace, "services.json");
+    writeFileSync(svcPath, JSON.stringify([]));
+    const app = buildApp({
+      config: { port: 0, workspace, servicesPath: svcPath, dataSourcesPath: join(workspace, "ds.json"), dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl") } as never,
+      watch: () => ({ close() {} }),
+    });
+    writeFileSync(svcPath, JSON.stringify([{ id: "sales", name: "Sales", containerId: 1, host: "h", port: 3000, basePath: "/services/sales", status: "healthy", createdAt: "T" }]));
+    const res = await request(app).get("/registry");
+    expect(res.body.surfaces.map((s: { id: string }) => s.id)).toContain("sales");
+  });
+
   it("picks up a data source added to data-sources.json after startup", async () => {
     const dsPath = join(workspace, "data-sources.json");
     writeFileSync(dsPath, JSON.stringify([])); // start empty

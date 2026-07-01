@@ -14,6 +14,7 @@ export interface RegistryEntry {
   kind: string;
   created: string;
   updated: string;
+  status?: string;
 }
 
 export interface RegistrySnapshot {

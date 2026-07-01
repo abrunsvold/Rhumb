@@ -8,6 +8,7 @@ import { createServer } from "./server.js";
 import { startWatcher, type WatchFn } from "./watcher.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
+import { loadServices, serviceToRegistryEntry } from "./services/registry.js";
 import { loadDataSources } from "./data/sources.js";
 import { createPgExecutor } from "./data/pgExecutor.js";
 import { PendingQueue } from "./data/writes.js";
@@ -20,11 +21,14 @@ export function buildApp(deps: {
   executorFor?: (source: DataSource) => QueryExecutor;
 }): Express {
   const surfacesRoot = resolve(deps.config.workspace, "surfaces");
+  const servicesPath = deps.config.servicesPath;
   const subscribers = new Set<Response>();
   let current: RegistrySnapshot = { surfaces: [] };
 
   const app = createServer({
-    getSnapshot: () => current,
+    getSnapshot: () => ({
+      surfaces: [...current.surfaces, ...loadServices(servicesPath).map(serviceToRegistryEntry)],
+    }),
     workspace: deps.config.workspace,
     subscribers,
   });
