@@ -1,7 +1,7 @@
-# RHUMBR Infrastructure Capability Design Spec (Plan 5 of 7)
+# Rhumb Infrastructure Capability Design Spec (Plan 5 of 7)
 
 **Date:** 2026-06-30
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.4).
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.4).
 **Depends on:** the agent host (Plan 1), dashboard host + data endpoint (Plans 2, 4), and the client confirmation surface (Plan 4).
 
 Grounded against live Claude Agent SDK docs: in-process custom tools (`createSdkMcpServer` + `tool`) and the permission flow (`canUseTool` gates any tool not in `allowedTools`).
@@ -62,7 +62,7 @@ The PG-admin execution is behind an injectable seam (fake in tests; real `pg` in
 
 ### 2.5 Infra audit log
 
-Append-only JSONL on the agent host (`RHUMBR_INFRA_AUDIT`, default `<workspace>/infra-audit.jsonl`): one line per gated action — `{ ts, tool, input, decision:"approved"|"denied", result?, error? }`. Read tools are not audited.
+Append-only JSONL on the agent host (`RHUMB_INFRA_AUDIT`, default `<workspace>/infra-audit.jsonl`): one line per gated action — `{ ts, tool, input, decision:"approved"|"denied", result?, error? }`. Read tools are not audited.
 
 ## 3. Client (generalized confirmation surface)
 

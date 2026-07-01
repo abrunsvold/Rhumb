@@ -1,7 +1,7 @@
-# RHUMBR Client Design Spec (Plan 3 of 7)
+# Rhumb Client Design Spec (Plan 3 of 7)
 
 **Date:** 2026-06-30
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.7–3.9)
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.7–3.9)
 **Depends on:** the agent host (Plan 1) and dashboard host (Plan 2) HTTP/SSE contracts.
 
 ---

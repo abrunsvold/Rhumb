@@ -4,6 +4,7 @@ export interface Config {
   workspace: string;
   oauthToken: string;
   permissionMode: string;
+  controlToken?: string;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -18,26 +19,26 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!oauthToken) {
     throw new Error(
       "CLAUDE_CODE_OAUTH_TOKEN is required. Generate one with `claude setup-token` " +
-        "(uses your Claude subscription). RHUMBR does not use ANTHROPIC_API_KEY.",
+        "(uses your Claude subscription). Rhumb does not use ANTHROPIC_API_KEY.",
     );
   }
   let port = 8787;
-  if (env.RHUMBR_PORT) {
-    const parsed = Number.parseInt(env.RHUMBR_PORT, 10);
+  if (env.RHUMB_PORT) {
+    const parsed = Number.parseInt(env.RHUMB_PORT, 10);
     if (Number.isNaN(parsed)) {
       throw new Error(
-        `RHUMBR_PORT must be a number, got "${env.RHUMBR_PORT}"`,
+        `RHUMB_PORT must be a number, got "${env.RHUMB_PORT}"`,
       );
     }
     port = parsed;
   }
 
   let permissionMode = "acceptEdits";
-  if (env.RHUMBR_PERMISSION_MODE) {
-    const value = env.RHUMBR_PERMISSION_MODE.trim();
+  if (env.RHUMB_PERMISSION_MODE) {
+    const value = env.RHUMB_PERMISSION_MODE.trim();
     if (!VALID_PERMISSION_MODES.has(value)) {
       throw new Error(
-        `RHUMBR_PERMISSION_MODE must be one of default|acceptEdits|bypassPermissions|plan, got "${value}"`,
+        `RHUMB_PERMISSION_MODE must be one of default|acceptEdits|bypassPermissions|plan, got "${value}"`,
       );
     }
     permissionMode = value;
@@ -45,9 +46,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
   return {
     port,
-    model: env.RHUMBR_MODEL?.trim() || "claude-opus-4-8",
-    workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
+    model: env.RHUMB_MODEL?.trim() || "claude-opus-4-8",
+    workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
     oauthToken,
     permissionMode,
+    controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
   };
 }

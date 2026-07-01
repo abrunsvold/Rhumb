@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent } from "./sse.js";
+import { createControlTokenGuard } from "./auth.js";
 
 interface ManagerLike {
   run(
@@ -39,6 +40,7 @@ export function pruneSubscriber(
 export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
+  controlToken?: string;
 }): Express {
   const app = express();
   app.use(express.json());
@@ -48,9 +50,14 @@ export function createServer(deps: {
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
 
+  // Liveness is unauthenticated; everything after this requires the control
+  // token (when one is configured). Routes mounted later on this app by index.ts
+  // (e.g. /infra) sit behind the guard too, since it is registered first.
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
   });
+
+  app.use(createControlTokenGuard(deps.controlToken));
 
   app.get("/sessions/:id/stream", (req: Request, res: Response) => {
     res.set(SSE_HEADERS);

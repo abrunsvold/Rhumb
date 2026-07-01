@@ -7,7 +7,7 @@ import { loadOntologyConfig } from "../src/ontology/config.js";
 import type { OntologyNode } from "../src/ontology/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-onto-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-onto-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const node: OntologyNode = {
@@ -47,7 +47,7 @@ describe("vault read/write/list", () => {
 
 describe("loadOntologyConfig", () => {
   it("derives vault + artifact paths under the workspace", () => {
-    const c = loadOntologyConfig({ RHUMBR_WORKSPACE: "/srv/ws" });
+    const c = loadOntologyConfig({ RHUMB_WORKSPACE: "/srv/ws" });
     expect(c.vaultPath).toBe("/srv/ws/ontology");
     expect(c.systemDir).toBe("/srv/ws/ontology/system");
     expect(c.domainDir).toBe("/srv/ws/ontology/domain");

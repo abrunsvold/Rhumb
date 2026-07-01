@@ -24,7 +24,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
 
   return (
     <div>
-      <h1>Connect RHUMBR</h1>
+      <h1>Connect Rhumb</h1>
       <label htmlFor="agent">Agent host</label>
       <input id="agent" value={agentBase} onChange={(e) => setAgentBase(e.target.value)} />
       <label htmlFor="dash">Dashboard host</label>

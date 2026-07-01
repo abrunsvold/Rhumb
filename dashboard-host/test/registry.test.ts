@@ -24,7 +24,7 @@ const valid = (id: string) => ({
 });
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "rhumbr-surfaces-"));
+  root = mkdtempSync(join(tmpdir(), "rhumb-surfaces-"));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });

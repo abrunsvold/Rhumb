@@ -79,4 +79,32 @@ describe("agent-host server", () => {
     const map = new Map<string, Set<import("express").Response>>();
     expect(() => pruneSubscriber(map, "missing", {} as import("express").Response)).not.toThrow();
   });
+
+  describe("control-token auth", () => {
+    const token = "s3cr3t-operator-token";
+
+    it("rejects POST /messages without the token when a control token is configured", async () => {
+      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const res = await request(app).post("/messages").send({ prompt: "hi" });
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects POST /messages with a wrong token", async () => {
+      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const res = await request(app).post("/messages").set("Authorization", "Bearer wrong").send({ prompt: "hi" });
+      expect(res.status).toBe(401);
+    });
+
+    it("accepts POST /messages with the correct bearer token", async () => {
+      const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), controlToken: token });
+      const res = await request(app).post("/messages").set("Authorization", `Bearer ${token}`).send({ prompt: "hi" });
+      expect(res.status).toBe(202);
+    });
+
+    it("leaves /healthz open even when a token is configured", async () => {
+      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const res = await request(app).get("/healthz");
+      expect(res.status).toBe(200);
+    });
+  });
 });

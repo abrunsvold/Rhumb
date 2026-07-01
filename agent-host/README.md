@@ -1,11 +1,11 @@
-# RHUMBR Agent Host
+# Rhumb Agent Host
 
-Server-side component of RHUMBR. Wraps Claude Code (via the Claude Agent SDK) and
+Server-side component of Rhumb. Wraps Claude Code (via the Claude Agent SDK) and
 exposes a small HTTP + SSE session API over your Tailscale network.
 
 ## Authentication — personal-tool framing
 
-RHUMBR authenticates Claude with **your own Claude subscription**, not an API key.
+Rhumb authenticates Claude with **your own Claude subscription**, not an API key.
 Generate a long-lived token once:
 
     claude setup-token
@@ -16,7 +16,7 @@ Then export it before starting the host:
 
 > **Compliance note.** Anthropic's terms state that, without prior approval,
 > third-party developers may not *offer* claude.ai login or rate limits in their
-> products — including agents built on the Claude Agent SDK. RHUMBR is a
+> products — including agents built on the Claude Agent SDK. Rhumb is a
 > **self-hosted personal tool**: you run it on your own hardware with your own
 > credentials. It does not broker, proxy, or offer Claude login to anyone else.
 > If you want to distribute a multi-tenant or hosted offering, seek Anthropic's
@@ -28,9 +28,9 @@ Then export it before starting the host:
     npm run build
     CLAUDE_CODE_OAUTH_TOKEN=... npm start
 
-Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMBR_PORT`
-(default 8787), `RHUMBR_MODEL` (default `claude-opus-4-8`), `RHUMBR_WORKSPACE`
-(default `./workspace`), `RHUMBR_PERMISSION_MODE` (default `acceptEdits`).
+Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMB_PORT`
+(default 8787), `RHUMB_MODEL` (default `claude-opus-4-8`), `RHUMB_WORKSPACE`
+(default `./workspace`), `RHUMB_PERMISSION_MODE` (default `acceptEdits`).
 
 ## Security
 
@@ -45,7 +45,7 @@ operator's machine. The `permissionMode` controls how much is gated:
   this setting Claude Code can execute any Bash command or file write without
   confirmation. Only use in fully trusted, isolated environments.
 
-Set via the `RHUMBR_PERMISSION_MODE` environment variable
+Set via the `RHUMB_PERMISSION_MODE` environment variable
 (`default` | `acceptEdits` | `bypassPermissions` | `plan`).
 
 ## API

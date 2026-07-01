@@ -1,4 +1,4 @@
-# RHUMBR Client Shell Design Spec (Plan 3b of 7)
+# Rhumb Client Shell Design Spec (Plan 3b of 7)
 
 **Date:** 2026-06-30
 **Status:** Approved design (completes the client design spec `2026-06-30-client-design.md`).
@@ -10,7 +10,7 @@ Grounded against live Tauri v2 docs (commands, Channels, capabilities, `WebviewW
 
 ## 1. Role
 
-Plan 3b adds the Tauri v2 desktop shell, a Rust control-plane proxy, and the React UI on top of the 3a foundation — producing the runnable RHUMBR client: a flexible workspace with a "Claude-desktop-feel" agent panel and a canvas of surface tabs that detach into native windows.
+Plan 3b adds the Tauri v2 desktop shell, a Rust control-plane proxy, and the React UI on top of the 3a foundation — producing the runnable Rhumb client: a flexible workspace with a "Claude-desktop-feel" agent panel and a canvas of surface tabs that detach into native windows.
 
 ## 2. Architecture
 

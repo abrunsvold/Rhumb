@@ -6,12 +6,12 @@ import { loadInfraConfig } from "../src/infra/config.js";
 import { appendInfraAudit } from "../src/infra/audit.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-infra-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-infra-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("loadInfraConfig", () => {
   it("defaults paths under the workspace and leaves optional creds undefined", () => {
-    const cfg = loadInfraConfig({ RHUMBR_WORKSPACE: "/srv/ws" });
+    const cfg = loadInfraConfig({ RHUMB_WORKSPACE: "/srv/ws" });
     expect(cfg.auditPath).toBe("/srv/ws/infra-audit.jsonl");
     expect(cfg.dataSourcesPath).toBe("/srv/ws/data-sources.json");
     expect(cfg.proxmox).toBeUndefined();
@@ -20,14 +20,14 @@ describe("loadInfraConfig", () => {
 
   it("reads proxmox + pg-admin settings when present", () => {
     const cfg = loadInfraConfig({
-      RHUMBR_WORKSPACE: "/srv/ws",
-      RHUMBR_PROXMOX_URL: "https://pve:8006",
-      RHUMBR_PROXMOX_TOKEN_ID: "rhumbr@pve!t1",
-      RHUMBR_PROXMOX_TOKEN_SECRET: "secret",
-      RHUMBR_PROXMOX_NODE: "pve",
-      RHUMBR_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_PROXMOX_URL: "https://pve:8006",
+      RHUMB_PROXMOX_TOKEN_ID: "rhumb@pve!t1",
+      RHUMB_PROXMOX_TOKEN_SECRET: "secret",
+      RHUMB_PROXMOX_NODE: "pve",
+      RHUMB_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
     });
-    expect(cfg.proxmox).toEqual({ baseUrl: "https://pve:8006", tokenId: "rhumbr@pve!t1", tokenSecret: "secret", node: "pve" });
+    expect(cfg.proxmox).toEqual({ baseUrl: "https://pve:8006", tokenId: "rhumb@pve!t1", tokenSecret: "secret", node: "pve" });
     expect(cfg.pgAdmin).toEqual({ connectionString: "postgres://admin:pw@pg:5432/postgres" });
   });
 });

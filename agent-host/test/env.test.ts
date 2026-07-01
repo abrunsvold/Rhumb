@@ -33,25 +33,25 @@ describe("sanitizedEnv", () => {
     expect(result.HOME).toBe("/home/user");
   });
 
-  it("strips infrastructure secrets (RHUMBR_* vars) from the child env", () => {
+  it("strips infrastructure secrets (RHUMB_* vars) from the child env", () => {
     const input: NodeJS.ProcessEnv = {
       CLAUDE_CODE_OAUTH_TOKEN: "tok",
-      RHUMBR_PROXMOX_TOKEN_SECRET: "super-secret",
-      RHUMBR_PROXMOX_TOKEN_ID: "rhumbr@pve!t1",
-      RHUMBR_PROXMOX_URL: "https://pve:8006",
-      RHUMBR_PROXMOX_NODE: "pve",
-      RHUMBR_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
-      RHUMBR_WORKSPACE: "/srv/ws",
+      RHUMB_PROXMOX_TOKEN_SECRET: "super-secret",
+      RHUMB_PROXMOX_TOKEN_ID: "rhumb@pve!t1",
+      RHUMB_PROXMOX_URL: "https://pve:8006",
+      RHUMB_PROXMOX_NODE: "pve",
+      RHUMB_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
+      RHUMB_WORKSPACE: "/srv/ws",
       PATH: "/usr/bin:/bin",
     };
     const result = sanitizedEnv(input);
-    // No RHUMBR_* var survives — the spawned agent cannot read infra credentials
+    // No RHUMB_* var survives — the spawned agent cannot read infra credentials
     // and shell out (ungated Bash) to bypass the operator-confirmation gate.
     for (const key of Object.keys(result)) {
-      expect(key.startsWith("RHUMBR_")).toBe(false);
+      expect(key.startsWith("RHUMB_")).toBe(false);
     }
-    expect(result.RHUMBR_PROXMOX_TOKEN_SECRET).toBeUndefined();
-    expect(result.RHUMBR_PG_ADMIN).toBeUndefined();
+    expect(result.RHUMB_PROXMOX_TOKEN_SECRET).toBeUndefined();
+    expect(result.RHUMB_PG_ADMIN).toBeUndefined();
     // The subscription token and ordinary vars are preserved.
     expect(result.CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
     expect(result.PATH).toBe("/usr/bin:/bin");

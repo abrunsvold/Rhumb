@@ -1,4 +1,4 @@
-# RHUMBR — Design Spec
+# Rhumb — Design Spec
 
 **Date:** 2026-06-30
 **Status:** Draft for review
@@ -8,13 +8,13 @@
 
 ## 1. Summary
 
-RHUMBR is a self-hostable platform that turns **Claude Code** into a persistent,
+Rhumb is a self-hostable platform that turns **Claude Code** into a persistent,
 interactive workspace running on your **own hardware** (a Proxmox host), reached
 securely over a **Tailscale** mesh network.
 
 The core insight: tools like OpenClaw trap a capable agent inside a linear chat
 transcript. The agent underneath can build dashboards and live-data UIs — but you
-never get to *keep* or *interact with* what it makes. RHUMBR lets the agent
+never get to *keep* or *interact with* what it makes. Rhumb lets the agent
 **materialize durable, interactive surfaces** that run as real services on your
 box and persist across sessions.
 
@@ -217,7 +217,7 @@ client treats it exactly like a `file` surface — a persistent, interactive tab
 ---
 
 ## 6. Key assumptions
-- **Name:** RHUMBR.
+- **Name:** Rhumb.
 - **Auth = Claude subscription, personal-tool framing.** The agent host runs the
   Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) authenticated with a
   long-lived OAuth token from `claude setup-token`, supplied via the
@@ -226,9 +226,9 @@ client treats it exactly like a `file` surface — a persistent, interactive tab
 - **Compliance note (must ship in docs/README):** Anthropic's terms state that,
   without prior approval, third-party developers may not *offer* claude.ai login
   or rate limits in their products, **including agents built on the Claude Agent
-  SDK**. RHUMBR is therefore framed and distributed as a **self-hosted personal
+  SDK**. Rhumb is therefore framed and distributed as a **self-hosted personal
   tool**: each operator runs it on their own hardware with their own credentials;
-  RHUMBR does not broker, proxy, or "offer" login to anyone. The README must state
+  Rhumb does not broker, proxy, or "offer" login to anyone. The README must state
   this plainly and direct anyone wanting a distributed/multi-tenant offering to
   seek Anthropic approval first.
 - Single user (the operator) for v1.

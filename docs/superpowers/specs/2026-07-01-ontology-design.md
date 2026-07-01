@@ -1,7 +1,7 @@
-# RHUMBR Ontology Design Spec (Plan 7 of 7)
+# Rhumb Ontology Design Spec (Plan 7 of 7)
 
 **Date:** 2026-07-01
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.5 ontology).
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.5 ontology).
 **Depends on:** the workspace/file-as-contract (all plans), the data endpoint + sources (Plan 4), the infra capability + audit (Plan 5), spawned services (Plan 6). Reads their current-state artifacts; adds no coupling to their code.
 
 Grounded against the master spec §3.5: a knowledge graph stored as Obsidian-style markdown + wikilinks, agent-queryable and human-browsable; the **audit log is the event stream, the ontology is the current-state model**.
@@ -10,7 +10,7 @@ Grounded against the master spec §3.5: a knowledge graph stored as Obsidian-sty
 
 ## 1. Role
 
-The ontology is RHUMBR's **persistent current-state model** — a knowledge-graph vault (Obsidian-style markdown + wikilinks) of everything the system knows:
+The ontology is Rhumb's **persistent current-state model** — a knowledge-graph vault (Obsidian-style markdown + wikilinks) of everything the system knows:
 - a **system layer** — the infrastructure Plans 4–6 build (data sources, services, containers, VMs, dashboards) — **projected automatically** from the current-state artifacts those plans already maintain, so it never drifts; and
 - a **domain layer** — the operator's real-world entities — **authored by the agent**, with the two layers **linked** (e.g. "this database *stores* these customers").
 

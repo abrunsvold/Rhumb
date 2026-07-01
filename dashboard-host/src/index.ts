@@ -35,7 +35,9 @@ export function buildApp(deps: {
     subscribers,
   });
 
-  app.use(express.json());
+  // Bound request bodies: this host is unauthenticated on the tailnet, and data
+  // ops are small. An explicit cap keeps a hostile caller from posting huge bodies.
+  app.use(express.json({ limit: "64kb" }));
 
   startWatcher({
     root: surfacesRoot,
@@ -71,6 +73,7 @@ export function buildApp(deps: {
       trustPath: deps.config.dataTrustPath,
       auditPath: deps.config.dataAuditPath,
       now,
+      controlToken: deps.config.controlToken,
     }),
   );
 
@@ -91,7 +94,14 @@ export function main(): void {
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
   app.listen(config.port, () => {
-    console.log(`rhumbr dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
+    console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
+    if (!config.controlToken) {
+      console.warn(
+        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the write-approval " +
+          "control plane (/data/pending) is UNAUTHENTICATED. Set a token (shared " +
+          "with the agent host and client) and keep this host on your tailnet only.",
+      );
+    }
   });
   startProbe(
     { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },

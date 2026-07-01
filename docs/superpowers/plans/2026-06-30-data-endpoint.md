@@ -1,4 +1,4 @@
-# RHUMBR Data Endpoint Implementation Plan (Plan 4 of 7)
+# Rhumb Data Endpoint Implementation Plan (Plan 4 of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -13,7 +13,7 @@
 - **Placement:** the data endpoint is `/data/*` routes inside `dashboard-host` — same origin as the surfaces it serves. No CORS.
 - **No raw SQL:** surfaces send structured ops `{kind, table, where?, values?, limit?}`; identifiers are validated against `^[A-Za-z_][A-Za-z0-9_]*$` and quoted, values are parameterized (`$1, $2, …`). `update`/`delete` require a non-empty `where`.
 - **Write mediation:** a `read-write` source's write executes directly only if the calling surface (identified from the `Referer` path `…/surfaces/<id>/…`) is **trusted**; otherwise it is enqueued as a pending write for the client to confirm. A `read`-mode source rejects writes (403).
-- **Persistence paths (env-overridable):** sources `RHUMBR_DATA_SOURCES` (default `<workspace>/data-sources.json`), trust `RHUMBR_DATA_TRUST` (default `<workspace>/data-trust.json`), audit `RHUMBR_DATA_AUDIT` (default `<workspace>/data-audit.jsonl`).
+- **Persistence paths (env-overridable):** sources `RHUMB_DATA_SOURCES` (default `<workspace>/data-sources.json`), trust `RHUMB_DATA_TRUST` (default `<workspace>/data-trust.json`), audit `RHUMB_DATA_AUDIT` (default `<workspace>/data-audit.jsonl`).
 - **Executor seam:** all logic depends on `interface QueryExecutor { run(sql): Promise<{rows; rowCount}> }`; the `pg` implementation is the only DB-touching code and is live-verified, not unit-tested.
 - **Node ≥ 20, TS strict, ES modules; dashboard-host local imports use the `.js` suffix; client (Vite) imports use no suffix.**
 - **Reuse:** the dashboard host's existing `writeSseEvent`/SSE pattern and the client's existing `StreamState`/Channel proxy pattern — extend, don't duplicate.
@@ -79,7 +79,7 @@ import { join } from "node:path";
 import { loadDataSources, findSource } from "../src/data/sources.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-ds-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-ds-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const valid = [
@@ -348,7 +348,7 @@ import { loadTrust, isTrusted, addTrust } from "../src/data/trust.js";
 import type { AuditEntry } from "../src/data/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-at-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-at-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("appendAudit", () => {
@@ -500,7 +500,7 @@ function deps(): WriteDeps {
 }
 const op: DataOp = { kind: "delete", table: "t", where: { id: 1 } };
 
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-w-")); calls = []; n = 0; });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-w-")); calls = []; n = 0; });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("executeWrite", () => {
@@ -721,7 +721,7 @@ function app() {
   return a;
 }
 
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-dr-")); calls = []; });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-dr-")); calls = []; });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("data router", () => {
@@ -961,19 +961,19 @@ Add three fields to the `Config` interface:
 In `loadConfig`, the current code computes `workspace` inline in the return. Extract it to a `const` and add the three data paths (each env-overridable, defaulting under the workspace). Replace the existing return:
 
 ```typescript
-  const workspace = env.RHUMBR_WORKSPACE?.trim() || "./workspace";
+  const workspace = env.RHUMB_WORKSPACE?.trim() || "./workspace";
   return {
     port,
     workspace,
-    dataSourcesPath: env.RHUMBR_DATA_SOURCES?.trim() || `${workspace}/data-sources.json`,
-    dataTrustPath: env.RHUMBR_DATA_TRUST?.trim() || `${workspace}/data-trust.json`,
-    dataAuditPath: env.RHUMBR_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
+    dataSourcesPath: env.RHUMB_DATA_SOURCES?.trim() || `${workspace}/data-sources.json`,
+    dataTrustPath: env.RHUMB_DATA_TRUST?.trim() || `${workspace}/data-trust.json`,
+    dataAuditPath: env.RHUMB_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
   };
 ```
 
 Then update both `toEqual(...)` cases in `dashboard-host/test/config.test.ts`:
 - empty-env / defaults case → add `dataSourcesPath: "./workspace/data-sources.json"`, `dataTrustPath: "./workspace/data-trust.json"`, `dataAuditPath: "./workspace/data-audit.jsonl"`.
-- the override case (which sets `RHUMBR_WORKSPACE: "/srv/ws"`) → add `dataSourcesPath: "/srv/ws/data-sources.json"`, `dataTrustPath: "/srv/ws/data-trust.json"`, `dataAuditPath: "/srv/ws/data-audit.jsonl"`.
+- the override case (which sets `RHUMB_WORKSPACE: "/srv/ws"`) → add `dataSourcesPath: "/srv/ws/data-sources.json"`, `dataTrustPath: "/srv/ws/data-trust.json"`, `dataAuditPath: "/srv/ws/data-audit.jsonl"`.
 
 - [ ] **Step 4: Wire the router in `dashboard-host/src/index.ts`**
 
@@ -1194,7 +1194,7 @@ to:
     }
 ```
 
-- [ ] **Step 4: Rename the bundle identifier** — in `client/src-tauri/tauri.conf.json`, change `"identifier": "com.tauri.dev"` to `"identifier": "com.rhumbr.client"`.
+- [ ] **Step 4: Rename the bundle identifier** — in `client/src-tauri/tauri.conf.json`, change `"identifier": "com.tauri.dev"` to `"identifier": "com.rhumb.client"`.
 
 - [ ] **Step 5: Build + test**
 

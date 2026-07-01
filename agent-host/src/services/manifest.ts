@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ServiceManifest } from "./types.js";
 
 const ID = /^[A-Za-z0-9._-]+$/;
@@ -25,4 +27,12 @@ export function validateManifest(raw: unknown): ServiceManifest {
     if (typeof res.memory === "number") out.resources.memory = res.memory;
   }
   return out;
+}
+
+// Read a service manifest from <workspace>/services/<id>/service.json. The id is
+// validated *before* it is joined into a path, so the guard sits at the
+// filesystem boundary rather than relying on every caller to pre-validate.
+export function readManifest(workspace: string, id: string): ServiceManifest {
+  assertServiceId(id);
+  return validateManifest(JSON.parse(readFileSync(join(workspace, "services", id, "service.json"), "utf8")));
 }

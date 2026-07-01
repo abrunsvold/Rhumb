@@ -6,7 +6,7 @@ import { appendDataSource, provisionDatabase } from "../src/infra/provision.js";
 import type { AdminExecutor } from "../src/infra/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-prov-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-prov-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("appendDataSource", () => {

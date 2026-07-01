@@ -32,7 +32,7 @@ function app() {
   return a;
 }
 
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-dr-")); calls = []; });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-dr-")); calls = []; });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("data router", () => {
@@ -93,11 +93,90 @@ describe("data router", () => {
     expect(w2.body.status).toBe("executed");
   });
 
+  it("does not leak the raw DB error message to the client on query failure", async () => {
+    const secret = 'relation "secret_users" does not exist';
+    const throwing: QueryExecutor = { async run() { throw new Error(secret); } };
+    const router = createDataRouter({
+      getSources: () => sources, getExecutor: () => throwing,
+      queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
+      trustPath: join(dir, "trust.json"), auditPath: join(dir, "a.jsonl"), now: () => "T",
+    });
+    const a = express(); a.use(express.json()); a.use("/data", router);
+    const res = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain("secret_users");
+    expect(res.body.error).toBe("query failed");
+  });
+
+  it("does not leak the raw DB error message to the client on write failure", async () => {
+    const secret = 'column "ssn" of relation "people" violates constraint';
+    const throwing: QueryExecutor = { async run() { throw new Error(secret); } };
+    const trustPath = join(dir, "trust.json");
+    // pre-trust d1 so the write executes directly and hits the throwing executor
+    const { addTrust } = await import("../src/data/trust.js");
+    addTrust(trustPath, { source: "ops", surfaceId: "d1" });
+    const router = createDataRouter({
+      getSources: () => sources, getExecutor: () => throwing,
+      queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
+      trustPath, auditPath: join(dir, "a.jsonl"), now: () => "T",
+    });
+    const a = express(); a.use(express.json()); a.use("/data", router);
+    const res = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "insert", table: "people", values: { ssn: "x" } } });
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain("ssn");
+    expect(res.body.error).toBe("write failed");
+  });
+
   it("GET /pending lists pending writes", async () => {
     const a = app();
     await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
       .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
     const res = await request(a).get("/data/pending");
     expect(res.body.pending).toHaveLength(1);
+  });
+
+  describe("control-token auth on the approval control plane", () => {
+    const token = "operator-token";
+    function guardedApp() {
+      let n = 0;
+      const now = () => "T";
+      const getExecutor = () => executor;
+      const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "audit.jsonl"), now, id: () => `p${++n}` });
+      const router = createDataRouter({
+        getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"),
+        auditPath: join(dir, "audit.jsonl"), now, controlToken: token,
+      });
+      const a = express(); a.use(express.json()); a.use("/data", router);
+      return a;
+    }
+
+    it("rejects GET /pending without the token", async () => {
+      const res = await request(guardedApp()).get("/data/pending");
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects POST /pending/:id/resolve without the token", async () => {
+      const res = await request(guardedApp()).post("/data/pending/p1/resolve").send({ decision: "approve" });
+      expect(res.status).toBe(401);
+    });
+
+    it("leaves surface-facing query and write open (no token required)", async () => {
+      const a = guardedApp();
+      const q = await request(a).post("/data/ops/query").send({ op: { kind: "select", table: "t" } });
+      expect(q.status).toBe(200);
+      const w = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      expect(w.status).toBe(202); // enqueued for approval, not rejected
+    });
+
+    it("allows the approval control plane with the correct token", async () => {
+      const a = guardedApp();
+      const w = await request(a).post("/data/ops/write").set("Referer", "http://h/surfaces/d1/x")
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      const r = await request(a).post(`/data/pending/${w.body.pendingId}/resolve`)
+        .set("Authorization", `Bearer ${token}`).send({ decision: "approve" });
+      expect(r.status).toBe(200);
+    });
   });
 });

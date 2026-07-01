@@ -26,9 +26,9 @@ describe("loadConfig", () => {
   it("honors overrides", () => {
     const cfg = loadConfig({
       CLAUDE_CODE_OAUTH_TOKEN: "tok",
-      RHUMBR_PORT: "9000",
-      RHUMBR_MODEL: "claude-sonnet-4-6",
-      RHUMBR_WORKSPACE: "/srv/ws",
+      RHUMB_PORT: "9000",
+      RHUMB_MODEL: "claude-sonnet-4-6",
+      RHUMB_WORKSPACE: "/srv/ws",
     });
     expect(cfg).toEqual({
       port: 9000,
@@ -39,26 +39,26 @@ describe("loadConfig", () => {
     });
   });
 
-  it("throws when RHUMBR_PORT is not numeric", () => {
+  it("throws when RHUMB_PORT is not numeric", () => {
     expect(() =>
-      loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMBR_PORT: "abc" }),
-    ).toThrow(/RHUMBR_PORT/);
+      loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_PORT: "abc" }),
+    ).toThrow(/RHUMB_PORT/);
   });
 
-  it("honors RHUMBR_PERMISSION_MODE override", () => {
+  it("honors RHUMB_PERMISSION_MODE override", () => {
     const cfg = loadConfig({
       CLAUDE_CODE_OAUTH_TOKEN: "tok",
-      RHUMBR_PERMISSION_MODE: "plan",
+      RHUMB_PERMISSION_MODE: "plan",
     });
     expect(cfg.permissionMode).toBe("plan");
   });
 
-  it("throws when RHUMBR_PERMISSION_MODE is invalid", () => {
+  it("throws when RHUMB_PERMISSION_MODE is invalid", () => {
     expect(() =>
       loadConfig({
         CLAUDE_CODE_OAUTH_TOKEN: "tok",
-        RHUMBR_PERMISSION_MODE: "turbo",
+        RHUMB_PERMISSION_MODE: "turbo",
       }),
-    ).toThrow(/RHUMBR_PERMISSION_MODE/);
+    ).toThrow(/RHUMB_PERMISSION_MODE/);
   });
 });

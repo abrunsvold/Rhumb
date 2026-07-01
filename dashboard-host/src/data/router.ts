@@ -3,6 +3,7 @@ import { findSource } from "./sources.js";
 import { buildSql } from "./sql.js";
 import { executeWrite, type PendingQueue } from "./writes.js";
 import { loadTrust, isTrusted, addTrust } from "./trust.js";
+import { createControlTokenGuard } from "../auth.js";
 import type { DataSource, DataOp, QueryExecutor } from "./types.js";
 
 export interface DataRouterDeps {
@@ -12,6 +13,7 @@ export interface DataRouterDeps {
   trustPath: string;
   auditPath: string;
   now: () => string;
+  controlToken?: string;
 }
 
 export function surfaceIdFromReferer(req: Request): string | null {
@@ -38,7 +40,10 @@ export function createDataRouter(deps: DataRouterDeps): Router {
       const result = await deps.getExecutor(source.id).run(buildSql(op));
       res.json({ rows: result.rows });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : "query failed" });
+      // Never echo the raw DB error (it can disclose schema/table/role names) to
+      // the caller; log the detail server-side and return a generic message.
+      console.error(`[data] query failed for source ${source.id}:`, err);
+      res.status(500).json({ error: "query failed" });
     }
   });
 
@@ -58,12 +63,18 @@ export function createDataRouter(deps: DataRouterDeps): Router {
         );
         return void res.json({ status: "executed", result });
       } catch (err) {
-        return void res.status(500).json({ error: err instanceof Error ? err.message : "write failed" });
+        console.error(`[data] write failed for source ${source.id}:`, err);
+        return void res.status(500).json({ error: "write failed" });
       }
     }
     const w = deps.queue.enqueue(source.id, op, surfaceId);
     res.status(202).json({ pendingId: w.pendingId, status: "pending" });
   });
+
+  // The pending-write approval control plane is operator-only: surfaces submit
+  // writes above (which get queued) but must never read the queue or resolve it.
+  // Guard everything under /pending with the control token.
+  router.use("/pending", createControlTokenGuard(deps.controlToken));
 
   router.get("/pending", (_req, res) => {
     res.json({ pending: deps.queue.list() });
@@ -90,7 +101,8 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     try {
       await deps.queue.resolve(req.params.id, decision);
     } catch (err) {
-      return void res.status(500).json({ error: err instanceof Error ? err.message : "resolve failed" });
+      console.error(`[data] resolve failed for ${req.params.id}:`, err);
+      return void res.status(500).json({ error: "resolve failed" });
     }
     if (decision === "approve" && trustSurface && pending?.surfaceId) {
       addTrust(deps.trustPath, { source: pending.source, surfaceId: pending.surfaceId });

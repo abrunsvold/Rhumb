@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { validateManifest, assertServiceId } from "../src/services/manifest.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { validateManifest, assertServiceId, readManifest } from "../src/services/manifest.js";
 import { loadServiceConfig } from "../src/services/config.js";
 
 describe("validateManifest", () => {
@@ -20,19 +23,38 @@ describe("validateManifest", () => {
   });
 });
 
+describe("readManifest", () => {
+  let ws: string;
+  beforeEach(() => { ws = mkdtempSync(join(tmpdir(), "rhumb-rm-")); });
+  afterEach(() => { rmSync(ws, { recursive: true, force: true }); });
+
+  it("validates the id before touching the filesystem (traversal is refused)", () => {
+    // No file is created; a valid-id read would ENOENT, but a bad id must be
+    // rejected by the guard first — proving validation sits at the fs boundary.
+    expect(() => readManifest(ws, "../../etc")).toThrow(/invalid service id/);
+    expect(() => readManifest(ws, "..")).toThrow(/invalid service id/);
+  });
+
+  it("reads and validates a manifest for a valid id", () => {
+    mkdirSync(join(ws, "services", "sales"), { recursive: true });
+    writeFileSync(join(ws, "services", "sales", "service.json"), JSON.stringify({ id: "sales", type: "service", name: "Sales", start: "npm start", port: 3000 }));
+    expect(readManifest(ws, "sales")).toMatchObject({ id: "sales", name: "Sales", port: 3000 });
+  });
+});
+
 describe("loadServiceConfig", () => {
   it("returns undefined when required fields are absent", () => {
-    expect(loadServiceConfig({ RHUMBR_WORKSPACE: "/srv/ws" })).toBeUndefined();
+    expect(loadServiceConfig({ RHUMB_WORKSPACE: "/srv/ws" })).toBeUndefined();
   });
 
   it("reads a full config", () => {
     const cfg = loadServiceConfig({
-      RHUMBR_WORKSPACE: "/srv/ws",
-      RHUMBR_DEPLOY_KEY: "/keys/id",
-      RHUMBR_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
-      RHUMBR_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
-      RHUMBR_LXC_STORAGE: "local-lvm",
-      RHUMBR_LXC_BRIDGE: "vmbr0",
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_DEPLOY_KEY: "/keys/id",
+      RHUMB_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
+      RHUMB_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
+      RHUMB_LXC_STORAGE: "local-lvm",
+      RHUMB_LXC_BRIDGE: "vmbr0",
     });
     expect(cfg).toMatchObject({
       deployKeyPath: "/keys/id",

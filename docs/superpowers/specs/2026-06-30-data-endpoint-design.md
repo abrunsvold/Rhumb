@@ -1,7 +1,7 @@
-# RHUMBR Data Endpoint Design Spec (Plan 4 of 7)
+# Rhumb Data Endpoint Design Spec (Plan 4 of 7)
 
 **Date:** 2026-06-30
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.3).
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.3).
 **Depends on:** the dashboard host (Plan 2) and the client shell (Plan 3b).
 
 ---
@@ -14,7 +14,7 @@ This plan implements the full read + write + confirmation spine against **Postgr
 
 ## 2. Declared sources
 
-A config file lists the data sources the operator sanctions: path from `RHUMBR_DATA_SOURCES` (default `<workspace>/data-sources.json`).
+A config file lists the data sources the operator sanctions: path from `RHUMB_DATA_SOURCES` (default `<workspace>/data-sources.json`).
 
 ```json
 [
@@ -67,12 +67,12 @@ The pending queue is an in-memory `Map<pendingId, PendingWrite>`; resolved entri
 
 ## 6. Trust store (persisted)
 
-- File at `RHUMBR_DATA_TRUST` (default `<workspace>/data-trust.json`): a list of `{ source, surfaceId }` pairs the operator has trusted.
+- File at `RHUMB_DATA_TRUST` (default `<workspace>/data-trust.json`): a list of `{ source, surfaceId }` pairs the operator has trusted.
 - Loaded on startup; appended (and rewritten) when a resolve carries `trustSurface: true`. `isTrusted(source, surfaceId)` is a pure check, unit-tested; the file read/write is a thin helper.
 
 ## 7. Audit log
 
-- Append-only JSONL at `RHUMBR_DATA_AUDIT` (default `<workspace>/data-audit.jsonl`). One line per write decision:
+- Append-only JSONL at `RHUMB_DATA_AUDIT` (default `<workspace>/data-audit.jsonl`). One line per write decision:
   `{ ts, source, surfaceId, op, decision: "executed" | "denied" | "error", rowCount?, error? }`
   (`executed` on a successful write, `denied` when the operator declines, `error` when an approved write fails in the executor).
 - The append helper is a thin, testable wrapper (write to a temp path in tests). Reads/queries are **not** audited in v1 (writes and decisions are).
@@ -85,7 +85,7 @@ The pending queue is an in-memory `Map<pendingId, PendingWrite>`; resolved entri
 ## 9. Carry-in cleanups (from the Plan 3b review)
 
 - **`proxy.rs` SSE pump:** buffer bytes and decode incrementally (or `from_utf8_lossy` with a carry buffer) so a multibyte UTF-8 sequence split across `bytes_stream()` chunks doesn't drop a frame.
-- **`tauri.conf.json`:** rename the bundle `identifier` off the scaffold default `com.tauri.dev` (e.g. `com.rhumbr.client`).
+- **`tauri.conf.json`:** rename the bundle `identifier` off the scaffold default `com.tauri.dev` (e.g. `com.rhumb.client`).
 
 ## 10. Error handling
 
