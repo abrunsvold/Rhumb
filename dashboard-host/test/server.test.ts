@@ -105,4 +105,35 @@ describe("dashboard-host server", () => {
     expect(res.status).toBe(404);
     expect(res.text).not.toContain("TOP SECRET");
   });
+
+  it("injects the token shim and security headers into served surface HTML", async () => {
+    writeSurface("d1", "index.html", "<html><head></head><body>hi</body></html>");
+    const srv = createServer({
+      getSnapshot: () => ({ surfaces: [] }),
+      workspace,
+      subscribers: new Set(),
+      appOrigins: ["tauri://localhost"],
+    });
+    const res = await request(srv).get("/surfaces/d1/");
+    expect(res.status).toBe(200);
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["content-security-policy"]).toContain("connect-src 'self'");
+    expect(res.text).toContain("X-Rhumb-Surface-Token");
+    expect(res.text).toContain("hi"); // original body preserved
+  });
+
+  it("sets headers but does not inject the shim into non-HTML assets", async () => {
+    writeSurface("d2", "index.html", "<html></html>");
+    writeFileSync(join(workspace, "surfaces", "d2", "app.js"), "console.log(1)");
+    const srv = createServer({
+      getSnapshot: () => ({ surfaces: [] }),
+      workspace,
+      subscribers: new Set(),
+      appOrigins: ["tauri://localhost"],
+    });
+    const res = await request(srv).get("/surfaces/d2/app.js");
+    expect(res.status).toBe(200);
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.text).not.toContain("X-Rhumb-Surface-Token");
+  });
 });
