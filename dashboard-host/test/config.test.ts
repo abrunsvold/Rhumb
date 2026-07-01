@@ -3,13 +3,27 @@ import { loadConfig } from "../src/config.js";
 
 describe("loadConfig", () => {
   it("returns defaults from an empty env", () => {
-    expect(loadConfig({})).toEqual({ port: 8788, workspace: "./workspace" });
+    expect(loadConfig({})).toEqual({
+      port: 8788,
+      workspace: "./workspace",
+      dataSourcesPath: "./workspace/data-sources.json",
+      dataTrustPath: "./workspace/data-trust.json",
+      dataAuditPath: "./workspace/data-audit.jsonl",
+      servicesPath: "./workspace/services.json",
+    });
   });
 
   it("honors overrides", () => {
     expect(
       loadConfig({ RHUMBR_DASHBOARD_PORT: "9100", RHUMBR_WORKSPACE: "/srv/ws" }),
-    ).toEqual({ port: 9100, workspace: "/srv/ws" });
+    ).toEqual({
+      port: 9100,
+      workspace: "/srv/ws",
+      dataSourcesPath: "/srv/ws/data-sources.json",
+      dataTrustPath: "/srv/ws/data-trust.json",
+      dataAuditPath: "/srv/ws/data-audit.jsonl",
+      servicesPath: "/srv/ws/services.json",
+    });
   });
 
   it("throws when RHUMBR_DASHBOARD_PORT is not numeric", () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createServer } from "../src/server.js";
+import { createServer, pruneSubscriber } from "../src/server.js";
 import type { AgentEvent } from "../src/types.js";
 
 function fakeManager(script: AgentEvent[]) {
@@ -60,5 +60,23 @@ describe("agent-host server", () => {
     const frames = written.join("");
     expect(frames).toContain('"type":"session"');
     expect(frames).toContain('"type":"result"');
+  });
+
+  it("pruneSubscriber keeps the entry while other subscribers remain, deletes it when empty", () => {
+    const a = {} as import("express").Response;
+    const b = {} as import("express").Response;
+    const map = new Map<string, Set<import("express").Response>>();
+    map.set("t9", new Set([a, b]));
+
+    pruneSubscriber(map, "t9", a);
+    expect(map.get("t9")?.has(b)).toBe(true); // still present
+
+    pruneSubscriber(map, "t9", b);
+    expect(map.has("t9")).toBe(false); // key reaped when empty
+  });
+
+  it("pruneSubscriber is a no-op for an unknown id", () => {
+    const map = new Map<string, Set<import("express").Response>>();
+    expect(() => pruneSubscriber(map, "missing", {} as import("express").Response)).not.toThrow();
   });
 });

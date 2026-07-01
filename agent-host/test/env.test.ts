@@ -33,6 +33,30 @@ describe("sanitizedEnv", () => {
     expect(result.HOME).toBe("/home/user");
   });
 
+  it("strips infrastructure secrets (RHUMBR_* vars) from the child env", () => {
+    const input: NodeJS.ProcessEnv = {
+      CLAUDE_CODE_OAUTH_TOKEN: "tok",
+      RHUMBR_PROXMOX_TOKEN_SECRET: "super-secret",
+      RHUMBR_PROXMOX_TOKEN_ID: "rhumbr@pve!t1",
+      RHUMBR_PROXMOX_URL: "https://pve:8006",
+      RHUMBR_PROXMOX_NODE: "pve",
+      RHUMBR_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres",
+      RHUMBR_WORKSPACE: "/srv/ws",
+      PATH: "/usr/bin:/bin",
+    };
+    const result = sanitizedEnv(input);
+    // No RHUMBR_* var survives — the spawned agent cannot read infra credentials
+    // and shell out (ungated Bash) to bypass the operator-confirmation gate.
+    for (const key of Object.keys(result)) {
+      expect(key.startsWith("RHUMBR_")).toBe(false);
+    }
+    expect(result.RHUMBR_PROXMOX_TOKEN_SECRET).toBeUndefined();
+    expect(result.RHUMBR_PG_ADMIN).toBeUndefined();
+    // The subscription token and ordinary vars are preserved.
+    expect(result.CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
+    expect(result.PATH).toBe("/usr/bin:/bin");
+  });
+
   it("does not mutate the input object", () => {
     const input: NodeJS.ProcessEnv = {
       ANTHROPIC_API_KEY: "sk-ant-test",

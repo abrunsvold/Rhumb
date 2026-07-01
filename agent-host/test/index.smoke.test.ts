@@ -19,4 +19,16 @@ describe("buildApp wiring", () => {
     const posted = await request(app).post("/messages").send({ prompt: "hi" });
     expect(posted.status).toBe(202);
   });
+
+  it("does not mount /infra without proxmox+pg-admin config", async () => {
+    const app = buildApp({ config: { port: 0, workspace: "./workspace" } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const res = await request(app).get("/infra/pending");
+    expect(res.status).toBe(404);
+  });
+
+  it("boots without service config (service tools inert)", async () => {
+    const app = buildApp({ config: { port: 0, workspace: "./workspace" } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const res = await request(app).get("/healthz");
+    expect(res.status).toBe(200);
+  });
 });
