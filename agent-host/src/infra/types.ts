@@ -30,7 +30,8 @@ export interface DataSourceEntry {
 }
 
 export type GatedTool =
-  | "create_vm" | "start_vm" | "stop_vm" | "resize_vm" | "destroy_vm" | "provision_database";
+  | "create_vm" | "start_vm" | "stop_vm" | "resize_vm" | "destroy_vm" | "provision_database"
+  | "spawn_service" | "stop_service" | "start_service" | "destroy_service";
 
 export interface PendingAction {
   pendingId: string;

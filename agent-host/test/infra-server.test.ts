@@ -54,9 +54,18 @@ describe("makeCanUseTool", () => {
     expect(JSON.parse(readFileSync(auditPath, "utf8").trim()).decision).toBe("error");
   });
 
-  it("GATED_TOOLS lists the six destructive/provisioning tools", () => {
+  it("GATED_TOOLS includes VM and service destructive/provisioning tools", () => {
     expect([...GATED_TOOLS].sort()).toEqual(
-      ["create_vm", "destroy_vm", "provision_database", "resize_vm", "start_vm", "stop_vm"],
+      ["create_vm", "destroy_service", "destroy_vm", "provision_database", "resize_vm", "spawn_service", "start_service", "start_vm", "stop_service", "stop_vm"].sort(),
     );
+  });
+
+  it("gates spawn_service through the pending queue", async () => {
+    const pending = new PendingActions({ now: () => "T", id: () => "a1" });
+    const canUse = makeCanUseTool({ pending, auditPath: join(dir, "a.jsonl"), now: () => "T" });
+    const promise = canUse("mcp__infra__spawn_service", { id: "sales" }, {} as never);
+    expect(pending.list().map((p) => p.tool)).toEqual(["spawn_service"]);
+    pending.resolve("a1", "approve");
+    expect((await promise).behavior).toBe("allow");
   });
 });

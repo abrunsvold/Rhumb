@@ -4,11 +4,15 @@ import { appendInfraAudit } from "./audit.js";
 import { provisionDatabase } from "./provision.js";
 import { PendingActions } from "./pending.js";
 import type { ProxmoxClient, AdminExecutor, GatedTool } from "./types.js";
+import type { ServiceOps } from "../services/ops.js";
 
 export const GATED_TOOLS: readonly GatedTool[] = [
   "create_vm", "start_vm", "stop_vm", "resize_vm", "destroy_vm", "provision_database",
+  "spawn_service", "stop_service", "start_service", "destroy_service",
 ];
-export const READ_TOOL_NAMES: readonly string[] = ["mcp__infra__list_vms", "mcp__infra__vm_status"];
+export const READ_TOOL_NAMES: readonly string[] = [
+  "mcp__infra__list_vms", "mcp__infra__vm_status", "mcp__infra__list_services", "mcp__infra__service_status",
+];
 
 type PermissionResult = { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string };
 type CanUseTool = (toolName: string, input: Record<string, unknown>, opts: unknown) => Promise<PermissionResult>;
@@ -44,6 +48,7 @@ export interface InfraDeps {
   now: () => string;
   password: () => string;
   adminConnectionString?: string;
+  serviceOps?: ServiceOps;
 }
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
@@ -83,6 +88,28 @@ export function createInfraServer(deps: InfraDeps) {
           );
           return ok(`provisioned database "${entry.id}" and registered it as a data source`);
         } catch (e) { return fail(String(e)); }
+      }),
+      tool("list_services", "List spawned services and their status", {}, async () => {
+        try { return ok(JSON.stringify(deps.serviceOps ? deps.serviceOps.list() : [])); } catch (e) { return fail(String(e)); }
+      }),
+      tool("service_status", "Get one service's status", { id: z.string() }, async (a) => {
+        try { return ok(JSON.stringify(deps.serviceOps?.status(a.id) ?? null)); } catch (e) { return fail(String(e)); }
+      }),
+      tool("spawn_service", "Provision an LXC, deploy the app from <workspace>/services/<id>, and register it", { id: z.string() }, async (a) => {
+        try {
+          if (!deps.serviceOps) return fail("services are not configured");
+          const entry = await deps.serviceOps.spawn(a.id);
+          return ok(`spawned service "${entry.id}" at ${entry.basePath}`);
+        } catch (e) { return fail(String(e)); }
+      }),
+      tool("stop_service", "Stop a service's container", { id: z.string() }, async (a) => {
+        try { await deps.serviceOps?.stop(a.id); return ok(`stopped ${a.id}`); } catch (e) { return fail(String(e)); }
+      }),
+      tool("start_service", "Start a service's container", { id: z.string() }, async (a) => {
+        try { await deps.serviceOps?.start(a.id); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
+      }),
+      tool("destroy_service", "Stop, destroy, and deregister a service", { id: z.string() }, async (a) => {
+        try { await deps.serviceOps?.destroy(a.id); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
     ],
   });
