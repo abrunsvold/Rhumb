@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadDataSources, findSource } from "../src/data/sources.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-ds-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-ds-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const valid = [

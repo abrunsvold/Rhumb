@@ -32,7 +32,7 @@ function app() {
   return a;
 }
 
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-dr-")); calls = []; });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-dr-")); calls = []; });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("data router", () => {

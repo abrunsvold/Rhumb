@@ -1,6 +1,6 @@
-# RHUMBR Dashboard Host
+# Rhumb Dashboard Host
 
-Watches the RHUMBR workspace and serves the `file` surfaces Claude Code builds at
+Watches the Rhumb workspace and serves the `file` surfaces Claude Code builds at
 stable URLs over your Tailscale network, plus the registry the desktop client reads.
 
 > **Security.** This host is **unauthenticated** — it serves whatever is under
@@ -13,7 +13,7 @@ stable URLs over your Tailscale network, plus the registry the desktop client re
     npm run build
     npm start
 
-Environment variables: `RHUMBR_DASHBOARD_PORT` (default 8788), `RHUMBR_WORKSPACE`
+Environment variables: `RHUMB_DASHBOARD_PORT` (default 8788), `RHUMB_WORKSPACE`
 (default `./workspace`).
 
 ## Surface contract

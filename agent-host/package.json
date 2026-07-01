@@ -1,7 +1,13 @@
 {
-  "name": "rhumbr-agent-host",
+  "name": "rhumb-agent-host",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abrunsvold/Rhumb.git",
+    "directory": "agent-host"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",

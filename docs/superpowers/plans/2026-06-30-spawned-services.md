@@ -1,4 +1,4 @@
-# RHUMBR Spawned Services Implementation Plan (Plan 6 of 7)
+# Rhumb Spawned Services Implementation Plan (Plan 6 of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -14,10 +14,10 @@
 - **Reuse Plan 5 gating unchanged:** gated service tools are `mcp__infra__<spawn_service|stop_service|start_service|destroy_service>`; read tools are `mcp__infra__<list_services|service_status>`. Gated tools are omitted from `allowedTools` → routed through the existing `makeCanUseTool` (which gates any name in `GATED_TOOL_NAMES`); read tools are added to `allowedTools`. No change to `makeCanUseTool` logic — only `GATED_TOOLS`/`READ_TOOL_NAMES` grow.
 - **Seams:** `LxcClient` (real PVE LXC API) and `SshExec` (real `ssh`/`scp`) are the only code touching Proxmox/containers; everything else depends on the interfaces and is unit-tested with fakes. Real impls are build-verified + live-verified.
 - **Container = blast-radius boundary.** No raw host processes. Every gated/destructive service op requires operator confirmation + an infra audit line (reuse Plan 5).
-- **Credentials host-only:** the deploy SSH **private key** path is `RHUMBR_DEPLOY_KEY` (stripped from the spawned agent subprocess env by the Plan-5 `RHUMBR_*` strip); the container gets only the public key.
+- **Credentials host-only:** the deploy SSH **private key** path is `RHUMB_DEPLOY_KEY` (stripped from the spawned agent subprocess env by the Plan-5 `RHUMB_*` strip); the container gets only the public key.
 - **Node ≥ 20, TS strict, ES modules; agent-host/dashboard-host imports use `.js`.**
 - **PVE auth/format identical to Plan 5:** base `<url>/api2/json`, header `PVEAPIToken=<tokenId>=<tokenSecret>`, POST bodies form-urlencoded with explicit `String()` coercion, `Content-Type` only when a body is present, unwrap `{ data }`. `VM.*` privileges cover LXC — the Plan-5 token already authorizes containers.
-- **Reverse proxy forwards the remainder path to the container root:** `/services/:id/<rest>` → `http://<host>:<port>/<rest>`; the app is told its mount point via `RHUMBR_SERVICE_BASE=/services/<id>` so it emits correct asset URLs.
+- **Reverse proxy forwards the remainder path to the container root:** `/services/:id/<rest>` → `http://<host>:<port>/<rest>`; the app is told its mount point via `RHUMB_SERVICE_BASE=/services/<id>` so it emits correct asset URLs.
 
 ---
 
@@ -37,8 +37,8 @@
 
 ```typescript
 export interface ServiceConfig {
-  deployKeyPath: string;            // RHUMBR_DEPLOY_KEY (private key, host-only)
-  deployPublicKey: string;          // contents of RHUMBR_DEPLOY_PUBKEY or <deployKeyPath>.pub
+  deployKeyPath: string;            // RHUMB_DEPLOY_KEY (private key, host-only)
+  deployPublicKey: string;          // contents of RHUMB_DEPLOY_PUBKEY or <deployKeyPath>.pub
   ostemplate: string;               // e.g. "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
   storage: string;                  // e.g. "local-lvm"
   bridge: string;                   // e.g. "vmbr0"
@@ -123,17 +123,17 @@ describe("validateManifest", () => {
 
 describe("loadServiceConfig", () => {
   it("returns undefined when required fields are absent", () => {
-    expect(loadServiceConfig({ RHUMBR_WORKSPACE: "/srv/ws" })).toBeUndefined();
+    expect(loadServiceConfig({ RHUMB_WORKSPACE: "/srv/ws" })).toBeUndefined();
   });
 
   it("reads a full config", () => {
     const cfg = loadServiceConfig({
-      RHUMBR_WORKSPACE: "/srv/ws",
-      RHUMBR_DEPLOY_KEY: "/keys/id",
-      RHUMBR_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
-      RHUMBR_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
-      RHUMBR_LXC_STORAGE: "local-lvm",
-      RHUMBR_LXC_BRIDGE: "vmbr0",
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_DEPLOY_KEY: "/keys/id",
+      RHUMB_DEPLOY_PUBKEY: "ssh-ed25519 AAAA...",
+      RHUMB_LXC_TEMPLATE: "local:vztmpl/ubuntu.tar.zst",
+      RHUMB_LXC_STORAGE: "local-lvm",
+      RHUMB_LXC_BRIDGE: "vmbr0",
     });
     expect(cfg).toMatchObject({
       deployKeyPath: "/keys/id",
@@ -187,25 +187,25 @@ import { readFileSync } from "node:fs";
 import type { ServiceConfig } from "./types.js";
 
 export function loadServiceConfig(env: NodeJS.ProcessEnv): ServiceConfig | undefined {
-  const deployKeyPath = env.RHUMBR_DEPLOY_KEY?.trim();
-  const ostemplate = env.RHUMBR_LXC_TEMPLATE?.trim();
-  const storage = env.RHUMBR_LXC_STORAGE?.trim();
-  const bridge = env.RHUMBR_LXC_BRIDGE?.trim();
+  const deployKeyPath = env.RHUMB_DEPLOY_KEY?.trim();
+  const ostemplate = env.RHUMB_LXC_TEMPLATE?.trim();
+  const storage = env.RHUMB_LXC_STORAGE?.trim();
+  const bridge = env.RHUMB_LXC_BRIDGE?.trim();
   if (!deployKeyPath || !ostemplate || !storage || !bridge) return undefined;
 
-  let deployPublicKey = env.RHUMBR_DEPLOY_PUBKEY?.trim() ?? "";
+  let deployPublicKey = env.RHUMB_DEPLOY_PUBKEY?.trim() ?? "";
   if (!deployPublicKey) {
     try { deployPublicKey = readFileSync(`${deployKeyPath}.pub`, "utf8").trim(); } catch { deployPublicKey = ""; }
   }
-  const workspace = env.RHUMBR_WORKSPACE?.trim() || "./workspace";
+  const workspace = env.RHUMB_WORKSPACE?.trim() || "./workspace";
   return {
     deployKeyPath,
     deployPublicKey,
     ostemplate,
     storage,
     bridge,
-    rootfsGb: Number.parseInt(env.RHUMBR_LXC_ROOTFS_GB ?? "", 10) || 8,
-    servicesPath: env.RHUMBR_SERVICES?.trim() || `${workspace}/services.json`,
+    rootfsGb: Number.parseInt(env.RHUMB_LXC_ROOTFS_GB ?? "", 10) || 8,
+    servicesPath: env.RHUMB_SERVICES?.trim() || `${workspace}/services.json`,
     workspace,
   };
 }
@@ -233,7 +233,7 @@ git commit -m "feat(agent-host): service config, types, and manifest validation"
 
 **Interfaces:**
 - Consumes: `SshExec`, `SshTarget`, `ServiceManifest`, `ServiceDeployer` (Task 1).
-- Produces: `createDeployer(exec: SshExec): ServiceDeployer` — pushes `localDir` to `/opt/rhumbr/<id>` and installs+enables a `Restart=always` systemd unit `rhumbr-<id>.service` with `PORT` and `RHUMBR_SERVICE_BASE` env, running `manifest.start` in that dir.
+- Produces: `createDeployer(exec: SshExec): ServiceDeployer` — pushes `localDir` to `/opt/rhumb/<id>` and installs+enables a `Restart=always` systemd unit `rhumb-<id>.service` with `PORT` and `RHUMB_SERVICE_BASE` env, running `manifest.start` in that dir.
 
 The deploy *logic* (push target, unit contents, enable command, injected env) is unit-tested with a fake `SshExec`. The real `SshExec` (child_process ssh/scp) is built in Task 4 and build-verified.
 
@@ -258,19 +258,19 @@ const target: SshTarget = { host: "10.0.0.5", user: "root", privateKeyPath: "/k"
 const manifest = { id: "sales", type: "service" as const, name: "Sales", start: "npm ci && npm start", port: 3000 };
 
 describe("createDeployer", () => {
-  it("pushes the code to /opt/rhumbr/<id> then installs+enables a systemd unit", async () => {
+  it("pushes the code to /opt/rhumb/<id> then installs+enables a systemd unit", async () => {
     const { exec, runs, pushes } = fakeExec();
     await createDeployer(exec).deploy(target, "/ws/services/sales", manifest);
 
-    expect(pushes).toEqual([{ localDir: "/ws/services/sales", remoteDir: "/opt/rhumbr/sales" }]);
+    expect(pushes).toEqual([{ localDir: "/ws/services/sales", remoteDir: "/opt/rhumb/sales" }]);
     const script = runs.join("\n");
-    expect(script).toContain("/etc/systemd/system/rhumbr-sales.service");
-    expect(script).toContain("WorkingDirectory=/opt/rhumbr/sales");
+    expect(script).toContain("/etc/systemd/system/rhumb-sales.service");
+    expect(script).toContain("WorkingDirectory=/opt/rhumb/sales");
     expect(script).toContain("Environment=PORT=3000");
-    expect(script).toContain("Environment=RHUMBR_SERVICE_BASE=/services/sales");
+    expect(script).toContain("Environment=RHUMB_SERVICE_BASE=/services/sales");
     expect(script).toContain("Restart=always");
     expect(script).toContain("npm ci && npm start");
-    expect(script).toContain("systemctl enable --now rhumbr-sales.service");
+    expect(script).toContain("systemctl enable --now rhumb-sales.service");
     expect(script).toContain("daemon-reload");
   });
 });
@@ -289,21 +289,21 @@ import type { SshExec, ServiceDeployer, ServiceManifest, SshTarget } from "./typ
 export function createDeployer(exec: SshExec): ServiceDeployer {
   return {
     async deploy(target: SshTarget, localDir: string, manifest: ServiceManifest): Promise<void> {
-      const remoteDir = `/opt/rhumbr/${manifest.id}`;
-      const unitPath = `/etc/systemd/system/rhumbr-${manifest.id}.service`;
+      const remoteDir = `/opt/rhumb/${manifest.id}`;
+      const unitPath = `/etc/systemd/system/rhumb-${manifest.id}.service`;
       await exec.run(target, `mkdir -p ${remoteDir}`);
       await exec.pushDir(target, localDir, remoteDir);
       // Heredoc the unit file. manifest.start runs via bash -lc inside the app dir.
       const unit = [
         "[Unit]",
-        `Description=RHUMBR service ${manifest.id}`,
+        `Description=Rhumb service ${manifest.id}`,
         "After=network-online.target",
         "",
         "[Service]",
         "Type=simple",
         `WorkingDirectory=${remoteDir}`,
         `Environment=PORT=${manifest.port}`,
-        `Environment=RHUMBR_SERVICE_BASE=/services/${manifest.id}`,
+        `Environment=RHUMB_SERVICE_BASE=/services/${manifest.id}`,
         `ExecStart=/bin/bash -lc ${JSON.stringify(manifest.start)}`,
         "Restart=always",
         "RestartSec=2",
@@ -312,9 +312,9 @@ export function createDeployer(exec: SshExec): ServiceDeployer {
         "WantedBy=multi-user.target",
         "",
       ].join("\n");
-      await exec.run(target, `cat > ${unitPath} <<'RHUMBR_UNIT_EOF'\n${unit}RHUMBR_UNIT_EOF`);
+      await exec.run(target, `cat > ${unitPath} <<'RHUMB_UNIT_EOF'\n${unit}RHUMB_UNIT_EOF`);
       await exec.run(target, "systemctl daemon-reload");
-      await exec.run(target, `systemctl enable --now rhumbr-${manifest.id}.service`);
+      await exec.run(target, `systemctl enable --now rhumb-${manifest.id}.service`);
     },
   };
 }
@@ -357,7 +357,7 @@ import { loadServices, appendService, removeService } from "../src/services/regi
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest } from "../src/services/types.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-svc-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-svc-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 function cfg(): ServiceConfig {
@@ -499,7 +499,7 @@ export function createServiceOps(deps: {
     async spawn(id: string): Promise<ServiceEntry> {
       const manifest = deps.readManifest(id);
       const spec = {
-        name: `rhumbr-${manifest.id}`,
+        name: `rhumb-${manifest.id}`,
         cores: manifest.resources?.cores ?? 1,
         memory: manifest.resources?.memory ?? 512,
         ostemplate: config.ostemplate,
@@ -860,7 +860,7 @@ import { join } from "node:path";
 import { loadServices, serviceToRegistryEntry } from "../src/services/registry.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-dsvc-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-dsvc-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("dashboard service registry", () => {
@@ -941,7 +941,7 @@ export function serviceToRegistryEntry(s: ServiceEntry) {
 ```typescript
 import { loadServices, serviceToRegistryEntry } from "./services/registry.js";
 
-// servicesPath default: <workspace>/services.json (add to config.ts like dataSourcesPath — RHUMBR_SERVICES)
+// servicesPath default: <workspace>/services.json (add to config.ts like dataSourcesPath — RHUMB_SERVICES)
   const servicesPath = deps.config.servicesPath;
 
   const app = createServer({
@@ -953,7 +953,7 @@ import { loadServices, serviceToRegistryEntry } from "./services/registry.js";
   });
 ```
 
-Add `servicesPath: env.RHUMBR_SERVICES?.trim() || \`${workspace}/services.json\`` to `dashboard-host/src/config.ts`'s `Config`/`loadConfig` (mirror `dataSourcesPath`).
+Add `servicesPath: env.RHUMB_SERVICES?.trim() || \`${workspace}/services.json\`` to `dashboard-host/src/config.ts`'s `Config`/`loadConfig` (mirror `dataSourcesPath`).
 
 - [ ] **Step 6: Extend the smoke test** in `dashboard-host/test/index.smoke.test.ts` — a service added to `services.json` after startup appears in the registry:
 
@@ -1233,7 +1233,7 @@ git commit -m "feat(dashboard-host): liveness probe updates service status"
 
 ## Live verification (driver-run, against your Proxmox)
 
-Set on the agent host (in addition to the Plan-5 infra vars): `RHUMBR_DEPLOY_KEY` (path to a deploy private key; put its `.pub` in `RHUMBR_DEPLOY_PUBKEY` or `<key>.pub`), `RHUMBR_LXC_TEMPLATE`, `RHUMBR_LXC_STORAGE`, `RHUMBR_LXC_BRIDGE`. Ensure the same `RHUMBR_WORKSPACE`/`RHUMBR_SERVICES` on both hosts.
+Set on the agent host (in addition to the Plan-5 infra vars): `RHUMB_DEPLOY_KEY` (path to a deploy private key; put its `.pub` in `RHUMB_DEPLOY_PUBKEY` or `<key>.pub`), `RHUMB_LXC_TEMPLATE`, `RHUMB_LXC_STORAGE`, `RHUMB_LXC_BRIDGE`. Ensure the same `RHUMB_WORKSPACE`/`RHUMB_SERVICES` on both hosts.
 1. Ask the agent to "write a tiny HTTP service that returns 'hello' and spawn it as `demo-svc`." → the agent writes `<workspace>/services/demo-svc/{app,service.json}` and calls `spawn_service` → a confirmation pops → approve → an LXC is created on your PVE, the app is scp'd in and started under systemd, and `/services/demo-svc/` proxies to it (open it in the client).
 2. Kill the app process inside the container → systemd restarts it (crash-restart); the liveness probe keeps status `healthy`.
 3. Ask to `destroy_service demo-svc` → confirm → the LXC is destroyed and the registry entry is gone. A **denied** destroy leaves it running.

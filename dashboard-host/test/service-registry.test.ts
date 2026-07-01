@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadServices, serviceToRegistryEntry } from "../src/services/registry.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-dsvc-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-dsvc-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("dashboard service registry", () => {

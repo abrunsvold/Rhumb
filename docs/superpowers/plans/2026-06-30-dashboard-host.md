@@ -1,4 +1,4 @@
-# Dashboard Host Implementation Plan (RHUMBR — Plan 2 of 7)
+# Dashboard Host Implementation Plan (Rhumb — Plan 2 of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -12,7 +12,7 @@
 
 - **Runtime:** Node ≥ 20, TypeScript `strict: true`, ES modules (`"type": "module"`); local imports use the `.js` extension.
 - **No auth token:** this host does NOT call Claude and has no `CLAUDE_CODE_OAUTH_TOKEN`. It is unauthenticated and is only ever exposed on the tailnet — the README must say so.
-- **Workspace:** surfaces live under `<RHUMBR_WORKSPACE>/surfaces/` (default workspace `./workspace`). Port from `RHUMBR_DASHBOARD_PORT` (default 8788 — distinct from the agent host's 8787).
+- **Workspace:** surfaces live under `<RHUMB_WORKSPACE>/surfaces/` (default workspace `./workspace`). Port from `RHUMB_DASHBOARD_PORT` (default 8788 — distinct from the agent host's 8787).
 - **Surface contract:** a surface is a folder `<workspace>/surfaces/<id>/` containing `surface.json` (`{ id, title, kind:"file", entry, created, updated }`) plus static artifacts. `id` MUST equal the folder name and match `^[A-Za-z0-9._-]+$`. An invalid/partial surface is skipped (logged), never fatal.
 - **Registry entry shape (client-facing):** `{ id, title, url, kind, created, updated }` where `url` is `/surfaces/<id>/`. `entry` is internal (used for serving) and is NOT in the client-facing entry.
 - **Security:** the static handler must never serve a path outside the requested surface's folder (path-traversal → 404).
@@ -35,7 +35,7 @@
 
 ```json
 {
-  "name": "rhumbr-dashboard-host",
+  "name": "rhumb-dashboard-host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -135,13 +135,13 @@ describe("loadConfig", () => {
 
   it("honors overrides", () => {
     expect(
-      loadConfig({ RHUMBR_DASHBOARD_PORT: "9100", RHUMBR_WORKSPACE: "/srv/ws" }),
+      loadConfig({ RHUMB_DASHBOARD_PORT: "9100", RHUMB_WORKSPACE: "/srv/ws" }),
     ).toEqual({ port: 9100, workspace: "/srv/ws" });
   });
 
-  it("throws when RHUMBR_DASHBOARD_PORT is not numeric", () => {
-    expect(() => loadConfig({ RHUMBR_DASHBOARD_PORT: "abc" })).toThrow(
-      /RHUMBR_DASHBOARD_PORT/,
+  it("throws when RHUMB_DASHBOARD_PORT is not numeric", () => {
+    expect(() => loadConfig({ RHUMB_DASHBOARD_PORT: "abc" })).toThrow(
+      /RHUMB_DASHBOARD_PORT/,
     );
   });
 });
@@ -162,18 +162,18 @@ export interface Config {
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   let port = 8788;
-  if (env.RHUMBR_DASHBOARD_PORT) {
-    const parsed = Number.parseInt(env.RHUMBR_DASHBOARD_PORT, 10);
+  if (env.RHUMB_DASHBOARD_PORT) {
+    const parsed = Number.parseInt(env.RHUMB_DASHBOARD_PORT, 10);
     if (Number.isNaN(parsed)) {
       throw new Error(
-        `RHUMBR_DASHBOARD_PORT must be a number, got "${env.RHUMBR_DASHBOARD_PORT}"`,
+        `RHUMB_DASHBOARD_PORT must be a number, got "${env.RHUMB_DASHBOARD_PORT}"`,
       );
     }
     port = parsed;
   }
   return {
     port,
-    workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
+    workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
   };
 }
 ```
@@ -302,7 +302,7 @@ const valid = (id: string) => ({
 });
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "rhumbr-surfaces-"));
+  root = mkdtempSync(join(tmpdir(), "rhumb-surfaces-"));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -507,7 +507,7 @@ function writeSurface(id: string): void {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "rhumbr-watch-"));
+  root = mkdtempSync(join(tmpdir(), "rhumb-watch-"));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -623,7 +623,7 @@ const snapshot: RegistrySnapshot = {
 };
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), "rhumbr-srv-"));
+  workspace = mkdtempSync(join(tmpdir(), "rhumb-srv-"));
   // a secret file OUTSIDE the surface, to prove traversal is blocked
   writeFileSync(join(workspace, "secret.txt"), "TOP SECRET");
 });
@@ -817,7 +817,7 @@ import type { WatchFn } from "../src/watcher.js";
 let workspace: string;
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), "rhumbr-idx-"));
+  workspace = mkdtempSync(join(tmpdir(), "rhumb-idx-"));
   const dir = join(workspace, "surfaces", "d1");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -901,7 +901,7 @@ export function main(): void {
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
   app.listen(config.port, () => {
-    console.log(`rhumbr dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
+    console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
   });
 }
 
@@ -931,9 +931,9 @@ workspace/
 - [ ] **Step 7: Create `dashboard-host/README.md`**
 
 ```markdown
-# RHUMBR Dashboard Host
+# Rhumb Dashboard Host
 
-Watches the RHUMBR workspace and serves the `file` surfaces Claude Code builds at
+Watches the Rhumb workspace and serves the `file` surfaces Claude Code builds at
 stable URLs over your Tailscale network, plus the registry the desktop client reads.
 
 > **Security.** This host is **unauthenticated** — it serves whatever is under
@@ -946,7 +946,7 @@ stable URLs over your Tailscale network, plus the registry the desktop client re
     npm run build
     npm start
 
-Environment variables: `RHUMBR_DASHBOARD_PORT` (default 8788), `RHUMBR_WORKSPACE`
+Environment variables: `RHUMB_DASHBOARD_PORT` (default 8788), `RHUMB_WORKSPACE`
 (default `./workspace`).
 
 ## Surface contract

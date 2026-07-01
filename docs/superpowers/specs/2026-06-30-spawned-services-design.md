@@ -1,7 +1,7 @@
-# RHUMBR Spawned Services Design Spec (Plan 6 of 7)
+# Rhumb Spawned Services Design Spec (Plan 6 of 7)
 
 **Date:** 2026-06-30
-**Status:** Approved design (sub-spec of the RHUMBR master spec §3.2 service router + §3.4 spawned services).
+**Status:** Approved design (sub-spec of the Rhumb master spec §3.2 service router + §3.4 spawned services).
 **Depends on:** the agent host + infra capability (Plans 1, 5), the dashboard host + registry (Plan 2), the data endpoint (Plan 4), and the client confirmation surface (Plans 4–5).
 
 Grounded against the master spec: a `service` surface is "a dashboard whose runtime is a Proxmox container the agent provisioned," registered through the dashboard host's reverse proxy so a running app looks identical to a served file from the client's side.
@@ -35,13 +35,13 @@ interface LxcClient {
 }
 ```
 
-`LxcSpec` includes: `ostemplate` (a stock Ubuntu template on the operator's storage), `storage`, `cores`, `memory`, `net` (dhcp on the operator's bridge), `sshPublicKeys` (RHUMBR's **deploy public key**), `onboot: 1`, `unprivileged: 1`, optional `features` (e.g. `nesting`). The real implementation calls the PVE LXC REST API; the tool handlers depend only on the interface, so they are unit-tested with a fake. The real path is **build-verified + live-verified**.
+`LxcSpec` includes: `ostemplate` (a stock Ubuntu template on the operator's storage), `storage`, `cores`, `memory`, `net` (dhcp on the operator's bridge), `sshPublicKeys` (Rhumb's **deploy public key**), `onboot: 1`, `unprivileged: 1`, optional `features` (e.g. `nesting`). The real implementation calls the PVE LXC REST API; the tool handlers depend only on the interface, so they are unit-tested with a fake. The real path is **build-verified + live-verified**.
 
 Proxmox's `VM.*` privileges apply to **both** QEMU VMs and LXC containers, but the **Plan-6 live run found the Plan-5 token role needed two more privileges** to create a *networked* LXC (Plan 5's VM-create test used no network config, so it never hit them): **`VM.Config.Network`** (to attach `net0`) and, on **PVE 9's SDN layer, `SDN.Use`** on the bridge's zone (to use `vmbr0`). So the operator's scoped role must include, beyond the Plan-5 set: **`VM.Config.Network`, `VM.Config.Cloudinit`, `SDN.Use`** (plus the existing `VM.Allocate`, `VM.Config.CPU/Memory/Disk/Options`, `VM.PowerMgmt`, `VM.Audit`, `VM.Console`, `Datastore.AllocateSpace/Audit`, `Sys.Audit`). Called out in config docs.
 
 ### 2.2 SSH deployer (seam)
 
-RHUMBR holds only the scoped **API token** — the PVE REST API exposes no container exec/file-push — so code is deployed **over SSH** to the container's own IP:
+Rhumb holds only the scoped **API token** — the PVE REST API exposes no container exec/file-push — so code is deployed **over SSH** to the container's own IP:
 
 ```ts
 interface ServiceDeployer {
@@ -49,9 +49,9 @@ interface ServiceDeployer {
 }
 ```
 
-The real implementation: `scp` the agent's code bundle into the container, write a **`Restart=always` systemd unit** that runs the manifest `start` command in the app's working directory with injected env — `PORT=<manifest.port>` and `RHUMBR_SERVICE_BASE=/services/<id>` — then `systemctl enable --now`. It is built on an **injectable ssh-exec seam** (a thin `run(cmd)` / `push(localPath, remotePath)` interface) so the deployer's logic — the exact scp target, the systemd unit contents, the enable command, the injected env — is unit-tested with a fake; the real SSH path is live-verified.
+The real implementation: `scp` the agent's code bundle into the container, write a **`Restart=always` systemd unit** that runs the manifest `start` command in the app's working directory with injected env — `PORT=<manifest.port>` and `RHUMB_SERVICE_BASE=/services/<id>` — then `systemctl enable --now`. It is built on an **injectable ssh-exec seam** (a thin `run(cmd)` / `push(localPath, remotePath)` interface) so the deployer's logic — the exact scp target, the systemd unit contents, the enable command, the injected env — is unit-tested with a fake; the real SSH path is live-verified.
 
-The LXC is created with RHUMBR's deploy **public** key; the **private key stays on the agent host** (host-only, stripped from the spawned agent subprocess env like other secrets), path from config.
+The LXC is created with Rhumb's deploy **public** key; the **private key stays on the agent host** (host-only, stripped from the spawned agent subprocess env like other secrets), path from config.
 
 ### 2.3 Service manifest
 
@@ -94,7 +94,7 @@ Gated tools are omitted from `allowedTools` → routed through Plan 5's `canUseT
 
 ## 3. Health / restart policy (v1)
 
-Crash-restart and reboot-restore come from **systemd inside the container** (`Restart=always`) plus the LXC's **`onboot=1`** — not bespoke RHUMBR code. RHUMBR's contribution is the **liveness probe** that reflects real reachability into the registry status, and `destroy_service` which reaps everything. No RHUMBR-side active-restart loop or dead-service GC sweep in v1 (deferred).
+Crash-restart and reboot-restore come from **systemd inside the container** (`Restart=always`) plus the LXC's **`onboot=1`** — not bespoke Rhumb code. Rhumb's contribution is the **liveness probe** that reflects real reachability into the registry status, and `destroy_service` which reaps everything. No Rhumb-side active-restart loop or dead-service GC sweep in v1 (deferred).
 
 ## 4. Data flow (spawn → render)
 
@@ -108,7 +108,7 @@ Crash-restart and reboot-restore come from **systemd inside the container** (`Re
 
 - **Same scoped PVE token**, now also authorized for **LXC** ops (least-privilege CT lifecycle + datastore, not root). Blast radius bounded by the token.
 - **Container = boundary.** Arbitrary code only inside the LXC; **no raw host processes**.
-- **Deploy SSH private key is host-only** (config path), stripped from the spawned agent subprocess env like every other `RHUMBR_*` secret (Plan-5 fix); the container gets only the public key.
+- **Deploy SSH private key is host-only** (config path), stripped from the spawned agent subprocess env like every other `RHUMB_*` secret (Plan-5 fix); the container gets only the public key.
 - Reverse proxy is the single choke point; containers aren't exposed directly to the client.
 - Every gated/destructive service op requires **interactive operator confirmation** + an **audit** line.
 - PVE calls inherit the Plan-5 self-signed-TLS handling (the pending CA-cert/scoped-insecure follow-up applies here too).
@@ -131,7 +131,7 @@ Crash-restart and reboot-restore come from **systemd inside the container** (`Re
 ## 8. Scope / out of scope
 
 - **In:** the LXC client; the SSH deployer; the service manifest + validation; the spawn orchestrator + the four gated tools + two read tools (reusing Plan 5 gating/audit/pending/confirmation); the dashboard-host reverse proxy + service registry (re-read per request) + liveness probe; registry integration so service surfaces render like file surfaces; config for the deploy key + LXC template/storage/bridge.
-- **Out (later plans / deferred):** fast/idempotent spinup + prebaked per-stack templates; multi-node placement; Docker/build-based packaging; autoscaling; per-service resource dashboards / log-streaming UI; RHUMBR-side active-restart orchestration + dead-service GC; the ontology (Plan 7 records what this plan spawns).
+- **Out (later plans / deferred):** fast/idempotent spinup + prebaked per-stack templates; multi-node placement; Docker/build-based packaging; autoscaling; per-service resource dashboards / log-streaming UI; Rhumb-side active-restart orchestration + dead-service GC; the ontology (Plan 7 records what this plan spawns).
 
 ## 9. Implementation phases (one plan)
 

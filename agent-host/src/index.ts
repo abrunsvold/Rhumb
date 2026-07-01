@@ -87,7 +87,7 @@ export function main(): void {
   mkdirSync(config.workspace, { recursive: true });
   const app = buildApp({ config, query: realQuery });
   app.listen(config.port, () => {
-    console.log(`rhumbr agent-host listening on :${config.port} (model ${config.model})`);
+    console.log(`rhumb agent-host listening on :${config.port} (model ${config.model})`);
   });
 }
 

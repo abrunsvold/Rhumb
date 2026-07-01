@@ -1,4 +1,4 @@
-# Agent Host Implementation Plan (RHUMBR — Plan 1 of 7)
+# Agent Host Implementation Plan (Rhumb — Plan 1 of 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -12,8 +12,8 @@
 
 - **Runtime:** Node ≥ 20, TypeScript `strict: true`, ES modules (`"type": "module"`).
 - **Auth:** the process authenticates Claude with the operator's subscription via the `CLAUDE_CODE_OAUTH_TOKEN` environment variable. **Never** read or require `ANTHROPIC_API_KEY`. The host must refuse to start if `CLAUDE_CODE_OAUTH_TOKEN` is unset.
-- **Model:** default `claude-opus-4-8`; overridable via the `RHUMBR_MODEL` env var.
-- **Workspace:** all agent work happens in the directory named by `RHUMBR_WORKSPACE` (default `./workspace`); this is the file-as-contract folder later components watch.
+- **Model:** default `claude-opus-4-8`; overridable via the `RHUMB_MODEL` env var.
+- **Workspace:** all agent work happens in the directory named by `RHUMB_WORKSPACE` (default `./workspace`); this is the file-as-contract folder later components watch.
 - **Wire contract:** every event sent to clients is one of the `AgentEvent` union members defined in Task 2. Do not invent ad-hoc shapes elsewhere.
 - **Compliance:** this is a self-hosted personal tool. Do not add any feature that brokers, proxies, or "offers" Claude login to a third party (see the spec §6 compliance note).
 - **Compatibility note:** exact nesting of *assistant-message content* in the SDK is not relied on in v1 — only `system`/`init` (carries `session_id`), `result` messages, and a `raw` passthrough are normalized. Richer per-tool rendering is a later plan (the Tauri client).
@@ -38,7 +38,7 @@
 
 ```json
 {
-  "name": "rhumbr-agent-host",
+  "name": "rhumb-agent-host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -126,9 +126,9 @@ describe("loadConfig", () => {
   it("honors overrides", () => {
     const cfg = loadConfig({
       CLAUDE_CODE_OAUTH_TOKEN: "tok",
-      RHUMBR_PORT: "9000",
-      RHUMBR_MODEL: "claude-sonnet-4-6",
-      RHUMBR_WORKSPACE: "/srv/ws",
+      RHUMB_PORT: "9000",
+      RHUMB_MODEL: "claude-sonnet-4-6",
+      RHUMB_WORKSPACE: "/srv/ws",
     });
     expect(cfg).toEqual({
       port: 9000,
@@ -160,13 +160,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!oauthToken) {
     throw new Error(
       "CLAUDE_CODE_OAUTH_TOKEN is required. Generate one with `claude setup-token` " +
-        "(uses your Claude subscription). RHUMBR does not use ANTHROPIC_API_KEY.",
+        "(uses your Claude subscription). Rhumb does not use ANTHROPIC_API_KEY.",
     );
   }
   return {
-    port: env.RHUMBR_PORT ? Number(env.RHUMBR_PORT) : 8787,
-    model: env.RHUMBR_MODEL?.trim() || "claude-opus-4-8",
-    workspace: env.RHUMBR_WORKSPACE?.trim() || "./workspace",
+    port: env.RHUMB_PORT ? Number(env.RHUMB_PORT) : 8787,
+    model: env.RHUMB_MODEL?.trim() || "claude-opus-4-8",
+    workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
     oauthToken,
   };
 }
@@ -674,7 +674,7 @@ export function main(): void {
   // present (loadConfig requires it), so no extra wiring is needed here.
   const app = buildApp({ config, query: realQuery });
   app.listen(config.port, () => {
-    console.log(`rhumbr agent-host listening on :${config.port} (model ${config.model})`);
+    console.log(`rhumb agent-host listening on :${config.port} (model ${config.model})`);
   });
 }
 
@@ -705,14 +705,14 @@ workspace/
 - [ ] **Step 7: Create `agent-host/README.md`**
 
 ```markdown
-# RHUMBR Agent Host
+# Rhumb Agent Host
 
-Server-side component of RHUMBR. Wraps Claude Code (via the Claude Agent SDK) and
+Server-side component of Rhumb. Wraps Claude Code (via the Claude Agent SDK) and
 exposes a small HTTP + SSE session API over your Tailscale network.
 
 ## Authentication — personal-tool framing
 
-RHUMBR authenticates Claude with **your own Claude subscription**, not an API key.
+Rhumb authenticates Claude with **your own Claude subscription**, not an API key.
 Generate a long-lived token once:
 
     claude setup-token
@@ -723,7 +723,7 @@ Then export it before starting the host:
 
 > **Compliance note.** Anthropic's terms state that, without prior approval,
 > third-party developers may not *offer* claude.ai login or rate limits in their
-> products — including agents built on the Claude Agent SDK. RHUMBR is a
+> products — including agents built on the Claude Agent SDK. Rhumb is a
 > **self-hosted personal tool**: you run it on your own hardware with your own
 > credentials. It does not broker, proxy, or offer Claude login to anyone else.
 > If you want to distribute a multi-tenant or hosted offering, seek Anthropic's
@@ -735,8 +735,8 @@ Then export it before starting the host:
     npm run build
     CLAUDE_CODE_OAUTH_TOKEN=... npm start
 
-Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMBR_PORT`
-(default 8787), `RHUMBR_MODEL` (default `claude-opus-4-8`), `RHUMBR_WORKSPACE`
+Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMB_PORT`
+(default 8787), `RHUMB_MODEL` (default `claude-opus-4-8`), `RHUMB_WORKSPACE`
 (default `./workspace`).
 
 ## API
@@ -764,4 +764,4 @@ git commit -m "feat(agent-host): entrypoint, SDK wiring, README with compliance 
 
 ## Next plan
 
-**Plan 2 — Dashboard host + registry**: watch `RHUMBR_WORKSPACE`, serve `file` surfaces at stable tailnet URLs, expose the registry. It shares the workspace directory contract established here.
+**Plan 2 — Dashboard host + registry**: watch `RHUMB_WORKSPACE`, serve `file` surfaces at stable tailnet URLs, expose the registry. It shares the workspace directory contract established here.

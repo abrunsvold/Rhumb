@@ -1,6 +1,6 @@
 export interface ServiceConfig {
-  deployKeyPath: string;            // RHUMBR_DEPLOY_KEY (private key, host-only)
-  deployPublicKey: string;          // contents of RHUMBR_DEPLOY_PUBKEY or <deployKeyPath>.pub
+  deployKeyPath: string;            // RHUMB_DEPLOY_KEY (private key, host-only)
+  deployPublicKey: string;          // contents of RHUMB_DEPLOY_PUBKEY or <deployKeyPath>.pub
   ostemplate: string;               // e.g. "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
   storage: string;                  // e.g. "local-lvm"
   bridge: string;                   // e.g. "vmbr0"

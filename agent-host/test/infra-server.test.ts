@@ -6,7 +6,7 @@ import { makeCanUseTool, GATED_TOOLS } from "../src/infra/server.js";
 import { PendingActions } from "../src/infra/pending.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-gate-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-gate-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("makeCanUseTool", () => {
