@@ -1,0 +1,73 @@
+import { join } from "node:path";
+import { existsSync } from "node:fs";
+import type { OntologyNode } from "./types.js";
+import { readNode, writeNode, listNodes } from "./vault.js";
+import { buildGraph } from "./graph.js";
+
+const ID = /^[A-Za-z0-9._-]+$/;
+
+export type OntologyQuery =
+  | { kind: "node"; id: string }
+  | { kind: "type"; type: string }
+  | { kind: "neighbors"; id: string; edge?: string; direction?: "out" | "in" | "both" };
+
+export interface OntologyOps {
+  sync(): { added: number; updated: number; removed: number };
+  query(q: OntologyQuery): unknown;
+  upsert(node: { id: string; title: string; subtype?: string; props?: Record<string, string> }): OntologyNode;
+  link(from: string, edge: string, to: string): OntologyNode;
+}
+
+export interface OntologyOpsDeps {
+  systemDir: string;
+  domainDir: string;
+  now: () => string;
+  sync: () => { added: number; updated: number; removed: number };
+}
+
+export const ONTOLOGY_TOOL_NAMES: readonly string[] = [
+  "mcp__ontology__sync", "mcp__ontology__query", "mcp__ontology__upsert_node", "mcp__ontology__link",
+];
+
+export function createOntologyOps(deps: OntologyOpsDeps): OntologyOps {
+  const allNodes = () => [...listNodes(deps.systemDir), ...listNodes(deps.domainDir)];
+  const domainPath = (id: string) => join(deps.domainDir, `${id}.md`);
+
+  return {
+    sync: deps.sync,
+    query(q) {
+      const g = buildGraph(allNodes());
+      if (q.kind === "node") return g.getNode(q.id) ?? null;
+      if (q.kind === "type") return g.nodesByType(q.type);
+      return g.neighbors(q.id, { edge: q.edge, direction: q.direction });
+    },
+    upsert(input) {
+      if (!ID.test(input.id)) throw new Error(`invalid node id: ${input.id}`);
+      const existing = existsSync(domainPath(input.id)) ? readNode(domainPath(input.id)) : null;
+      const ts = deps.now();
+      const props = { ...(input.subtype ? { subtype: input.subtype } : {}), ...(input.props ?? {}) };
+      const node: OntologyNode = {
+        type: "entity", id: input.id, title: input.title, managed: "domain",
+        created: existing?.created ?? ts, updated: ts, props,
+        relationships: existing?.relationships ?? [],
+      };
+      writeNode(deps.domainDir, node);
+      return node;
+    },
+    link(from, edge, to) {
+      if (!ID.test(from) || !ID.test(to)) throw new Error("invalid node id");
+      // the edge is written on `from`'s file, so `from` must be a domain (agent-owned) node
+      if (!existsSync(domainPath(from))) {
+        throw new Error(`link source "${from}" must be a domain node — author cross-layer edges from the domain side`);
+      }
+      const node = readNode(domainPath(from));
+      if (!node) throw new Error(`domain node not found: ${from}`);
+      if (!node.relationships.some((r) => r.edge === edge && r.target === to)) {
+        node.relationships.push({ edge, target: to });
+        node.updated = deps.now();
+        writeNode(deps.domainDir, node);
+      }
+      return node;
+    },
+  };
+}
