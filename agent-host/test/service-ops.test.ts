@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceOps } from "../src/services/ops.js";
@@ -48,7 +48,7 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     const entry = await ops.spawn("sales");
     expect(entry).toMatchObject({ id: "sales", containerId: 200, host: "10.0.0.9", port: 3000, basePath: "/services/sales", status: "healthy" });
-    expect(calls).toEqual(["create:sales", "start:200"]);
+    expect(calls).toEqual(["create:rhumbr-sales", "start:200"]);
     expect(deployed).toEqual([`sales@${join(dir, "services", "sales")}`]);
     expect(loadServices(cfg().servicesPath).map((s) => s.id)).toEqual(["sales"]);
   });
@@ -67,7 +67,7 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     await ops.spawn("sales");
     await ops.destroy("sales");
-    expect(calls).toContain("destroy:200");
+    expect(calls).toEqual(["create:rhumbr-sales", "start:200", "stop:200", "destroy:200"]);
     expect(loadServices(cfg().servicesPath)).toEqual([]);
   });
 });

@@ -34,7 +34,7 @@ export function createServiceOps(deps: {
     async spawn(id: string): Promise<ServiceEntry> {
       const manifest = deps.readManifest(id);
       const spec = {
-        name: manifest.id,
+        name: `rhumbr-${manifest.id}`,
         cores: manifest.resources?.cores ?? 1,
         memory: manifest.resources?.memory ?? 512,
         ostemplate: config.ostemplate,
