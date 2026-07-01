@@ -35,6 +35,11 @@ describe("Canvas", () => {
     expect(await screen.findByRole("button", { name: "Demo" })).toBeTruthy();
     const iframe = document.querySelector("iframe");
     expect(iframe?.getAttribute("src")).toBe("http://d:8788/surfaces/demo/");
+    // The surface iframe runs with `allow-scripts allow-same-origin`. This is
+    // safe NOT because of the sandbox flags alone, but because: the app shell is a
+    // different origin (tauri://) so a surface cannot script it; the dashboard
+    // isolates data access per-surface via capability tokens; and the surface's
+    // own CSP (connect-src 'self') blocks off-host exfiltration.
     expect(iframe?.getAttribute("sandbox")).toContain("allow-scripts");
   });
 
