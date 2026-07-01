@@ -33,6 +33,7 @@ export function buildApp(deps: {
     }),
     workspace: deps.config.workspace,
     subscribers,
+    appOrigins: deps.config.appOrigins,
   });
 
   // Bound request bodies: this host is unauthenticated on the tailnet, and data
