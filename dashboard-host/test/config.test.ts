@@ -9,6 +9,7 @@ describe("loadConfig", () => {
       dataSourcesPath: "./workspace/data-sources.json",
       dataTrustPath: "./workspace/data-trust.json",
       dataAuditPath: "./workspace/data-audit.jsonl",
+      servicesPath: "./workspace/services.json",
     });
   });
 
@@ -21,6 +22,7 @@ describe("loadConfig", () => {
       dataSourcesPath: "/srv/ws/data-sources.json",
       dataTrustPath: "/srv/ws/data-trust.json",
       dataAuditPath: "/srv/ws/data-audit.jsonl",
+      servicesPath: "/srv/ws/services.json",
     });
   });
 

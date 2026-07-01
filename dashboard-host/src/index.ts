@@ -8,11 +8,14 @@ import { createServer } from "./server.js";
 import { startWatcher, type WatchFn } from "./watcher.js";
 import { writeSseEvent } from "./sse.js";
 import type { RegistrySnapshot } from "./types.js";
+import { loadServices, serviceToRegistryEntry } from "./services/registry.js";
+import { createServiceProxy } from "./services/proxy.js";
 import { loadDataSources } from "./data/sources.js";
 import { createPgExecutor } from "./data/pgExecutor.js";
 import { PendingQueue } from "./data/writes.js";
 import { createDataRouter } from "./data/router.js";
 import type { QueryExecutor, DataSource } from "./data/types.js";
+import { startProbe, tcpProbe, makeStatusWriter } from "./services/probe.js";
 
 export function buildApp(deps: {
   config: Config;
@@ -20,11 +23,14 @@ export function buildApp(deps: {
   executorFor?: (source: DataSource) => QueryExecutor;
 }): Express {
   const surfacesRoot = resolve(deps.config.workspace, "surfaces");
+  const servicesPath = deps.config.servicesPath;
   const subscribers = new Set<Response>();
   let current: RegistrySnapshot = { surfaces: [] };
 
   const app = createServer({
-    getSnapshot: () => current,
+    getSnapshot: () => ({
+      surfaces: [...current.surfaces, ...loadServices(servicesPath).map(serviceToRegistryEntry)],
+    }),
     workspace: deps.config.workspace,
     subscribers,
   });
@@ -68,6 +74,8 @@ export function buildApp(deps: {
     }),
   );
 
+  app.use("/services", createServiceProxy({ getServices: () => loadServices(servicesPath) }));
+
   return app;
 }
 
@@ -85,6 +93,10 @@ export function main(): void {
   app.listen(config.port, () => {
     console.log(`rhumbr dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
   });
+  startProbe(
+    { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },
+    15_000,
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
