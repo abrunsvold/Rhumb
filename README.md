@@ -4,7 +4,7 @@
 
 Tools like OpenClaw trap a capable agent inside a linear chat transcript. The agent underneath can build dashboards and live-data UIs — but you never get to *keep* or *interact with* what it makes. Rhumb lets the agent **materialize durable, interactive surfaces** that run as real services on your box, reachable from a desktop client over a [Tailscale](https://tailscale.com) mesh, and persist across sessions.
 
-> **Status:** early, actively built, not yet production-hardened. Implemented today: the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, and the Tauri v2 desktop client. Next up: the persistent ontology, which is specced (see [Roadmap](#roadmap)).
+> **Status:** early, actively built, not yet production-hardened. **All seven roadmap subsystems are now implemented** — the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, the Tauri v2 desktop client, and the persistent ontology (see [Roadmap](#roadmap)).
 
 ---
 
@@ -15,6 +15,18 @@ Tools like OpenClaw trap a capable agent inside a linear chat transcript. The ag
 - **Your compute, your data.** Nothing lives in a hosted SaaS. Everything durable — the agent, your data, the apps it builds — runs on a box you control.
 - **The agent operates your infrastructure.** On the roadmap: it can manage VMs and provision databases to support real work, not just read data.
 - **Full applications, not just static dashboards.** The agent can spawn complete backend services, each isolated in its own Proxmox-managed container.
+
+---
+
+## Who it's for — and what you'd build
+
+**People who already self-host.** If you've got a Proxmox node in a closet and a backlog of little jobs that deserve a real tool but never get one — a 3D-printer tracker, a runbook wiki, a homelab status board — Rhumb is a **homelab-native internal-tools builder**: you describe the tool, an agent builds it, provisions its backend, and leaves it running on your own hardware.
+
+The useful comparison isn't the AI app-builders (v0, bolt) — it's internal-tools platforms like **Retool / Budibase / Appsmith**. The difference: those make *you* wire a UI to a backend you already have; Rhumb has the agent **stand up the backend *and* the UI *and* register them together**, on a box you own.
+
+The on-ramp is homelab-grade (Proxmox + Tailscale + your own subscription), so the honest framing is *fast internal tools for people who already self-host* — not for everyone.
+
+**→ See [docs/positioning.md](docs/positioning.md)** for the full persona, the Retool/Budibase comparison, and 8 example tools (each mapping to a Rhumb subsystem).
 
 ---
 
@@ -119,7 +131,7 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 4. **Data endpoint** ✅ — read/write Postgres access, with writes gated by a confirmation queue and surface-scoped guardrails.
 5. **Infrastructure capability** ✅ — agent-managed Proxmox LXC containers and database provisioning, each action gated behind human confirmation.
 6. **Spawned services** ✅ — the agent builds full backend apps, each isolated in its own container and reverse-proxied at a stable URL.
-7. **Ontology** 🚧 — a persistent, browsable markdown graph of your environment and domain. Specced; not yet implemented.
+7. **Ontology** ✅ — a persistent, browsable markdown graph of your environment and domain, projected automatically from the other subsystems' state and queryable by the agent.
 
 > Milestones marked ✅ are implemented with tests on `main`; they are **not** yet security-hardened for hostile networks — see [Security model](#security-model--read-before-exposing-anything) and keep Rhumb on your tailnet.
 
