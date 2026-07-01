@@ -21,6 +21,11 @@ export function Canvas({ dashboardBase }: { dashboardBase: string }) {
 
   function detach() {
     if (!active || !activeUrl) return;
+    // The detached surface loads untrusted agent-built content. It is labeled
+    // `surface:<id>`, which intentionally matches NO capability in
+    // src-tauri/capabilities/default.json (that capability is scoped to
+    // `"windows": ["main"]`), so this window inherits no Tauri IPC/command
+    // access. Do not add a capability whose `windows` matches `surface:*`.
     new WebviewWindow(`surface:${active.id}`, { url: activeUrl, title: active.title });
   }
 
