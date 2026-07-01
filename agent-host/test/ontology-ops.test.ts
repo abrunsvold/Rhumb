@@ -6,7 +6,7 @@ import { createOntologyOps, ONTOLOGY_TOOL_NAMES } from "../src/ontology/ops.js";
 import { writeNode } from "../src/ontology/vault.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-ops-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-ops-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 function ops() {

@@ -6,7 +6,7 @@ import { syncSystem } from "../src/ontology/projector.js";
 import { listNodes, writeNode } from "../src/ontology/vault.js";
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumbr-proj-")); });
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-proj-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 function deps(over: Partial<Parameters<typeof syncSystem>[0]> = {}) {
