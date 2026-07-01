@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response } from "express";
-import { resolve, sep } from "node:path";
+import { resolve, sep, basename } from "node:path";
 import { readFileSync, realpathSync } from "node:fs";
 import { readSurfaceMeta } from "./registry.js";
 import { writeSseEvent } from "./sse.js";
@@ -75,6 +75,13 @@ export function createServer(deps: {
       return;
     }
     if (!(realTarget === realRoot || realTarget.startsWith(realRoot + sep))) {
+      res.sendStatus(404);
+      return;
+    }
+    // Never serve dotfiles. This is defense-in-depth for the `.surface-token`
+    // sidecar: the HTML branch below reads files directly (not via sendFile's
+    // dotfiles:'ignore' default), so make the protection explicit here.
+    if (basename(realTarget).startsWith(".")) {
       res.sendStatus(404);
       return;
     }

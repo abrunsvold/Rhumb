@@ -11,7 +11,7 @@ export function getOrCreateSurfaceToken(surfaceDir: string): string {
     if (t.length > 0) return t;
   }
   const token = randomBytes(24).toString("base64url");
-  writeFileSync(path, token);
+  writeFileSync(path, token, { mode: 0o600 });
   return token;
 }
 
