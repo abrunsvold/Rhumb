@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest, ServiceEntry } from "./types.js";
 import { loadServices, appendService, removeService } from "./registry.js";
+import { assertServiceId } from "./manifest.js";
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -32,7 +33,9 @@ export function createServiceOps(deps: {
 
   return {
     async spawn(id: string): Promise<ServiceEntry> {
+      assertServiceId(id);                       // reject traversal before any fs/path use
       const manifest = deps.readManifest(id);
+      if (manifest.id !== id) throw new Error(`manifest id "${manifest.id}" does not match requested id "${id}"`);
       const spec = {
         name: `rhumbr-${manifest.id}`,
         cores: manifest.resources?.cores ?? 1,

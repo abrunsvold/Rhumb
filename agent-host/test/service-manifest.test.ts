@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateManifest } from "../src/services/manifest.js";
+import { validateManifest, assertServiceId } from "../src/services/manifest.js";
 import { loadServiceConfig } from "../src/services/config.js";
 
 describe("validateManifest", () => {
@@ -12,6 +12,11 @@ describe("validateManifest", () => {
     expect(() => validateManifest({ id: "bad id", type: "service", name: "x", start: "s", port: 1 })).toThrow(/id/);
     expect(() => validateManifest({ id: "ok", type: "service", name: "x", port: 1 })).toThrow(/start/);
     expect(() => validateManifest({ id: "ok", type: "service", name: "x", start: "s", port: 0 })).toThrow(/port/);
+  });
+
+  it("rejects a traversal id (.. or .)", () => {
+    expect(() => validateManifest({ id: "..", type: "service", name: "x", start: "s", port: 1 })).toThrow(/invalid service id/);
+    expect(() => validateManifest({ id: ".", type: "service", name: "x", start: "s", port: 1 })).toThrow(/invalid service id/);
   });
 });
 

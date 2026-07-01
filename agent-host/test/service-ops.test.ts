@@ -70,4 +70,20 @@ describe("createServiceOps.spawn", () => {
     expect(calls).toEqual(["create:rhumbr-sales", "start:200", "stop:200", "destroy:200"]);
     expect(loadServices(cfg().servicesPath)).toEqual([]);
   });
+
+  it("rejects a traversal id before reading a manifest or creating a container", async () => {
+    const { calls, deployer, lxc } = fakes();
+    let readCalled = false;
+    const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: (id) => { readCalled = true; return manifest(id); }, sleep: async () => {} });
+    await expect(ops.spawn("../../etc")).rejects.toThrow(/invalid service id/);
+    expect(readCalled).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects a manifest whose id does not match the requested id (no container created)", async () => {
+    const { calls, deployer, lxc } = fakes();
+    const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: () => manifest("other"), sleep: async () => {} });
+    await expect(ops.spawn("sales")).rejects.toThrow(/does not match/);
+    expect(calls).toEqual([]);
+  });
 });
