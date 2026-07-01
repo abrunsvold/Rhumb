@@ -4,7 +4,7 @@
 
 Tools like OpenClaw trap a capable agent inside a linear chat transcript. The agent underneath can build dashboards and live-data UIs — but you never get to *keep* or *interact with* what it makes. Rhumb lets the agent **materialize durable, interactive surfaces** that run as real services on your box, reachable from a desktop client over a [Tailscale](https://tailscale.com) mesh, and persist across sessions.
 
-> **Status:** early, actively built, not yet production-hardened. Implemented today: the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, and the Tauri v2 desktop client. Next up: the persistent ontology, which is specced (see [Roadmap](#roadmap)).
+> **Status:** early, actively built, not yet production-hardened. **All seven roadmap subsystems are now implemented** — the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, the Tauri v2 desktop client, and the persistent ontology (see [Roadmap](#roadmap)).
 
 ---
 
@@ -131,7 +131,7 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 4. **Data endpoint** ✅ — read/write Postgres access, with writes gated by a confirmation queue and surface-scoped guardrails.
 5. **Infrastructure capability** ✅ — agent-managed Proxmox LXC containers and database provisioning, each action gated behind human confirmation.
 6. **Spawned services** ✅ — the agent builds full backend apps, each isolated in its own container and reverse-proxied at a stable URL.
-7. **Ontology** 🚧 — a persistent, browsable markdown graph of your environment and domain. Specced; not yet implemented.
+7. **Ontology** ✅ — a persistent, browsable markdown graph of your environment and domain, projected automatically from the other subsystems' state and queryable by the agent.
 
 > Milestones marked ✅ are implemented with tests on `main`; they are **not** yet security-hardened for hostile networks — see [Security model](#security-model--read-before-exposing-anything) and keep Rhumb on your tailnet.
 
