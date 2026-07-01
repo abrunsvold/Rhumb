@@ -68,6 +68,9 @@ export function createServiceOps(deps: {
         appendService(config.servicesPath, entry);
         return entry;
       } catch (e) {
+        // Best-effort rollback: a running container can't be DELETEd on PVE, so
+        // stop it first, then destroy. Both are swallowed — the original error wins.
+        try { await lxc.stop(containerId); } catch { /* may not be running */ }
         try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
         throw e;
       }
