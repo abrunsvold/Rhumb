@@ -15,6 +15,7 @@ import { createPgExecutor } from "./data/pgExecutor.js";
 import { PendingQueue } from "./data/writes.js";
 import { createDataRouter } from "./data/router.js";
 import type { QueryExecutor, DataSource } from "./data/types.js";
+import { startProbe, tcpProbe, makeStatusWriter } from "./services/probe.js";
 
 export function buildApp(deps: {
   config: Config;
@@ -92,6 +93,10 @@ export function main(): void {
   app.listen(config.port, () => {
     console.log(`rhumbr dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
   });
+  startProbe(
+    { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },
+    15_000,
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
