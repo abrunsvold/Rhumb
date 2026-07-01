@@ -103,13 +103,13 @@ export function createInfraServer(deps: InfraDeps) {
         } catch (e) { return fail(String(e)); }
       }),
       tool("stop_service", "Stop a service's container", { id: z.string() }, async (a) => {
-        try { await deps.serviceOps?.stop(a.id); return ok(`stopped ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.stop(a.id); return ok(`stopped ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("start_service", "Start a service's container", { id: z.string() }, async (a) => {
-        try { await deps.serviceOps?.start(a.id); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.start(a.id); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("destroy_service", "Stop, destroy, and deregister a service", { id: z.string() }, async (a) => {
-        try { await deps.serviceOps?.destroy(a.id); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.destroy(a.id); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
     ],
   });
