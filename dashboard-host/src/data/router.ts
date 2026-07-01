@@ -14,6 +14,7 @@ export interface DataRouterDeps {
   auditPath: string;
   now: () => string;
   controlToken?: string;
+  resolveToken: (token: string) => string | null;
 }
 
 export function surfaceIdFromReferer(req: Request): string | null {
@@ -31,9 +32,13 @@ export function surfaceIdFromReferer(req: Request): string | null {
 export function createDataRouter(deps: DataRouterDeps): Router {
   const router = express.Router();
 
+  const surfaceIdFromToken = (req: Request): string | null =>
+    deps.resolveToken(req.get("x-rhumb-surface-token") ?? "");
+
   router.post("/:source/query", async (req: Request, res: Response) => {
     const source = findSource(deps.getSources(), req.params.source);
     if (!source) return void res.sendStatus(404);
+    if (surfaceIdFromToken(req) === null) return void res.status(401).json({ error: "unauthorized" });
     const op = req.body?.op as DataOp | undefined;
     if (!op || op.kind !== "select") return void res.status(400).json({ error: "query requires a select op" });
     try {
@@ -53,7 +58,7 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     if (source.mode !== "read-write") return void res.status(403).json({ error: "source is read-only" });
     const op = req.body?.op as DataOp | undefined;
     if (!op || op.kind === "select") return void res.status(400).json({ error: "write requires a mutating op" });
-    const surfaceId = surfaceIdFromReferer(req);
+    const surfaceId = surfaceIdFromToken(req);
 
     if (isTrusted(loadTrust(deps.trustPath), source.id, surfaceId)) {
       try {
