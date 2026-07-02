@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import chokidar from "chokidar";
@@ -17,6 +17,8 @@ import { createDataRouter } from "./data/router.js";
 import { resolveSurfaceToken } from "./surfaces/token.js";
 import type { QueryExecutor, DataSource } from "./data/types.js";
 import { startProbe, tcpProbe, makeStatusWriter } from "./services/probe.js";
+import { requireShellHeader } from "./identity.js";
+import { createControlTokenGuard } from "./auth.js";
 
 export function buildApp(deps: {
   config: Config;
@@ -28,6 +30,8 @@ export function buildApp(deps: {
   const subscribers = new Set<Response>();
   let current: RegistrySnapshot = { surfaces: [] };
 
+  const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+
   const app = createServer({
     getSnapshot: () => ({
       surfaces: [...current.surfaces, ...loadServices(servicesPath).map(serviceToRegistryEntry)],
@@ -35,10 +39,14 @@ export function buildApp(deps: {
     workspace: deps.config.workspace,
     subscribers,
     appOrigins: deps.config.appOrigins,
+    identity: { allowedUsers: deps.config.allowedUsers, insecureDev: deps.config.insecureDev },
+    version,
   });
 
-  // Bound request bodies: this host is unauthenticated on the tailnet, and data
-  // ops are small. An explicit cap keeps a hostile caller from posting huge bodies.
+  // Bound request bodies: even though the host is identity-authenticated (or,
+  // in RHUMB_INSECURE_DEV, relies on the caller being trusted), data ops are
+  // small. An explicit cap keeps a caller from posting huge bodies as
+  // defense-in-depth.
   app.use(express.json({ limit: "64kb" }));
 
   startWatcher({
@@ -75,7 +83,9 @@ export function buildApp(deps: {
       trustPath: deps.config.dataTrustPath,
       auditPath: deps.config.dataAuditPath,
       now,
-      controlToken: deps.config.controlToken,
+      pendingGuard: deps.config.insecureDev
+        ? createControlTokenGuard(deps.config.controlToken)
+        : requireShellHeader(),
       resolveToken: (t) => resolveSurfaceToken(surfacesRoot, t),
     }),
   );
@@ -96,16 +106,26 @@ export function main(): void {
   const config = loadConfig(process.env);
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
-  app.listen(config.port, () => {
-    console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
-    if (!config.controlToken) {
+  const onListen = () => {
+    const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
+    console.log(`rhumb dashboard-host listening on ${bound}:${config.port} (workspace ${config.workspace})`);
+    if (config.insecureDev) {
       console.warn(
-        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the write-approval " +
-          "control plane (/data/pending) is UNAUTHENTICATED. Set a token (shared " +
-          "with the agent host and client) and keep this host on your tailnet only.",
+        "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
+          "host binds all interfaces. Never run this mode outside local development.",
+      );
+    } else {
+      console.log(
+        `[rhumb] identity mode: loopback-only, ${config.allowedUsers.length} allowed user(s); ` +
+          "reachable via tailscale serve at /",
       );
     }
-  });
+  };
+  // Dev mode binds the unspecified address (dual-stack, matching pre-identity
+  // behavior so ::1 localhost clients keep working); identity mode pins
+  // loopback so tailscale serve is the only network path in.
+  if (config.insecureDev) app.listen(config.port, onListen);
+  else app.listen(config.port, "127.0.0.1", onListen);
   startProbe(
     { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },
     15_000,

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ConnectionScreen } from "./components/ConnectionScreen";
 import { Workspace } from "./components/Workspace";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
-import { getConfig, setConfig, type AppConfig } from "./lib/tauri";
+import { agentBaseOf, dashboardBaseOf, getConfig, setConfig, type AppConfig } from "./lib/tauri";
 
 export function App() {
   const [config, setConfigState] = useState<AppConfig | null>(null);
@@ -11,7 +11,7 @@ export function App() {
   useEffect(() => {
     getConfig()
       .then((c) => {
-        if (c.agentBase && c.dashboardBase) setConfigState(c);
+        if (c.baseUrl) setConfigState(c);
       })
       .catch(() => {
         // getConfig rejects when Tauri IPC is unavailable (plain-browser dev);
@@ -23,7 +23,7 @@ export function App() {
   async function disconnect() {
     setConfigState(null);
     try {
-      await setConfig({ agentBase: "", dashboardBase: "" });
+      await setConfig({ baseUrl: "", agentPath: "/agent", dashboardPath: "/" });
     } catch {
       // state is already reset; nothing actionable
     }
@@ -31,10 +31,12 @@ export function App() {
 
   if (!loaded) return <div className="flex h-full items-center justify-center text-muted">Loading…</div>;
   if (!config) return <ConnectionScreen onConnected={setConfigState} />;
+  const agentBase = agentBaseOf(config);
+  const dashboardBase = dashboardBaseOf(config);
   return (
     <>
-      <Workspace agentBase={config.agentBase} dashboardBase={config.dashboardBase} onDisconnect={disconnect} />
-      <ConfirmationDialog agentBase={config.agentBase} dashboardBase={config.dashboardBase} />
+      <Workspace agentBase={agentBase} dashboardBase={dashboardBase} onDisconnect={disconnect} />
+      <ConfirmationDialog agentBase={agentBase} dashboardBase={dashboardBase} />
     </>
   );
 }
