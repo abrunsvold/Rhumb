@@ -61,6 +61,17 @@ impl AppConfig {
     }
 }
 
+/// Merge a config update with what is already on disk: an update that omits
+/// controlToken keeps the existing one. The token is hand-edited for dev mode
+/// and no UI writes it, so a connect/disconnect cycle must not silently wipe
+/// it; clearing requires editing config.json directly.
+pub fn merge_preserving_token(new: AppConfig, old: AppConfig) -> AppConfig {
+    AppConfig {
+        control_token: new.control_token.or(old.control_token),
+        ..new
+    }
+}
+
 pub fn read_config(path: &Path) -> AppConfig {
     match std::fs::read_to_string(path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
@@ -121,6 +132,18 @@ mod tests {
         std::fs::write(&path, r#"{"agentBase":"http://a:8787","dashboardBase":"http://d:8788"}"#).unwrap();
         assert_eq!(read_config(&path).base_url, "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_preserves_omitted_token_and_honors_explicit_one() {
+        let old = AppConfig { control_token: Some("dev-tok".into()), ..AppConfig::default() };
+        let disconnect = AppConfig::default(); // no token field, e.g. disconnect reset
+        assert_eq!(
+            merge_preserving_token(disconnect, old.clone()).control_token,
+            Some("dev-tok".into())
+        );
+        let explicit = AppConfig { control_token: Some("new-tok".into()), ..AppConfig::default() };
+        assert_eq!(merge_preserving_token(explicit, old).control_token, Some("new-tok".into()));
     }
 
     #[test]

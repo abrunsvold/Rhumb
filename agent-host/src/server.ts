@@ -20,6 +20,16 @@ interface ManagerLike {
   ): Promise<string>;
 }
 
+// Strip the tailscale-serve mount prefix from a request URL. Handles the bare
+// mount ("/agent"), sub-paths ("/agent/messages"), and a query with no path
+// ("/agent?x=1" → "/?x=1"); leaves sibling paths like "/agentx" untouched.
+export function stripAgentPrefix(url: string): string {
+  if (url !== "/agent" && !url.startsWith("/agent/") && !url.startsWith("/agent?")) return url;
+  const rest = url.slice("/agent".length);
+  if (rest === "") return "/";
+  return rest.startsWith("?") ? `/${rest}` : rest;
+}
+
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
@@ -63,9 +73,7 @@ export function createServer(deps: {
   // through the /agent mount arrive as e.g. /agent/messages. Normalize before
   // any route (including /healthz) sees them.
   app.use((req, _res, next) => {
-    if (req.url === "/agent" || req.url.startsWith("/agent/")) {
-      req.url = req.url.slice("/agent".length) || "/";
-    }
+    req.url = stripAgentPrefix(req.url);
     next();
   });
 

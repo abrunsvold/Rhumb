@@ -10,6 +10,7 @@ vi.mock("../src/lib/tauri", async () => {
     getConfig: vi.fn().mockResolvedValue({ baseUrl: "", agentPath: "/agent", dashboardPath: "/" }),
     setConfig: vi.fn().mockResolvedValue(undefined),
     checkHealth: vi.fn().mockResolvedValue(true),
+    checkIdentity: vi.fn().mockResolvedValue(200),
     discoverHosts: vi.fn().mockResolvedValue([]),
     fetchManifest: vi.fn().mockResolvedValue({
       rhumb: true,
@@ -19,7 +20,7 @@ vi.mock("../src/lib/tauri", async () => {
   };
 });
 
-import { checkHealth, setConfig, discoverHosts, fetchManifest } from "../src/lib/tauri";
+import { checkHealth, checkIdentity, setConfig, discoverHosts, fetchManifest } from "../src/lib/tauri";
 
 const CFG = { baseUrl: "https://box.ts.net", agentPath: "/agent", dashboardPath: "/" };
 
@@ -58,6 +59,17 @@ describe("ConnectionScreen", () => {
 
     await userEvent.type(await screen.findByLabelText(/server url/i), "https://nope.ts.net{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent(/no rhumb server answered/i);
+    expect(onConnected).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-allowlisted device with an allowlist error, without persisting config", async () => {
+    (checkIdentity as ReturnType<typeof vi.fn>).mockResolvedValueOnce(403);
+    const onConnected = vi.fn();
+    render(<ConnectionScreen onConnected={onConnected} />);
+
+    await userEvent.type(await screen.findByLabelText(/server url/i), "https://box.ts.net{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/RHUMB_ALLOWED_USERS/);
+    expect(setConfig).not.toHaveBeenCalled();
     expect(onConnected).not.toHaveBeenCalled();
   });
 

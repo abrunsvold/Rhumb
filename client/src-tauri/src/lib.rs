@@ -40,7 +40,9 @@ fn set_config(app: tauri::AppHandle, config: config::AppConfig) -> Result<(), St
     if !valid_base(&config.base_url) {
         return Err("baseUrl must be an http(s) URL".into());
     }
-    config::write_config(&config_path(&app), &config).map_err(|e| e.to_string())
+    let path = config_path(&app);
+    let merged = config::merge_preserving_token(config, config::read_config(&path));
+    config::write_config(&path, &merged).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -50,6 +52,27 @@ async fn check_health(base: String) -> bool {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
     }
+}
+
+// Connect-time identity probe. /healthz is deliberately open, so a health
+// check alone lets a non-allowlisted device "connect" and then 403 everywhere
+// inside the workspace. Probe an identity-gated route before persisting config;
+// returns the HTTP status so the UI can distinguish not-allowlisted (403) from
+// other failures. Takes the base per-call (config is not persisted yet).
+#[tauri::command]
+async fn check_identity(base: String) -> Result<u16, String> {
+    let url = format!("{}/registry", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(4000))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .header("Sec-Rhumb-Control", "1")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(resp.status().as_u16())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -70,6 +93,7 @@ pub fn run() {
             get_config,
             set_config,
             check_health,
+            check_identity,
             discover::discover_hosts,
             discover::fetch_manifest,
             proxy::send_message,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   agentBaseOf,
   checkHealth,
+  checkIdentity,
   dashboardBaseOf,
   discoverHosts,
   fetchManifest,
@@ -48,6 +49,18 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
       ]);
       if (!agentOk || !dashOk) {
         setError(`Could not reach ${!agentOk ? "the agent host" : "the dashboard host"}.`);
+        return;
+      }
+      // /healthz is open on purpose, so a non-allowlisted device would pass the
+      // health checks and then 403 on everything inside. Probe an identity-gated
+      // route before persisting the config.
+      const identityStatus = await checkIdentity(dashboardBaseOf(cfg));
+      if (identityStatus === 403) {
+        setError("The server is up, but this device's tailnet login is not in RHUMB_ALLOWED_USERS on the box.");
+        return;
+      }
+      if (identityStatus !== 200) {
+        setError(`The dashboard host answered ${identityStatus} on an authenticated route.`);
         return;
       }
       await setConfig(cfg);

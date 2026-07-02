@@ -106,9 +106,9 @@ export function main(): void {
   const config = loadConfig(process.env);
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
-  const bindHost = config.insecureDev ? "0.0.0.0" : "127.0.0.1";
-  app.listen(config.port, bindHost, () => {
-    console.log(`rhumb dashboard-host listening on ${bindHost}:${config.port} (workspace ${config.workspace})`);
+  const onListen = () => {
+    const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
+    console.log(`rhumb dashboard-host listening on ${bound}:${config.port} (workspace ${config.workspace})`);
     if (config.insecureDev) {
       console.warn(
         "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
@@ -120,7 +120,12 @@ export function main(): void {
           "reachable via tailscale serve at /",
       );
     }
-  });
+  };
+  // Dev mode binds the unspecified address (dual-stack, matching pre-identity
+  // behavior so ::1 localhost clients keep working); identity mode pins
+  // loopback so tailscale serve is the only network path in.
+  if (config.insecureDev) app.listen(config.port, onListen);
+  else app.listen(config.port, "127.0.0.1", onListen);
   startProbe(
     { getServices: () => loadServices(config.servicesPath), probe: tcpProbe, writeStatus: makeStatusWriter(config.servicesPath) },
     15_000,

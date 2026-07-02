@@ -90,6 +90,11 @@ tailnet HTTPS origin and prints the tailnet login(s) to allowlist:
 scripts/setup-serve.sh
 ```
 
+> **First run:** if `tailscale serve` has never been used on your tailnet, the
+> script pauses and prints a `login.tailscale.com` link — a tailnet admin must
+> click it once to enable Serve (and HTTPS certificates, if prompted) before
+> setup can continue.
+
 ### 3. Set the allowlist and run the agent host
 
 `RHUMB_ALLOWED_USERS` is a comma-separated list of tailnet logins (e.g.

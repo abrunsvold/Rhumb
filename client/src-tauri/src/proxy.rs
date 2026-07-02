@@ -98,8 +98,14 @@ fn agent_target(
     suffix: &str,
 ) -> Result<(String, Option<String>), String> {
     let cfg = crate::load_config(app);
+    // Check unconfigured state on base_url itself: agent_base() is never empty
+    // (an empty origin still derives "/agent"), so testing the derived value
+    // would let a relative URL through to an opaque reqwest parse error.
+    if cfg.base_url.is_empty() {
+        return Err("no host configured — connect first".into());
+    }
     let base = cfg.agent_base();
-    if base.is_empty() || passed.trim_end_matches('/') != base {
+    if passed.trim_end_matches('/') != base {
         return Err("agent base does not match the configured host".into());
     }
     Ok((format!("{}{}", base, suffix), cfg.control_token))
@@ -111,8 +117,11 @@ fn dashboard_target(
     suffix: &str,
 ) -> Result<(String, Option<String>), String> {
     let cfg = crate::load_config(app);
+    if cfg.base_url.is_empty() {
+        return Err("no host configured — connect first".into());
+    }
     let base = cfg.dashboard_base();
-    if base.is_empty() || passed.trim_end_matches('/') != base {
+    if passed.trim_end_matches('/') != base {
         return Err("dashboard base does not match the configured host".into());
     }
     Ok((format!("{}{}", base, suffix), cfg.control_token))

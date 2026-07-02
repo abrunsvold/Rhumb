@@ -67,20 +67,28 @@ fn which_tailscale() -> Option<std::path::PathBuf> {
     if path.is_empty() { None } else { Some(path.into()) }
 }
 
-fn probe_client() -> reqwest::Client {
+// Client construction can only fail on TLS-backend init; fail soft rather than
+// panicking the command handler on a broken environment.
+fn probe_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_millis(1500))
         .build()
-        .expect("reqwest client")
+        .ok()
+}
+
+/// Pure filter behind `probe`: a manifest only counts as a discovered host
+/// when it affirms `rhumb: true`.
+fn manifest_to_host(origin: String, manifest: RhumbManifest) -> Option<DiscoveredHost> {
+    if !manifest.rhumb {
+        return None;
+    }
+    Some(DiscoveredHost { base_url: origin, version: manifest.version })
 }
 
 async fn probe(client: &reqwest::Client, origin: String) -> Option<DiscoveredHost> {
     let url = format!("{}/.well-known/rhumb.json", origin);
     let manifest = client.get(&url).send().await.ok()?.json::<RhumbManifest>().await.ok()?;
-    if !manifest.rhumb {
-        return None;
-    }
-    Some(DiscoveredHost { base_url: origin, version: manifest.version })
+    manifest_to_host(origin, manifest)
 }
 
 #[tauri::command]
@@ -96,7 +104,9 @@ pub async fn discover_hosts() -> Vec<DiscoveredHost> {
         Ok(Ok(out)) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
         _ => return Vec::new(),
     };
-    let client = probe_client();
+    let Some(client) = probe_client() else {
+        return Vec::new();
+    };
     futures_util::stream::iter(parse_status_origins(&json))
         .map(|origin| probe(&client, origin))
         .buffer_unordered(8)
@@ -113,7 +123,8 @@ pub async fn fetch_manifest(base_url: String) -> Result<RhumbManifest, String> {
         return Err("baseUrl must be http(s)".into());
     }
     let url = format!("{}/.well-known/rhumb.json", base);
-    let manifest = probe_client()
+    let client = probe_client().ok_or_else(|| "could not initialize http client".to_string())?;
+    let manifest = client
         .get(&url)
         .send()
         .await
@@ -147,5 +158,19 @@ mod tests {
     fn tolerates_malformed_or_peerless_status() {
         assert!(parse_status_origins("not json").is_empty());
         assert!(parse_status_origins("{}").is_empty());
+    }
+
+    #[test]
+    fn filters_probe_results_by_rhumb_flag() {
+        let manifest = |rhumb: bool| RhumbManifest {
+            rhumb,
+            version: "1.0".into(),
+            paths: ManifestPaths { agent: "/agent".into(), dashboard: "/".into() },
+        };
+        assert!(manifest_to_host("https://a".into(), manifest(false)).is_none());
+        assert_eq!(
+            manifest_to_host("https://a".into(), manifest(true)),
+            Some(DiscoveredHost { base_url: "https://a".into(), version: "1.0".into() })
+        );
     }
 }

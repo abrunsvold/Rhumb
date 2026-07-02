@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createServer, pruneSubscriber } from "../src/server.js";
+import { createServer, pruneSubscriber, stripAgentPrefix } from "../src/server.js";
 import type { AgentEvent } from "../src/types.js";
 import { mkdtempSync, readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,17 @@ function fakeManager(script: AgentEvent[]) {
     },
   };
 }
+
+describe("stripAgentPrefix", () => {
+  it("normalizes the serve mount prefix including bare and query-only forms", () => {
+    expect(stripAgentPrefix("/agent")).toBe("/");
+    expect(stripAgentPrefix("/agent/messages")).toBe("/messages");
+    expect(stripAgentPrefix("/agent?x=1")).toBe("/?x=1");
+    expect(stripAgentPrefix("/agent/healthz?x=1")).toBe("/healthz?x=1");
+    expect(stripAgentPrefix("/agentx")).toBe("/agentx");
+    expect(stripAgentPrefix("/messages")).toBe("/messages");
+  });
+});
 
 describe("agent-host server", () => {
   it("GET /healthz returns ok", async () => {

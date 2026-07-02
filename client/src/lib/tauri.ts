@@ -56,6 +56,13 @@ export function checkHealth(base: string): Promise<boolean> {
   return invoke<boolean>("check_health", { base });
 }
 
+// Probe an identity-gated route (registry) before persisting config: /healthz
+// is open, so health checks alone cannot tell a non-allowlisted device apart
+// from a working one. Resolves to the HTTP status (200 allowlisted, 403 not).
+export function checkIdentity(dashboardBase: string): Promise<number> {
+  return invoke<number>("check_identity", { base: dashboardBase });
+}
+
 export function sendMessage(
   agentBase: string,
   turnId: string,

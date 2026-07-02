@@ -127,9 +127,9 @@ export function main(): void {
   // present (loadConfig requires it), so no extra wiring is needed here.
   mkdirSync(config.workspace, { recursive: true });
   const app = buildApp({ config, query: realQuery });
-  const bindHost = config.insecureDev ? "0.0.0.0" : "127.0.0.1";
-  app.listen(config.port, bindHost, () => {
-    console.log(`rhumb agent-host listening on ${bindHost}:${config.port} (model ${config.model})`);
+  const onListen = () => {
+    const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
+    console.log(`rhumb agent-host listening on ${bound}:${config.port} (model ${config.model})`);
     if (config.insecureDev) {
       console.warn(
         "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
@@ -142,7 +142,12 @@ export function main(): void {
           "reachable via tailscale serve at /agent",
       );
     }
-  });
+  };
+  // Dev mode binds the unspecified address (dual-stack, matching pre-identity
+  // behavior so ::1 localhost clients keep working); identity mode pins
+  // loopback so tailscale serve is the only network path in.
+  if (config.insecureDev) app.listen(config.port, onListen);
+  else app.listen(config.port, "127.0.0.1", onListen);
 }
 
 // Run only when executed directly, not when imported by tests.
