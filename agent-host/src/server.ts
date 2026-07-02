@@ -46,8 +46,6 @@ export function createServer(deps: {
   workspace?: string;
 }): Express {
   const app = express();
-  app.use("/files", express.json({ limit: "30mb" }));
-  app.use(express.json());
 
   // session id -> SSE responses ("" is the pending bucket for new sessions).
   const subscribers = new Map<string, Set<Response>>();
@@ -62,6 +60,9 @@ export function createServer(deps: {
   });
 
   app.use(createControlTokenGuard(deps.controlToken));
+
+  app.use("/files", express.json({ limit: "30mb" }));
+  app.use(express.json());
 
   app.get("/sessions/:id/stream", (req: Request, res: Response) => {
     res.set(SSE_HEADERS);

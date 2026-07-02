@@ -168,5 +168,14 @@ describe("agent-host server", () => {
         .send({ name: "a.txt", contentBase64: b64("x") });
       expect(ok.status).toBe(200);
     });
+
+    it("rejects an unauthenticated request with an invalid JSON body with 401, not 400", async () => {
+      const { app } = appWithWorkspace({ controlToken: "sekrit" });
+      const res = await request(app)
+        .post("/files")
+        .set("Content-Type", "application/json")
+        .send("{not json");
+      expect(res.status).toBe(401);
+    });
   });
 });
