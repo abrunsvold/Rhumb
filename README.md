@@ -130,6 +130,14 @@ without Tailscale. **Never set this on a box reachable by anyone else**: it
 disables the Tailscale identity allowlist and all of the request
 authentication described in [`SECURITY.md`](SECURITY.md).
 
+Note that the desktop client can't connect to bare two-port `RHUMB_INSECURE_DEV`
+hosts as-is: it speaks to a single HTTPS origin (`/` for the dashboard host,
+`/agent` for the agent host), which normally comes from `tailscale serve`. For
+local development without a tailnet, either run `tailscale serve` locally or
+put a reverse proxy in front that maps `/` → `:8788` and `/agent` → `:8787`.
+`RHUMB_INSECURE_DEV` hosts on their own (without that single-origin front end)
+are meant to be exercised directly via `curl`/`supertest`, not the desktop client.
+
 ---
 
 ## Security model — read before exposing anything

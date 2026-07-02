@@ -43,8 +43,10 @@ export function buildApp(deps: {
     version,
   });
 
-  // Bound request bodies: this host is unauthenticated on the tailnet, and data
-  // ops are small. An explicit cap keeps a hostile caller from posting huge bodies.
+  // Bound request bodies: even though the host is identity-authenticated (or,
+  // in RHUMB_INSECURE_DEV, relies on the caller being trusted), data ops are
+  // small. An explicit cap keeps a caller from posting huge bodies as
+  // defense-in-depth.
   app.use(express.json({ limit: "64kb" }));
 
   startWatcher({
