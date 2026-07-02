@@ -2,14 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Rhumb hosts run plain HTTP on a private tailnet; ATS would otherwise
-	     block the webview from framing surfaces (Rust proxy traffic is
-	     unaffected). Scoped to web content only - the app shell itself still
-	     loads from the bundle. -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
+	<!-- No ATS exceptions: identity mode serves everything over tailscale-serve
+	     HTTPS with publicly trusted ts.net certificates. Local development
+	     against http://localhost is exempt from ATS by default. -->
 </dict>
 </plist>
