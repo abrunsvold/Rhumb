@@ -21,20 +21,20 @@ function fakeManager(script: AgentEvent[]) {
 
 describe("agent-host server", () => {
   it("GET /healthz returns ok", async () => {
-    const app = createServer({ manager: fakeManager([]) });
+    const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true } });
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
   });
 
   it("POST /messages without a prompt is a 400", async () => {
-    const app = createServer({ manager: fakeManager([]) });
+    const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true } });
     const res = await request(app).post("/messages").send({});
     expect(res.status).toBe(400);
   });
 
   it("POST /messages with a prompt returns 202 and an echoed sessionId", async () => {
-    const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]) });
+    const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), identity: { allowedUsers: [], insecureDev: true } });
     const res = await request(app)
       .post("/messages")
       .send({ sessionId: "sess-9", prompt: "hi" });
@@ -54,6 +54,7 @@ describe("agent-host server", () => {
         { type: "result", result: "ok", isError: false },
       ]),
       turnSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
     });
 
     const res = await request(app).post("/messages").send({ turnId: "t1", prompt: "hi" });
@@ -87,34 +88,34 @@ describe("agent-host server", () => {
     const token = "s3cr3t-operator-token";
 
     it("rejects POST /messages without the token when a control token is configured", async () => {
-      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true, controlToken: token } });
       const res = await request(app).post("/messages").send({ prompt: "hi" });
       expect(res.status).toBe(401);
     });
 
     it("rejects POST /messages with a wrong token", async () => {
-      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true, controlToken: token } });
       const res = await request(app).post("/messages").set("Authorization", "Bearer wrong").send({ prompt: "hi" });
       expect(res.status).toBe(401);
     });
 
     it("accepts POST /messages with the correct bearer token", async () => {
-      const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), controlToken: token });
+      const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), identity: { allowedUsers: [], insecureDev: true, controlToken: token } });
       const res = await request(app).post("/messages").set("Authorization", `Bearer ${token}`).send({ prompt: "hi" });
       expect(res.status).toBe(202);
     });
 
     it("leaves /healthz open even when a token is configured", async () => {
-      const app = createServer({ manager: fakeManager([]), controlToken: token });
+      const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true, controlToken: token } });
       const res = await request(app).get("/healthz");
       expect(res.status).toBe(200);
     });
   });
 
   describe("POST /files", () => {
-    function appWithWorkspace(extra?: { controlToken?: string }) {
+    function appWithWorkspace(identity?: { allowedUsers: string[]; insecureDev: boolean; controlToken?: string }) {
       const ws = mkdtempSync(join(tmpdir(), "rhumb-ws-"));
-      const app = createServer({ manager: fakeManager([]), workspace: ws, ...extra });
+      const app = createServer({ manager: fakeManager([]), workspace: ws, identity: identity ?? { allowedUsers: [], insecureDev: true } });
       return { app, ws };
     }
     const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
@@ -153,13 +154,13 @@ describe("agent-host server", () => {
     });
 
     it("is absent when no workspace is configured", async () => {
-      const app = createServer({ manager: fakeManager([]) });
+      const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true } });
       const res = await request(app).post("/files").send({ name: "a.txt", contentBase64: b64("x") });
       expect(res.status).toBe(404);
     });
 
     it("requires the control token when configured", async () => {
-      const { app } = appWithWorkspace({ controlToken: "sekrit" });
+      const { app } = appWithWorkspace({ allowedUsers: [], insecureDev: true, controlToken: "sekrit" });
       const denied = await request(app).post("/files").send({ name: "a.txt", contentBase64: b64("x") });
       expect(denied.status).toBe(401);
       const ok = await request(app)
@@ -170,12 +171,45 @@ describe("agent-host server", () => {
     });
 
     it("rejects an unauthenticated request with an invalid JSON body with 401, not 400", async () => {
-      const { app } = appWithWorkspace({ controlToken: "sekrit" });
+      const { app } = appWithWorkspace({ allowedUsers: [], insecureDev: true, controlToken: "sekrit" });
       const res = await request(app)
         .post("/files")
         .set("Content-Type", "application/json")
         .send("{not json");
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe("identity mode", () => {
+    const identity = { allowedUsers: ["op@example.com"], insecureDev: false };
+    const shellHeaders = { "Tailscale-User-Login": "op@example.com", "Sec-Rhumb-Control": "1" };
+
+    it("rejects POST /messages without an identity header", async () => {
+      const app = createServer({ manager: fakeManager([]), identity });
+      expect((await request(app).post("/messages").send({ prompt: "hi" })).status).toBe(403);
+    });
+
+    it("rejects an allowlisted identity without the shell header", async () => {
+      const app = createServer({ manager: fakeManager([]), identity });
+      const res = await request(app).post("/messages").set("Tailscale-User-Login", "op@example.com").send({ prompt: "hi" });
+      expect(res.status).toBe(403);
+    });
+
+    it("accepts an allowlisted identity with the shell header", async () => {
+      const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), identity });
+      const res = await request(app).post("/messages").set(shellHeaders).send({ prompt: "hi" });
+      expect(res.status).toBe(202);
+    });
+
+    it("leaves /healthz open with no headers", async () => {
+      const app = createServer({ manager: fakeManager([]), identity });
+      expect((await request(app).get("/healthz")).status).toBe(200);
+    });
+
+    it("normalizes the /agent serve mount prefix", async () => {
+      const app = createServer({ manager: fakeManager([{ type: "result", result: "ok", isError: false }]), identity });
+      expect((await request(app).get("/agent/healthz")).status).toBe(200);
+      expect((await request(app).post("/agent/messages").set(shellHeaders).send({ prompt: "hi" })).status).toBe(202);
     });
   });
 });

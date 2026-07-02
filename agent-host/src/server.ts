@@ -4,6 +4,13 @@ import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
+import { createIdentityGuard, requireShellHeader } from "./identity.js";
+
+export interface IdentityDeps {
+  allowedUsers: string[];
+  insecureDev: boolean;
+  controlToken?: string;
+}
 
 interface ManagerLike {
   run(
@@ -42,7 +49,7 @@ export function pruneSubscriber(
 export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
-  controlToken?: string;
+  identity: IdentityDeps;
   workspace?: string;
 }): Express {
   const app = express();
@@ -52,14 +59,33 @@ export function createServer(deps: {
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
 
-  // Liveness is unauthenticated; everything after this requires the control
-  // token (when one is configured). Routes mounted later on this app by index.ts
-  // (e.g. /infra) sit behind the guard too, since it is registered first.
+  // tailscale serve --set-path forwards the original URI, so requests routed
+  // through the /agent mount arrive as e.g. /agent/messages. Normalize before
+  // any route (including /healthz) sees them.
+  app.use((req, _res, next) => {
+    if (req.url === "/agent" || req.url.startsWith("/agent/")) {
+      req.url = req.url.slice("/agent".length) || "/";
+    }
+    next();
+  });
+
+  // Liveness is unauthenticated; everything after this requires identity
+  // (or the control token, in dev mode). Routes mounted later on this app by
+  // index.ts (e.g. /infra) sit behind the guard too, since it is registered first.
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
   });
 
-  app.use(createControlTokenGuard(deps.controlToken));
+  // Identity mode: every route below requires an allowlisted tailnet identity
+  // AND the shell header — the agent host has no surface-facing routes, so
+  // everything on it is operator-shell territory. Dev mode restores the old
+  // optional-control-token behavior exactly.
+  if (deps.identity.insecureDev) {
+    app.use(createControlTokenGuard(deps.identity.controlToken));
+  } else {
+    app.use(createIdentityGuard(deps.identity.allowedUsers));
+    app.use(requireShellHeader());
+  }
 
   app.use("/files", express.json({ limit: "30mb" }));
   app.use(express.json());
