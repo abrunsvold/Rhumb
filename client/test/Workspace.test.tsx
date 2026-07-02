@@ -38,4 +38,10 @@ describe("Workspace shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Connection" }));
     expect(screen.queryByText("http://a:8787")).toBeNull();
   });
+
+  it("opens with a draft chat tab ready to send", async () => {
+    setup();
+    expect(await screen.findByRole("tab", { name: /new session/i })).toBeTruthy();
+    expect(screen.getByRole("textbox")).toBeTruthy();
+  });
 });
