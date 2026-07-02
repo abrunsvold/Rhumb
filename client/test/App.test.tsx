@@ -44,6 +44,7 @@ describe("App", () => {
       dashboardPath: "/",
     });
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Connection" }));
     const btn = await screen.findByRole("button", { name: /disconnect/i });
     await userEvent.click(btn);
     expect(setConfig).toHaveBeenCalledWith({ baseUrl: "", agentPath: "/agent", dashboardPath: "/" });

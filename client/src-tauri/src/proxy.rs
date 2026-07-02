@@ -82,6 +82,7 @@ mod utf8_tests {
 #[derive(Default)]
 pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
+    pub session: Mutex<HashMap<String, CancellationToken>>,
     pub registry: Mutex<Option<CancellationToken>>,
     pub pending: Mutex<Option<CancellationToken>>,
     pub infra: Mutex<Option<CancellationToken>>,
@@ -337,6 +338,37 @@ pub async fn resolve_infra_pending(
 }
 
 #[tauri::command]
+pub async fn start_session_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, StreamState>,
+    agent_base: String,
+    session_id: String,
+    on_event: Channel<Value>,
+) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream", session_id))?;
+    let token = CancellationToken::new();
+    if let Some(old) = state.session.lock().unwrap().insert(session_id.clone(), token.clone()) {
+        old.cancel();
+    }
+    tokio::spawn(async move {
+        pump(url, bearer, on_event.clone(), token.clone()).await;
+        // The stream ended (network drop, host restart, or cancel). Tell the
+        // webview so it can retry; harmless if the channel is already gone.
+        if !token.is_cancelled() {
+            let _ = on_event.send(serde_json::json!({ "type": "stream_closed" }));
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_session_stream(state: tauri::State<'_, StreamState>, session_id: String) {
+    if let Some(tok) = state.session.lock().unwrap().remove(&session_id) {
+        tok.cancel();
+    }
+}
+
+#[tauri::command]
 pub async fn upload_file(
     app: tauri::AppHandle,
     agent_base: String,
@@ -360,4 +392,65 @@ pub async fn upload_file(
         .and_then(|p| p.as_str())
         .map(str::to_string)
         .ok_or_else(|| "agent host returned a malformed upload response".into())
+}
+
+#[tauri::command]
+pub async fn list_sessions(app: tauri::AppHandle, agent_base: String) -> Result<Value, String> {
+    let (url, bearer) = agent_target(&app, &agent_base, "/sessions")?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.get(&url), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_transcript(
+    app: tauri::AppHandle,
+    agent_base: String,
+    session_id: String,
+) -> Result<Value, String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/transcript", session_id))?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.get(&url), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_session(
+    app: tauri::AppHandle,
+    agent_base: String,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}", session_id))?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.patch(&url).json(&serde_json::json!({ "title": title })), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn archive_session(
+    app: tauri::AppHandle,
+    agent_base: String,
+    session_id: String,
+) -> Result<(), String> {
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/archive", session_id))?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.post(&url), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    Ok(())
 }

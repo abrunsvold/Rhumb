@@ -1,21 +1,17 @@
-import { useEffect, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { reduceRegistry, type Tab } from "../lib/registryStore";
-import { openRegistryStream } from "../lib/tauri";
+import type { Tab } from "../lib/registryStore";
 
-export function Canvas({ dashboardBase }: { dashboardBase: string }) {
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const stop = openRegistryStream(dashboardBase, (snap) => {
-      const next = reduceRegistry(snap);
-      setTabs(next);
-      setActiveId((cur) => cur ?? next[0]?.id ?? null);
-    });
-    return stop;
-  }, [dashboardBase]);
-
+export function Canvas({
+  dashboardBase,
+  tabs,
+  activeId,
+  onSelect,
+}: {
+  dashboardBase: string;
+  tabs: Tab[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+}) {
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeUrl = active ? `${dashboardBase}${active.url}` : null;
 
@@ -37,7 +33,7 @@ export function Canvas({ dashboardBase }: { dashboardBase: string }) {
             key={t.id}
             role="tab"
             aria-selected={t.id === activeId}
-            onClick={() => setActiveId(t.id)}
+            onClick={() => onSelect(t.id)}
             className={
               t.id === activeId
                 ? "shrink-0 rounded px-3 py-1 text-sm bg-raised text-ink border border-line"

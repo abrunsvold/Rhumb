@@ -1,11 +1,14 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join as joinPath, resolve as resolvePath } from "node:path";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { loadConfig, type Config } from "./config.js";
 import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
+import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient } from "./infra/proxmox.js";
@@ -97,9 +100,16 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
   });
+  const sessions = createSessionService({
+    indexPath: joinPath(deps.config.workspace, "sessions.json"),
+    projectsDir: joinPath(homedir(), ".claude", "projects"),
+    workspace: resolvePath(deps.config.workspace),
+    now: () => new Date().toISOString(),
+  });
   const app = createServer({
     manager,
     workspace: deps.config.workspace,
+    sessions,
     identity: {
       allowedUsers: deps.config.allowedUsers,
       insecureDev: deps.config.insecureDev,

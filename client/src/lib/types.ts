@@ -16,3 +16,12 @@ export interface RegistryEntry {
 export interface RegistrySnapshot {
   surfaces: RegistryEntry[];
 }
+
+export interface SessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastActiveAt: string;
+  preview: string;
+  archived: boolean;
+}

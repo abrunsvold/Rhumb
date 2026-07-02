@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { AgentEvent, RegistrySnapshot } from "./types";
+import type { AgentEvent, RegistrySnapshot, SessionMeta } from "./types";
+import type { TranscriptMessage } from "./agentEvents";
 
 export interface AppConfig {
   // Single tailscale-serve origin; per-host bases derive from the manifest paths.
@@ -129,4 +130,33 @@ export function openInfraPendingStream(agentBase: string, onPending: (e: unknown
 
 export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<void> {
   return invoke("resolve_infra_pending", { agentBase, pendingId, decision });
+}
+
+export async function listSessions(agentBase: string): Promise<SessionMeta[]> {
+  const r = await invoke<{ sessions: SessionMeta[] }>("list_sessions", { agentBase });
+  return r.sessions;
+}
+
+export async function getTranscript(agentBase: string, sessionId: string): Promise<TranscriptMessage[]> {
+  const r = await invoke<{ messages: TranscriptMessage[] }>("get_transcript", { agentBase, sessionId });
+  return r.messages;
+}
+
+export function renameSession(agentBase: string, sessionId: string, title: string): Promise<void> {
+  return invoke("rename_session", { agentBase, sessionId, title });
+}
+
+export function archiveSession(agentBase: string, sessionId: string): Promise<void> {
+  return invoke("archive_session", { agentBase, sessionId });
+}
+
+export function openSessionStream(
+  agentBase: string,
+  sessionId: string,
+  onEvent: (e: unknown) => void,
+): () => void {
+  const channel = new Channel<unknown>();
+  channel.onmessage = onEvent;
+  void invoke("start_session_stream", { agentBase, sessionId, onEvent: channel });
+  return () => void invoke("stop_session_stream", { sessionId });
 }

@@ -1,18 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RegistrySnapshot } from "../src/lib/types";
 import { Canvas } from "../src/components/Canvas";
 
-let capturedOnUpdate: ((s: RegistrySnapshot) => void) | null = null;
 const ctor = vi.fn();
 
-vi.mock("../src/lib/tauri", () => ({
-  openRegistryStream: vi.fn((_base: string, onUpdate: (s: RegistrySnapshot) => void) => {
-    capturedOnUpdate = onUpdate;
-    return () => {};
-  }),
-}));
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: class {
     constructor(label: string, opts: { url: string }) {
@@ -21,21 +13,20 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
   },
 }));
 
-function emitSnapshot(snapshot: RegistrySnapshot) {
-  capturedOnUpdate?.(snapshot);
-}
-
 describe("Canvas", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    capturedOnUpdate = null;
   });
 
   it("renders tabs from the registry stream and the active surface in an iframe", async () => {
-    render(<Canvas dashboardBase="http://d:8788" />);
-    capturedOnUpdate?.({
-      surfaces: [{ id: "demo", title: "Demo", url: "/surfaces/demo/", kind: "file", created: "t", updated: "t" }],
-    });
+    render(
+      <Canvas
+        dashboardBase="http://d:8788"
+        tabs={[{ id: "demo", title: "Demo", url: "/surfaces/demo/" }]}
+        activeId="demo"
+        onSelect={() => {}}
+      />,
+    );
     expect(await screen.findByRole("tab", { name: "Demo" })).toBeTruthy();
     const iframe = document.querySelector("iframe");
     expect(iframe?.getAttribute("src")).toBe("http://d:8788/surfaces/demo/");
@@ -48,29 +39,36 @@ describe("Canvas", () => {
   });
 
   it("detaches the active surface into a WebviewWindow", async () => {
-    render(<Canvas dashboardBase="http://d:8788" />);
-    capturedOnUpdate?.({
-      surfaces: [{ id: "demo", title: "Demo", url: "/surfaces/demo/", kind: "file", created: "t", updated: "t" }],
-    });
+    render(
+      <Canvas
+        dashboardBase="http://d:8788"
+        tabs={[{ id: "demo", title: "Demo", url: "/surfaces/demo/" }]}
+        activeId="demo"
+        onSelect={() => {}}
+      />,
+    );
     await screen.findByRole("tab", { name: "Demo" });
     await userEvent.click(screen.getByRole("button", { name: /detach/i }));
     expect(ctor).toHaveBeenCalledWith("surface:demo", expect.objectContaining({ url: "http://d:8788/surfaces/demo/" }));
   });
 
   it("shows an empty state when the registry has no surfaces", async () => {
-    render(<Canvas dashboardBase="http://d:8788" />);
-    emitSnapshot({ surfaces: [] });
+    render(<Canvas dashboardBase="http://d:8788" tabs={[]} activeId={null} onSelect={() => {}} />);
     expect(await screen.findByText(/no surfaces yet/i)).toBeTruthy();
   });
 
   it("marks the active tab with aria-selected", async () => {
-    render(<Canvas dashboardBase="http://d:8788" />);
-    emitSnapshot({
-      surfaces: [
-        { id: "s1", title: "Sales", url: "/surfaces/s1/", kind: "dashboard", created: "", updated: "" },
-        { id: "s2", title: "Ops", url: "/surfaces/s2/", kind: "dashboard", created: "", updated: "" },
-      ],
-    });
+    render(
+      <Canvas
+        dashboardBase="http://d:8788"
+        tabs={[
+          { id: "s1", title: "Sales", url: "/surfaces/s1/" },
+          { id: "s2", title: "Ops", url: "/surfaces/s2/" },
+        ]}
+        activeId="s1"
+        onSelect={() => {}}
+      />,
+    );
     const sales = await screen.findByRole("tab", { name: "Sales" });
     expect(sales.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Ops" }).getAttribute("aria-selected")).toBe("false");

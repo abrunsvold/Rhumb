@@ -5,6 +5,7 @@ import type { AgentEvent } from "../src/types.js";
 import { mkdtempSync, readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSessionService } from "../src/sessions.js";
 
 function fakeManager(script: AgentEvent[]) {
   return {
@@ -188,6 +189,87 @@ describe("agent-host server", () => {
         .set("Content-Type", "application/json")
         .send("{not json");
       expect(res.status).toBe(401);
+    });
+  });
+
+  function appWithSessions(
+    script: AgentEvent[] = [{ type: "session", sessionId: "s-1" }],
+    identity: { allowedUsers: string[]; insecureDev: boolean; controlToken?: string } = {
+      allowedUsers: [],
+      insecureDev: true,
+    },
+  ) {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-sessapp-"));
+    const sessions = createSessionService({
+      indexPath: join(dir, "sessions.json"),
+      projectsDir: join(dir, "projects"),
+      workspace: join(dir, "ws"),
+      now: () => "2026-07-02T00:00:00Z",
+    });
+    const app = createServer({ manager: fakeManager(script), sessions, identity });
+    return { app, sessions };
+  }
+
+  describe("session routes", () => {
+    it("indexes a session when a turn emits a session event", async () => {
+      const { app } = appWithSessions();
+      await request(app).post("/messages").send({ prompt: "hello world" });
+      const res = await request(app).get("/sessions");
+      expect(res.status).toBe(200);
+      expect(res.body.sessions).toHaveLength(1);
+      expect(res.body.sessions[0]).toMatchObject({ id: "s-1", title: "hello world" });
+    });
+
+    it("rename and archive round-trip through the routes", async () => {
+      const { app } = appWithSessions();
+      await request(app).post("/messages").send({ prompt: "hi" });
+      expect((await request(app).patch("/sessions/s-1").send({ title: "Renamed" })).status).toBe(204);
+      expect((await request(app).post("/sessions/s-1/archive")).status).toBe(204);
+      const dflt = await request(app).get("/sessions");
+      expect(dflt.body.sessions).toHaveLength(0);
+      const all = await request(app).get("/sessions?archived=1");
+      expect(all.body.sessions[0]).toMatchObject({ id: "s-1", title: "Renamed", archived: true });
+    });
+
+    it("validates ids and titles", async () => {
+      const { app } = appWithSessions();
+      expect((await request(app).get("/sessions/..%2Fetc/transcript")).status).toBe(400);
+      expect((await request(app).patch("/sessions/s-1").send({ title: "" })).status).toBe(400);
+      expect((await request(app).patch("/sessions/unknown").send({ title: "x" })).status).toBe(404);
+      expect((await request(app).post("/sessions/unknown/archive")).status).toBe(404);
+    });
+
+    it("transcript 404s when the session file is missing", async () => {
+      const { app } = appWithSessions();
+      await request(app).post("/messages").send({ prompt: "hi" });
+      expect((await request(app).get("/sessions/s-1/transcript")).status).toBe(404);
+    });
+
+    it("session routes require the control token in dev mode when configured", async () => {
+      const { app } = appWithSessions([], { allowedUsers: [], insecureDev: true, controlToken: "sekrit" });
+      expect((await request(app).get("/sessions")).status).toBe(401);
+      expect((await request(app).get("/sessions").set("Authorization", "Bearer sekrit")).status).toBe(200);
+    });
+
+    it("session routes require identity + shell header in identity mode", async () => {
+      const { app } = appWithSessions([], { allowedUsers: ["op@example.com"], insecureDev: false });
+      expect((await request(app).get("/sessions")).status).toBe(403);
+      expect(
+        (await request(app).get("/sessions").set("Tailscale-User-Login", "op@example.com")).status,
+      ).toBe(403);
+      expect(
+        (
+          await request(app)
+            .get("/sessions")
+            .set("Tailscale-User-Login", "op@example.com")
+            .set("Sec-Rhumb-Control", "1")
+        ).status,
+      ).toBe(200);
+    });
+
+    it("routes are absent when no session service is configured", async () => {
+      const app = createServer({ manager: fakeManager([]), identity: { allowedUsers: [], insecureDev: true } });
+      expect((await request(app).get("/sessions")).status).toBe(404);
     });
   });
 
