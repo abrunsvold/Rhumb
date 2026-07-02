@@ -168,7 +168,7 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 
 **Near-term priorities** — where the work points now that all seven subsystems ship:
 
-- **Harden for less-trusted networks.** Rhumb currently assumes a private tailnet. Tighten the agent-host permission model, the unauthenticated dashboard host, and workspace path handling so a mistake costs less.
+- **Harden for less-trusted networks.** Rhumb currently assumes a private tailnet. Tighten the agent-host permission model and workspace path handling so a mistake costs less — the hosts now authenticate against a Tailscale identity allowlist, but the model still assumes a single trusted operator.
 - **Smooth the on-ramp.** Setup is still homelab-grade. Better first-run docs, clearer defaults, and fewer manual steps between `clone` and a running tool.
 - **Dogfood real tools.** Build and run actual internal tools on Rhumb and let what breaks drive the roadmap — rather than adding subsystems for their own sake.
 - **Stability over surface area.** With the seven subsystems in place, the emphasis shifts from new capabilities to making the existing ones reliable and well-tested.
