@@ -19,3 +19,6 @@ workspace/
 *.pem
 id_ed25519*
 id_rsa*
+
+# Scratch workspace created by agent-host's index.smoke.test.ts (relative ./ws default)
+agent-host/ws/
