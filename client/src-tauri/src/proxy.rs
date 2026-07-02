@@ -398,10 +398,7 @@ pub async fn upload_file(
 pub async fn list_sessions(app: tauri::AppHandle, agent_base: String) -> Result<Value, String> {
     let (url, bearer) = agent_target(&app, &agent_base, "/sessions")?;
     let client = reqwest::Client::new();
-    let mut req = client.get(&url);
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.get(&url), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
@@ -417,10 +414,7 @@ pub async fn get_transcript(
 ) -> Result<Value, String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/transcript", session_id))?;
     let client = reqwest::Client::new();
-    let mut req = client.get(&url);
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.get(&url), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
@@ -437,10 +431,7 @@ pub async fn rename_session(
 ) -> Result<(), String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}", session_id))?;
     let client = reqwest::Client::new();
-    let mut req = client.patch(&url).json(&serde_json::json!({ "title": title }));
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.patch(&url).json(&serde_json::json!({ "title": title })), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
@@ -456,10 +447,7 @@ pub async fn archive_session(
 ) -> Result<(), String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/archive", session_id))?;
     let client = reqwest::Client::new();
-    let mut req = client.post(&url);
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.post(&url), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
