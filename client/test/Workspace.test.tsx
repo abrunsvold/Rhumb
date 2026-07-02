@@ -52,6 +52,14 @@ describe("Workspace shell", () => {
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Surfaces" }));
-    expect(screen.getByRole("button", { name: /sales/i })).toBeTruthy();
+    const salesButton = screen.getByRole("button", { name: /sales/i });
+    expect(salesButton).toBeTruthy();
+    expect(salesButton.getAttribute("aria-current")).toBe("true");
+  });
+
+  it("opens exactly one draft even if the mount effect double-fires", async () => {
+    setup();
+    const tabs = await screen.findAllByRole("tab", { name: /new session/i });
+    expect(tabs).toHaveLength(1);
   });
 });

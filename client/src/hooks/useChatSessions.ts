@@ -112,6 +112,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     const timer = retryTimers.current.get(key);
     if (timer) clearTimeout(timer);
     retryTimers.current.delete(key);
+    retryCount.current.delete(key);
     for (const [turnId, k] of turnKey.current.entries()) {
       if (k === key) {
         turnStops.current.get(turnId)?.();

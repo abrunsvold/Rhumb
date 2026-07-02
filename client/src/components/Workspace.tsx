@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Canvas } from "./Canvas";
 import { Rail, type RailSection } from "./Rail";
 import { GearPanel } from "./GearPanel";
@@ -25,8 +25,12 @@ export function Workspace({
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
 
+  const draftOpened = useRef(false);
   useEffect(() => {
-    if (chat.store.tabs.length === 0) chat.newDraft();
+    if (!draftOpened.current && chat.store.tabs.length === 0) {
+      draftOpened.current = true;
+      chat.newDraft();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

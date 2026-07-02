@@ -17,6 +17,7 @@ export function SurfacesPanel({
           <li key={t.id}>
             <button
               onClick={() => onSelect(t.id)}
+              aria-current={t.id === activeId ? "true" : undefined}
               className={
                 t.id === activeId
                   ? "w-full rounded bg-raised px-2 py-1.5 text-left text-sm text-ink border border-line"

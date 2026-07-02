@@ -73,4 +73,21 @@ describe("SessionsPanel", () => {
     expect(screen.getByLabelText("s1 running")).toBeTruthy();
     expect(screen.getByLabelText("s2 unread")).toBeTruthy();
   });
+
+  it("shows an inline error when the list fetch fails and clears it on recovery", async () => {
+    (listSessions as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("403"));
+    setup();
+    expect(await screen.findByText(/couldn't load sessions/i)).toBeTruthy();
+  });
+
+  it("refetches when the running-tab count drops", async () => {
+    const { rerender } = render(
+      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 1, unread: false }]} onOpen={vi.fn()} onNew={vi.fn()} />,
+    );
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+    rerender(
+      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 0, unread: false }]} onOpen={vi.fn()} onNew={vi.fn()} />,
+    );
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+  });
 });
