@@ -95,7 +95,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
   });
-  const app = createServer({ manager, controlToken: deps.config.controlToken });
+  const app = createServer({ manager, controlToken: deps.config.controlToken, workspace: deps.config.workspace });
 
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));

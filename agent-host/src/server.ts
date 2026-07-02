@@ -1,4 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
+import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
@@ -41,8 +43,10 @@ export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
   controlToken?: string;
+  workspace?: string;
 }): Express {
   const app = express();
+  app.use("/files", express.json({ limit: "30mb" }));
   app.use(express.json());
 
   // session id -> SSE responses ("" is the pending bucket for new sessions).
@@ -108,6 +112,38 @@ export function createServer(deps: {
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });
   });
+
+  const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+  if (deps.workspace) {
+    const workspace = deps.workspace;
+    app.post("/files", (req: Request, res: Response) => {
+      const { name, contentBase64 } = req.body ?? {};
+      if (typeof name !== "string" || typeof contentBase64 !== "string") {
+        res.status(400).json({ error: "name and contentBase64 are required" });
+        return;
+      }
+      // Basenames only: no separators, no traversal, no dotfiles.
+      if (name.length === 0 || name.includes("/") || name.includes("\\") || name.startsWith(".")) {
+        res.status(400).json({ error: "invalid file name" });
+        return;
+      }
+      const bytes = Buffer.from(contentBase64, "base64");
+      if (bytes.length > MAX_UPLOAD_BYTES) {
+        res.status(413).json({ error: "file exceeds 20MB limit" });
+        return;
+      }
+      const dir = join(workspace, "uploads");
+      mkdirSync(dir, { recursive: true });
+      const { name: stem, ext } = parsePath(name);
+      let stored = name;
+      for (let n = 2; existsSync(join(dir, stored)); n++) {
+        stored = `${stem}-${n}${ext}`;
+      }
+      writeFileSync(join(dir, stored), bytes);
+      res.json({ path: `uploads/${stored}` });
+    });
+  }
 
   return app;
 }
