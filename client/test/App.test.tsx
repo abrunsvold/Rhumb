@@ -33,6 +33,7 @@ describe("App", () => {
       dashboardBase: "http://d:8788",
     });
     render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Connection" }));
     const btn = await screen.findByRole("button", { name: /disconnect/i });
     await userEvent.click(btn);
     expect(setConfig).toHaveBeenCalledWith({ agentBase: "", dashboardBase: "" });
