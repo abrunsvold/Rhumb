@@ -5,6 +5,8 @@ export interface StagedFile {
   contentBase64: string;
 }
 
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -27,6 +29,7 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [sending, setSending] = useState(false);
+  const [stageError, setStageError] = useState<string | null>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
   // Popup only while typing the leading command token: "/co", not "/compact now".
@@ -43,6 +46,7 @@ export function Composer({
       if (ok) {
         setDraft("");
         setFiles([]);
+        setStageError(null);
       }
     } finally {
       setSending(false);
@@ -50,10 +54,21 @@ export function Composer({
   }
 
   async function stage(list: FileList | File[]) {
-    const staged = await Promise.all(
-      Array.from(list).map(async (f) => ({ name: f.name, contentBase64: await fileToBase64(f) })),
-    );
-    setFiles((prev) => [...prev, ...staged]);
+    const accepted: StagedFile[] = [];
+    const problems: string[] = [];
+    for (const f of Array.from(list)) {
+      if (f.size > MAX_UPLOAD_BYTES) {
+        problems.push(`${f.name} is over the 20 MB limit`);
+        continue;
+      }
+      try {
+        accepted.push({ name: f.name, contentBase64: await fileToBase64(f) });
+      } catch {
+        problems.push(`${f.name} could not be read`);
+      }
+    }
+    if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
+    setStageError(problems.length > 0 ? problems.join("; ") : null);
   }
 
   function pick(cmd: string) {
@@ -102,6 +117,7 @@ export function Composer({
           ))}
         </ul>
       )}
+      {stageError && <p className="text-xs text-danger">{stageError}</p>}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {files.map((f) => (
@@ -146,7 +162,7 @@ export function Composer({
           disabled={sending || (draft.trim().length === 0 && files.length === 0)}
           className="rounded bg-accent px-3 py-1.5 font-medium text-white disabled:opacity-40"
         >
-          Send
+          {sending ? "Sending…" : "Send"}
         </button>
       </div>
     </div>

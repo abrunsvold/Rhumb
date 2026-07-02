@@ -26,7 +26,16 @@ function Message({ m }: { m: TranscriptMessage }) {
       return (
         <div data-kind="user" className="self-end max-w-[85%] rounded-lg bg-accent-soft border border-line px-3 py-2 whitespace-pre-wrap">
           {m.text.startsWith("/") ? (
-            <span className="font-mono text-accent">{m.text}</span>
+            (() => {
+              const space = m.text.indexOf(" ");
+              const cmd = space === -1 ? m.text : m.text.slice(0, space);
+              return (
+                <>
+                  <span className="font-mono text-accent">{cmd}</span>
+                  {space === -1 ? "" : m.text.slice(space)}
+                </>
+              );
+            })()
           ) : (
             m.text
           )}

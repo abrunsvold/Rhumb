@@ -43,4 +43,12 @@ describe("Transcript", () => {
     render(<Transcript messages={[]} busy={true} />);
     expect(screen.getByText(/thinking/i)).toBeTruthy();
   });
+
+  it("mono-styles only the leading slash-command token of a user message", () => {
+    render(<Transcript messages={[{ kind: "user", text: "/compact then summarize" }]} busy={false} />);
+    const cmd = screen.getByText("/compact");
+    expect(cmd.className).toMatch(/font-mono/);
+    const bubble = cmd.closest("[data-kind='user']")!;
+    expect(bubble.textContent).toBe("/compact then summarize");
+  });
 });
