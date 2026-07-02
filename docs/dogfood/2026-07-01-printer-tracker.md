@@ -8,14 +8,14 @@ Two Creality **K2 Plus** printers on the LAN, running Klipper + Moonraker:
 
 | Printer | Moonraker | Hostname |
 |---|---|---|
-| Left | `http://192.168.1.53:7125` | `K2Plus-FE91` |
-| Right | `http://192.168.1.62:7125` | `K2Plus-Right` |
+| Left | `http://<printer-1-ip>:7125` | `printer-1` |
+| Right | `http://<printer-2-ip>:7125` | `printer-2` |
 
 Moonraker `/printer/objects/query` returns `print_stats` (filename, state, print/total duration, filament_used, info.current/total_layer, z_pos), `heater_bed` + `extruder` (temp/target/power), `display_status.progress`, `virtual_sdcard` (progress, is_active, layer, layer_count).
 
 ## Setup reality (pre-run findings)
 
-The previous staged deploy on MicroPX was **wiped** (no `/root/rhumb*`, no systemd units, no Node). A live run required a **full redeploy from repo**: install Node 20, build both hosts, regenerate secrets (control token, PVE token secret — the old one died with the env, deploy keypair, OAuth token), expose Postgres (survived inside LXC 102), and re-point everything. Memory corrected.
+The previous staged deploy on the Proxmox host was **wiped** (no `/root/rhumb*`, no systemd units, no Node). A live run required a **full redeploy from repo**: install Node 20, build both hosts, regenerate secrets (control token, PVE token secret — the old one died with the env, deploy keypair, OAuth token), expose Postgres (survived inside LXC 102), and re-point everything. Memory corrected.
 
 > **Roadmap signal (on-ramp):** a live run after any env loss is a multi-step manual redeploy. A single `deploy.sh` / documented runbook that installs Node, builds, templates the env (prompting for the OAuth token), and writes the systemd units would turn ~15 manual steps into one. Directly serves the "Smooth the on-ramp" goal.
 
@@ -49,7 +49,7 @@ The agent smoke-tested the poller **on the host** (Node present) and saw it work
 Despite F4, the agent **recovered autonomously**: it SSH'd into LXC 105 with the deploy key, spent several minutes working through apt/dpkg, installed **Node 18**, and the `Restart=always` unit picked the poller up. Verified ground truth ~90 min in:
 
 - **542 telemetry samples and climbing**, both printers, live data (bed ~23.8 °C / nozzle ~24.9 °C, `standby`), 0 open jobs (correct — both idle).
-- Poller health `{"ok":true, printers:[K2Plus-FE91, K2Plus-Right], lastTick:…}`; `services.json` → `healthy`.
+- Poller health `{"ok":true, printers:[printer-1, printer-2], lastTick:…}`; `services.json` → `healthy`.
 - Surface `http://<host>:8788/surfaces/printer-tracker/` → HTTP 200, queries DB via the token-auth `/data` API, 5s auto-refresh.
 - Ontology: `datasource-printers`, `service-printer-poller`, `container-105`, `dashboard-printer-tracker` — all linked and traversable.
 
@@ -70,8 +70,8 @@ The Tauri desktop client (`client/`) compiled cleanly on macOS (first Rust build
 - Agent-host suite **98/98** (was 78; +20 new tests), build clean, redeployed to the box and boots; existing `printer-poller` unaffected (no runtime field → old behavior).
 
 ### F6 — fresh spawned containers have broken DNS (Tailscale MagicDNS, no tailscaled) *(BLOCKER for any remote install)*
-Surfaced while **live-verifying the F4/F3 fix.** A freshly-spawned LXC inherits `/etc/resolv.conf` = `nameserver 100.100.100.100` + search `*.ts.net` (Tailscale MagicDNS, from the tailnet-connected PVE host) but runs no `tailscaled` → **all DNS resolution fails**. `apt-get install` hangs forever in its download method with zero bytes fetched (0 debs, no established connections). The LAN gateway `192.168.1.1:53` *is* reachable, so it's purely a resolver-config problem. Writing `nameserver 192.168.1.1` into the container instantly recovered apt (debs 0 → 428). The original poller only worked because the agent hand-installed Node at a moment DNS happened to resolve.
-**Action:** `LxcClient.create` (or the deploy preamble) must set a working nameserver — e.g. `pct set <id> --nameserver 192.168.1.1` / a public resolver, or write `resolv.conf` before the runtime install. Without this, the F4 runtime install (or any `apt`/`npm` fetch) can't work. Pairs with F4 — a spawned service isn't self-sufficient until it has both a runtime *and* DNS.
+Surfaced while **live-verifying the F4/F3 fix.** A freshly-spawned LXC inherits `/etc/resolv.conf` = `nameserver 100.100.100.100` + search `*.ts.net` (Tailscale MagicDNS, from the tailnet-connected PVE host) but runs no `tailscaled` → **all DNS resolution fails**. `apt-get install` hangs forever in its download method with zero bytes fetched (0 debs, no established connections). The LAN gateway `<lan-gateway-ip>:53` *is* reachable, so it's purely a resolver-config problem. Writing `nameserver <lan-gateway-ip>` into the container instantly recovered apt (debs 0 → 428). The original poller only worked because the agent hand-installed Node at a moment DNS happened to resolve.
+**Action:** `LxcClient.create` (or the deploy preamble) must set a working nameserver — e.g. `pct set <id> --nameserver <lan-gateway-ip>` / a public resolver, or write `resolv.conf` before the runtime install. Without this, the F4 runtime install (or any `apt`/`npm` fetch) can't work. Pairs with F4 — a spawned service isn't self-sufficient until it has both a runtime *and* DNS.
 
 **Capstone verification — FAILED (and that's the finding).** Unit tests pass (98/98) and the new code path demonstrably *runs* (the deployer executed the runtime-install + env-injection in a fresh container). But the live re-spawn **could not complete**: F6 (DNS) hung `apt` indefinitely; after a manual `resolv.conf` fix `apt` reached 428 debs, but the whole thing was so slow/fragile on a 1-core/512 MB container that the spawn eventually errored and **rolled back (container destroyed, poller left down)**. So the fix as written is **necessary but not sufficient**. Two concrete gaps it exposed:
 - **F6 must be fixed in code** — set a working nameserver on LXC create (the first-build agent even installed a persistent `rhumb-dns-fix.service`; see the service's `SETUP.md`). Without DNS, no `apt`/`npm` fetch works.
@@ -87,12 +87,12 @@ Test-first in `agent-host/src/services/`:
 - Suite **103/103** (was 98, +5), build clean, redeployed and boots.
 
 **Capstone re-run — PASSED, ground-truth verified** (destroyed nothing this time; spawned `printer-poller` fresh with `config.json`/`node_modules` still stripped from the earlier test):
-- Registered `healthy` in ~30s (vs. the ~10min stall/failure of v1) — new container `105` @ `192.168.1.95`.
+- Registered `healthy` in ~30s (vs. the ~10min stall/failure of v1) — new container `105` @ `<container-ip>`.
 - `/etc/resolv.conf` in the container → `nameserver 1.1.1.1` (F6 fix applied by the platform).
 - `node -v` → `v18.19.1`; `dpkg -l` confirms both `nodejs` and `npm` packages installed **by the deployer** (package.json present, nothing vendored, so the npm branch correctly engaged).
 - `config.json` absent (never restored) → `Environment=DATABASE_URL=…` and `RHUMB_DATASOURCE_PRINTERS=…` present in the systemd unit — proves the connection came from **injected env**, not a baked file.
 - `node_modules/pg*` present — proves the remote `npm ci` ran.
-- Poller health: `{"ok":true,"printers":["K2Plus-FE91","K2Plus-Right"]}`; telemetry climbing (810+, fresh timestamps); surface `HTTP 200`; both printer rows present.
+- Poller health: `{"ok":true,"printers":["printer-1","printer-2"]}`; telemetry climbing (810+, fresh timestamps); surface `HTTP 200`; both printer rows present.
 
 **Verdict:** F4, F3, and F6 are now fixed, unit-tested, and **proven live** — a service declaring `runtime: node` + `dataSources` can be spawned into a bare LXC template completely hands-off (no manual DNS fix, no manual Node install, no vendored deps required). This closes the loop the dogfood run opened: build → break → fix → re-verify live, twice, until it actually held up.
 
