@@ -133,6 +133,7 @@ describe("agent-host server", () => {
       const res = await request(app).post("/files").send({ name: "r.txt", contentBase64: b64("two") });
       expect(res.body).toEqual({ path: "uploads/r-2.txt" });
       expect(readFileSyncFs(join(ws, "uploads", "r-2.txt"), "utf8")).toBe("two");
+      expect(readFileSyncFs(join(ws, "uploads", "r.txt"), "utf8")).toBe("one");
     });
 
     it("rejects traversal-shaped and missing names with 400", async () => {

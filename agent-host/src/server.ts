@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response } from "express";
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent } from "./sse.js";
@@ -137,10 +137,17 @@ export function createServer(deps: {
       mkdirSync(dir, { recursive: true });
       const { name: stem, ext } = parsePath(name);
       let stored = name;
-      for (let n = 2; existsSync(join(dir, stored)); n++) {
-        stored = `${stem}-${n}${ext}`;
+      for (let n = 2; ; n++) {
+        try {
+          // "wx" = exclusive create: fails with EEXIST instead of overwriting,
+          // so concurrent uploads of the same name cannot clobber each other.
+          writeFileSync(join(dir, stored), bytes, { flag: "wx" });
+          break;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+          stored = `${stem}-${n}${ext}`;
+        }
       }
-      writeFileSync(join(dir, stored), bytes);
       res.json({ path: `uploads/${stored}` });
     });
   }
