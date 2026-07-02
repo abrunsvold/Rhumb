@@ -44,12 +44,17 @@ function extractFromRaw(message: unknown): TranscriptMessage[] {
 
 export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
   switch (event.type) {
-    case "session":
+    case "session": {
+      // The Agent SDK reports command names without the leading slash
+      // ("compact", not "/compact"); the composer matches against a
+      // slash-prefixed draft, so normalize here at ingestion.
+      const cmds = event.slashCommands?.map((c) => (c.startsWith("/") ? c : `/${c}`));
       return {
         ...state,
         sessionId: event.sessionId,
-        slashCommands: event.slashCommands ?? state.slashCommands,
+        slashCommands: cmds ?? state.slashCommands,
       };
+    }
     case "result":
       return {
         ...state,

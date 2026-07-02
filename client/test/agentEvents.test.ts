@@ -81,4 +81,13 @@ describe("user messages and slash commands", () => {
     s = reduceAgent(s, { type: "session", sessionId: "s1" });
     expect(s.slashCommands).toEqual(["/compact"]);
   });
+
+  it("normalizes SDK-style unprefixed command names to /-prefixed", () => {
+    const s = reduceAgent(initialAgentState, {
+      type: "session",
+      sessionId: "s1",
+      slashCommands: ["compact", "cost", "/review"],
+    });
+    expect(s.slashCommands).toEqual(["/compact", "/cost", "/review"]);
+  });
 });
