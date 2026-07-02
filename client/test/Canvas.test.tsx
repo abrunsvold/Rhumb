@@ -21,6 +21,10 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
   },
 }));
 
+function emitSnapshot(snapshot: RegistrySnapshot) {
+  capturedOnUpdate?.(snapshot);
+}
+
 describe("Canvas", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,7 +36,7 @@ describe("Canvas", () => {
     capturedOnUpdate?.({
       surfaces: [{ id: "demo", title: "Demo", url: "/surfaces/demo/", kind: "file", created: "t", updated: "t" }],
     });
-    expect(await screen.findByRole("button", { name: "Demo" })).toBeTruthy();
+    expect(await screen.findByRole("tab", { name: "Demo" })).toBeTruthy();
     const iframe = document.querySelector("iframe");
     expect(iframe?.getAttribute("src")).toBe("http://d:8788/surfaces/demo/");
     // The surface iframe runs with `allow-scripts allow-same-origin`. This is
@@ -48,8 +52,27 @@ describe("Canvas", () => {
     capturedOnUpdate?.({
       surfaces: [{ id: "demo", title: "Demo", url: "/surfaces/demo/", kind: "file", created: "t", updated: "t" }],
     });
-    await screen.findByRole("button", { name: "Demo" });
+    await screen.findByRole("tab", { name: "Demo" });
     await userEvent.click(screen.getByRole("button", { name: /detach/i }));
     expect(ctor).toHaveBeenCalledWith("surface:demo", expect.objectContaining({ url: "http://d:8788/surfaces/demo/" }));
+  });
+
+  it("shows an empty state when the registry has no surfaces", async () => {
+    render(<Canvas dashboardBase="http://d:8788" />);
+    emitSnapshot({ surfaces: [] });
+    expect(await screen.findByText(/no surfaces yet/i)).toBeTruthy();
+  });
+
+  it("marks the active tab with aria-selected", async () => {
+    render(<Canvas dashboardBase="http://d:8788" />);
+    emitSnapshot({
+      surfaces: [
+        { id: "s1", title: "Sales", url: "/surfaces/s1/", kind: "dashboard", created: "", updated: "" },
+        { id: "s2", title: "Ops", url: "/surfaces/s2/", kind: "dashboard", created: "", updated: "" },
+      ],
+    });
+    const sales = await screen.findByRole("tab", { name: "Sales" });
+    expect(sales.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Ops" }).getAttribute("aria-selected")).toBe("false");
   });
 });
