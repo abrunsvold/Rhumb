@@ -98,8 +98,14 @@ fn agent_target(
     suffix: &str,
 ) -> Result<(String, Option<String>), String> {
     let cfg = crate::load_config(app);
-    let base = cfg.agent_base.trim_end_matches('/');
-    if base.is_empty() || passed.trim_end_matches('/') != base {
+    // Check unconfigured state on base_url itself: agent_base() is never empty
+    // (an empty origin still derives "/agent"), so testing the derived value
+    // would let a relative URL through to an opaque reqwest parse error.
+    if cfg.base_url.is_empty() {
+        return Err("no host configured — connect first".into());
+    }
+    let base = cfg.agent_base();
+    if passed.trim_end_matches('/') != base {
         return Err("agent base does not match the configured host".into());
     }
     Ok((format!("{}{}", base, suffix), cfg.control_token))
@@ -111,19 +117,30 @@ fn dashboard_target(
     suffix: &str,
 ) -> Result<(String, Option<String>), String> {
     let cfg = crate::load_config(app);
-    let base = cfg.dashboard_base.trim_end_matches('/');
-    if base.is_empty() || passed.trim_end_matches('/') != base {
+    if cfg.base_url.is_empty() {
+        return Err("no host configured — connect first".into());
+    }
+    let base = cfg.dashboard_base();
+    if passed.trim_end_matches('/') != base {
         return Err("dashboard base does not match the configured host".into());
     }
     Ok((format!("{}{}", base, suffix), cfg.control_token))
 }
 
-async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, token: CancellationToken) {
-    let client = reqwest::Client::new();
-    let mut req = client.get(&url);
-    if let Some(t) = &bearer {
+// Identity-mode hosts require Sec-Rhumb-Control on shell-only routes; browsers
+// forbid page JS from sending Sec-* headers, so only this proxy can. Sent on
+// every request for uniformity. The bearer token applies in dev mode only.
+fn shell_request(mut req: reqwest::RequestBuilder, bearer: &Option<String>) -> reqwest::RequestBuilder {
+    req = req.header("Sec-Rhumb-Control", "1");
+    if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
+    req
+}
+
+async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, token: CancellationToken) {
+    let client = reqwest::Client::new();
+    let req = shell_request(client.get(&url), &bearer);
     let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => return,
@@ -165,10 +182,7 @@ pub async fn send_message(
         body["sessionId"] = Value::String(sid);
     }
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&body);
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.post(&url).json(&body), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
@@ -204,10 +218,7 @@ pub fn stop_agent_stream(state: tauri::State<'_, StreamState>, turn_id: String) 
 pub async fn get_registry(app: tauri::AppHandle, dashboard_base: String) -> Result<Value, String> {
     let (url, bearer) = dashboard_target(&app, &dashboard_base, "/registry")?;
     let client = reqwest::Client::new();
-    let mut req = client.get(&url);
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.get(&url), &bearer);
     req.send()
         .await
         .map_err(|e| e.to_string())?
@@ -272,12 +283,12 @@ pub async fn resolve_pending(
 ) -> Result<(), String> {
     let (url, bearer) = dashboard_target(&app, &dashboard_base, &format!("/data/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
-    let mut req = client
-        .post(&url)
-        .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface }));
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(
+        client
+            .post(&url)
+            .json(&serde_json::json!({ "decision": decision, "trustSurface": trust_surface })),
+        &bearer,
+    );
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("dashboard host returned {}", resp.status()));
@@ -317,10 +328,7 @@ pub async fn resolve_infra_pending(
 ) -> Result<(), String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/infra/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&serde_json::json!({ "decision": decision }));
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(client.post(&url).json(&serde_json::json!({ "decision": decision })), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
@@ -337,12 +345,12 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     let (url, bearer) = agent_target(&app, &agent_base, "/files")?;
     let client = reqwest::Client::new();
-    let mut req = client
-        .post(&url)
-        .json(&serde_json::json!({ "name": name, "contentBase64": content_base64 }));
-    if let Some(t) = &bearer {
-        req = req.bearer_auth(t);
-    }
+    let req = shell_request(
+        client
+            .post(&url)
+            .json(&serde_json::json!({ "name": name, "contentBase64": content_base64 })),
+        &bearer,
+    );
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));

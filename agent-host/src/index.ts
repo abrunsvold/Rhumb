@@ -97,7 +97,15 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
   });
-  const app = createServer({ manager, controlToken: deps.config.controlToken, workspace: deps.config.workspace });
+  const app = createServer({
+    manager,
+    workspace: deps.config.workspace,
+    identity: {
+      allowedUsers: deps.config.allowedUsers,
+      insecureDev: deps.config.insecureDev,
+      controlToken: deps.config.controlToken,
+    },
+  });
 
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
@@ -119,17 +127,27 @@ export function main(): void {
   // present (loadConfig requires it), so no extra wiring is needed here.
   mkdirSync(config.workspace, { recursive: true });
   const app = buildApp({ config, query: realQuery });
-  app.listen(config.port, () => {
-    console.log(`rhumb agent-host listening on :${config.port} (model ${config.model})`);
-    if (!config.controlToken) {
+  const onListen = () => {
+    const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
+    console.log(`rhumb agent-host listening on ${bound}:${config.port} (model ${config.model})`);
+    if (config.insecureDev) {
       console.warn(
-        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the control plane " +
-          "(/messages, /infra) is UNAUTHENTICATED. Any device that can reach this " +
-          "port can drive the agent and approve infrastructure actions. Set a token " +
-          "and keep this host on your tailnet only.",
+        "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
+          "host binds all interfaces. Control-token auth applies only if " +
+          "RHUMB_CONTROL_TOKEN is set. Never run this mode outside local development.",
+      );
+    } else {
+      console.log(
+        `[rhumb] identity mode: loopback-only, ${config.allowedUsers.length} allowed user(s); ` +
+          "reachable via tailscale serve at /agent",
       );
     }
-  });
+  };
+  // Dev mode binds the unspecified address (dual-stack, matching pre-identity
+  // behavior so ::1 localhost clients keep working); identity mode pins
+  // loopback so tailscale serve is the only network path in.
+  if (config.insecureDev) app.listen(config.port, onListen);
+  else app.listen(config.port, "127.0.0.1", onListen);
 }
 
 // Run only when executed directly, not when imported by tests.

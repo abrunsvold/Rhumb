@@ -39,6 +39,8 @@ function app(snap: RegistrySnapshot = snapshot) {
     getSnapshot: () => snap,
     workspace,
     subscribers: new Set<Response>(),
+    identity: { allowedUsers: [], insecureDev: true },
+    version: "0.0.0",
   });
 }
 
@@ -121,6 +123,8 @@ describe("dashboard-host server", () => {
       workspace,
       subscribers: new Set(),
       appOrigins: ["tauri://localhost"],
+      identity: { allowedUsers: [], insecureDev: true },
+      version: "0.0.0",
     });
     const res = await request(srv).get("/surfaces/d1/");
     expect(res.status).toBe(200);
@@ -138,6 +142,8 @@ describe("dashboard-host server", () => {
       workspace,
       subscribers: new Set(),
       appOrigins: ["tauri://localhost"],
+      identity: { allowedUsers: [], insecureDev: true },
+      version: "0.0.0",
     });
     const res = await request(srv).get("/surfaces/d2/app.js");
     expect(res.status).toBe(200);

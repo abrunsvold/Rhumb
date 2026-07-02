@@ -24,11 +24,16 @@ Rhumb is a **self-hosted personal tool**, and its security model assumes a
 **single trusted operator on a private [Tailscale](https://tailscale.com)
 tailnet**. Several design choices only hold under that assumption:
 
-- **The hosts are unauthenticated.** The agent host (`/messages`, `/infra/*`)
-  and the dashboard host (`/data/*`, `/services/*`, `/registry`) do not
-  authenticate callers. Anyone who can reach the ports can drive the agent,
-  approve gated infrastructure actions, and read/write data. **Expose these
-  services only over your tailnet — never on a public or LAN-facing interface.**
+- **Hosts authenticate every request against a Tailscale identity allowlist.**
+  In the default (identity) mode both hosts bind loopback only and are fronted
+  by `tailscale serve`, which terminates TLS and injects an unforgeable
+  `Tailscale-User-Login` header (serve strips any caller-supplied
+  `Tailscale-*` headers). Requests from logins not in `RHUMB_ALLOWED_USERS`
+  are rejected; hosts refuse to start with an empty allowlist. Processes
+  already running on the box can reach loopback directly and are inside the
+  trust boundary — unchanged from before, since they already have workspace
+  and credential access. `RHUMB_INSECURE_DEV=1` disables all of this for
+  local development only.
 - **The agent runs autonomously with Bash and Write access.** `RHUMB_PERMISSION_MODE`
   controls gating; `bypassPermissions` removes it entirely. Only use
   `bypassPermissions` in a fully trusted, isolated environment.
@@ -45,38 +50,43 @@ operational security and compliance model.
 
 ### Surface data authorization
 
-Surfaces authenticate to the data endpoint (`/data/*`) with a **per-surface
-capability token** that the dashboard injects into each surface's served HTML;
-the token — not the `Referer` header — identifies the calling surface and gates
-read/write access. Because surfaces are served openly on the tailnet, this is not
-perfectly unforgeable: **an attacker who can `GET` a specific surface can scrape
-that surface's token and act as that surface.** That is inherent to serving
-surfaces on an unauthenticated host, and it is the accepted limit. The dangerous
-*actions* — approving pending writes and infrastructure operations — remain gated
-by the separate control token (`RHUMB_CONTROL_TOKEN`), which is never served to a
-surface.
+Serving a surface at all now requires an allowlisted tailnet identity, so the
+per-surface token can no longer be scraped by arbitrary tailnet devices. The
+token still identifies *which* surface is calling `/data/*` (scoping + audit).
+The dangerous *actions* — approving pending writes and infrastructure
+operations — additionally require the `Sec-Rhumb-Control: 1` request header.
+Browsers forbid page JavaScript from setting `Sec-*` headers, so agent-built
+surface content cannot present it; only the desktop client's Rust proxy does.
+This replaces the optional `RHUMB_CONTROL_TOKEN` as the shell/surface
+boundary (the token now applies only in `RHUMB_INSECURE_DEV=1` mode).
 
 ### Desktop client webview posture
 
-The macOS client ships an App Transport Security exception scoped to web
-content (`NSAllowsArbitraryLoadsInWebContent` in `client/src-tauri/Info.plist`)
-so the webview can frame surfaces served over plain HTTP on the tailnet — the
-same threat model as above; the app shell itself still loads only bundled
-assets. With ATS relaxed, the controls on framed surface content are the
-shell's CSP, the iframe `sandbox` attribute, and Tauri's capability scoping:
-the only capability (`client/src-tauri/capabilities/default.json`) is bound to
+The macOS client no longer ships an App Transport Security exception for web
+content: in identity mode, both hosts sit behind `tailscale serve`, so the
+webview frames surfaces over real tailnet HTTPS rather than plain HTTP, and
+the `NSAllowsArbitraryLoadsInWebContent` entry has been removed from
+`client/src-tauri/Info.plist`. The app shell itself still loads only bundled
+assets. The controls on framed surface content are the shell's CSP, the
+iframe `sandbox` attribute, and Tauri's capability scoping: the only
+capability (`client/src-tauri/capabilities/default.json`) is bound to
 `"windows": ["main"]`, so sandboxed iframes and detached `surface:*` windows
 get no Tauri IPC — including the `create-webview-window` permission the main
 window uses for Detach. Do not add a capability whose `windows` matches
 `surface:*`, and re-verify the iframe/IPC origin separation before shipping a
 Linux build (WebKitGTK cannot always distinguish iframe IPC from top-window
-IPC).
+IPC). `RHUMB_INSECURE_DEV=1` still serves over plain HTTP for local
+development; do not run that mode on a box reachable by anyone else.
 
 ### Known hardening gaps
 
 Rhumb is **not yet hardened for hostile networks**. Remaining gaps we are tracking
 (all mitigated in practice by the tailnet-only, single-operator assumption above)
-include: the control plane is authenticated only when `RHUMB_CONTROL_TOKEN` is
-set, and surface isolation relies on the browser/webview origin plus the
-per-surface token described above. Do not deploy Rhumb anywhere the tailnet-only
-assumption does not hold.
+include: identity is per-*device*, not per-request-origin within that device, so
+any process on an allowlisted operator's machine — including a rogue browser tab
+or a compromised local app — can reach the hosts with that operator's identity;
+`RHUMB_ALLOWED_USERS` is a flat allowlist with no role separation, so every
+allowlisted login has full operator privileges; and `RHUMB_INSECURE_DEV=1`, while
+intended for local development only, has no runtime check preventing it from
+being set on a network-reachable box. Do not deploy Rhumb anywhere the
+tailnet-only, single-operator assumption does not hold.

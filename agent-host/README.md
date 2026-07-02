@@ -26,11 +26,16 @@ Then export it before starting the host:
 
     npm install
     npm run build
-    CLAUDE_CODE_OAUTH_TOKEN=... npm start
+    CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start
 
 Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMB_PORT`
 (default 8787), `RHUMB_MODEL` (default `claude-opus-4-8`), `RHUMB_WORKSPACE`
-(default `./workspace`), `RHUMB_PERMISSION_MODE` (default `acceptEdits`).
+(default `./workspace`), `RHUMB_PERMISSION_MODE` (default `acceptEdits`),
+`RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g. `alice@github`;
+**required** in the default identity mode — the host refuses to start without
+it), `RHUMB_INSECURE_DEV` (set to `1` to skip the identity allowlist and
+loopback-only bind; **local development only**, never on a box reachable by
+anyone else).
 
 ## Security
 

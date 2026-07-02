@@ -1,9 +1,8 @@
-import express, { type Router, type Request, type Response } from "express";
+import express, { type Router, type Request, type Response, type RequestHandler } from "express";
 import { findSource } from "./sources.js";
 import { buildSql } from "./sql.js";
 import { executeWrite, type PendingQueue } from "./writes.js";
 import { loadTrust, isTrusted, addTrust } from "./trust.js";
-import { createControlTokenGuard } from "../auth.js";
 import type { DataSource, DataOp, QueryExecutor } from "./types.js";
 
 export interface DataRouterDeps {
@@ -13,7 +12,7 @@ export interface DataRouterDeps {
   trustPath: string;
   auditPath: string;
   now: () => string;
-  controlToken?: string;
+  pendingGuard: RequestHandler;
   resolveToken: (token: string) => string | null;
 }
 
@@ -76,10 +75,11 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     res.status(202).json({ pendingId: w.pendingId, status: "pending" });
   });
 
-  // The pending-write approval control plane is operator-only: surfaces submit
-  // writes above (which get queued) but must never read the queue or resolve it.
-  // Guard everything under /pending with the control token.
-  router.use("/pending", createControlTokenGuard(deps.controlToken));
+  // The pending-write approval control plane is shell-only: surfaces submit
+  // writes (which get queued) but must never read the queue or resolve it.
+  // In identity mode the guard is the Sec-Rhumb-Control shell header, which
+  // browser JS cannot set; in dev mode it is the optional control token.
+  router.use("/pending", deps.pendingGuard);
 
   router.get("/pending", (_req, res) => {
     res.json({ pending: deps.queue.list() });

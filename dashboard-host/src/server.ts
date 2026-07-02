@@ -7,6 +7,7 @@ import type { RegistrySnapshot } from "./types.js";
 import { getOrCreateSurfaceToken } from "./surfaces/token.js";
 import { renderShim, injectShim } from "./surfaces/shim.js";
 import { surfaceHeaders } from "./surfaces/headers.js";
+import { createIdentityGuard } from "./identity.js";
 
 const ID_RE = /^[A-Za-z0-9._-]+$/;
 
@@ -15,6 +16,8 @@ export function createServer(deps: {
   workspace: string;
   subscribers: Set<Response>;
   appOrigins?: string[];
+  identity: { allowedUsers: string[]; insecureDev: boolean };
+  version: string;
 }): Express {
   const app = express();
   const surfacesRoot = resolve(deps.workspace, "surfaces");
@@ -23,6 +26,20 @@ export function createServer(deps: {
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
   });
+
+  // Discovery beacon: presence + path layout only, no secrets. Open like
+  // /healthz so the client can probe tailnet peers before authenticating.
+  app.get("/.well-known/rhumb.json", (_req, res) => {
+    res.json({ rhumb: true, version: deps.version, paths: { agent: "/agent", dashboard: "/" } });
+  });
+
+  // Identity mode gates EVERYTHING below — registry, surfaces, data, services.
+  // This closes the documented scrape-a-surface-token gap: fetching a surface
+  // at all now requires an allowlisted tailnet identity. Dev mode keeps the
+  // routes open exactly as before.
+  if (!deps.identity.insecureDev) {
+    app.use(createIdentityGuard(deps.identity.allowedUsers));
+  }
 
   app.get("/registry", (_req, res) => {
     res.json(deps.getSnapshot());
