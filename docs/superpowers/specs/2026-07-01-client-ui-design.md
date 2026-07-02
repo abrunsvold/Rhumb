@@ -17,17 +17,20 @@ in the transcript (the reducer has no `user` message kind).
 Make the client look and behave like a real desktop tool: dark, dense,
 tool-like visual style, plus the UX behaviors a chat-driven operator app
 needs (visible user messages, streaming indicator, keyboard submit, empty and
-error states, a way to disconnect and change hosts).
+error states, a way to disconnect and change hosts, slash-command
+autocomplete, and file attachments that land in the agent's workspace).
 
 ## Non-goals
 
 - Markdown rendering of assistant text.
 - Light theme / system-theme switching (dark only).
 - Drag-to-reorder tabs, tab closing, or surface lifecycle management.
-- Any Rust-side (`src-tauri`) changes; disconnect reuses the existing
-  `set_config` command.
 - CSP changes (`style-src 'unsafe-inline'` remains; Vite dev mode injects
   styles inline).
+- Multipart upload, resumable upload, or upload progress UI (single JSON
+  request per file, ≤ 20 MB).
+- Slash-command discovery before the first turn (the SDK only reports the
+  command list at session init).
 
 ## Approach
 
@@ -79,7 +82,49 @@ Tailwind classes.
 - Empty state: "Send a message to start a session."
 - Composer pinned at the bottom: auto-growing textarea (1–8 rows), Enter
   sends, Shift+Enter inserts a newline, Send button disabled when the draft
-  is empty. Concurrent turns remain allowed (existing behavior).
+  is empty and no attachments are staged. Concurrent turns remain allowed
+  (existing behavior).
+
+### Slash commands (`AgentPanel.tsx`, `agent-host`)
+
+Slash commands already work end-to-end: the host passes the prompt string
+verbatim to the Agent SDK, which expands `/command` against the workspace's
+installed skills. The client adds discovery and rendering:
+
+- The SDK's `system`/`init` message carries a `slash_commands` array. The
+  agent-host `SessionManager` extends its `session` event to
+  `{ type: "session", sessionId, slashCommands?: string[] }` (field omitted
+  when the SDK does not report it). `reduceAgent` stores the list on
+  `AgentState`.
+- Composer autocomplete: when the draft starts with `/`, a popup above the
+  composer lists matching commands (prefix filter). Arrow keys + Enter or
+  Tab select; Escape dismisses; clicking inserts. Before the first turn the
+  list is empty and the popup does not render — typing a command still sends
+  it.
+- User messages starting with `/` render the leading `/command` token in
+  monospace command styling.
+
+### File attachments (`AgentPanel.tsx`, `src-tauri/proxy.rs`, `agent-host`)
+
+"Upload" means placing the file in the agent's workspace so it can read it
+like any other file:
+
+- **agent-host** — `POST /files` with JSON `{ name, contentBase64 }`, behind
+  the existing control-token guard. Writes to `<workspace>/uploads/`,
+  creating the directory on demand. The stored filename is sanitized to a
+  safe basename (no path separators or leading dots) and collision-suffixed
+  (`report.csv`, `report-2.csv`, …). Requests over 20 MB decoded are
+  rejected with 413; the JSON body limit for this route is raised
+  accordingly. Responds `{ path: "uploads/<name>" }` (workspace-relative).
+- **Rust proxy** — new `upload_file(agent_base, name, content_base64)`
+  command following the existing JSON-post command pattern (bearer token
+  from persisted config), returning the stored path.
+- **Chat UI** — an attach button (file input) and drag-and-drop onto the
+  composer stage files as removable chips (kept in memory as bytes +
+  filename). On send: each staged file uploads first; the prompt gains a
+  trailing block `[Attached files: uploads/a.csv, uploads/b.png]`; the user
+  bubble shows attachment chips. Upload failure aborts the send and surfaces
+  an error message in the transcript; the draft and attachments stay staged.
 
 ### Canvas (`Canvas.tsx`)
 
@@ -110,12 +155,15 @@ Tailwind classes.
 
 ## Data flow changes
 
-Only two logic changes; everything else is presentation:
-
-1. `reduceAgent` / `TranscriptMessage`: new `"user"` kind, appended by the
-   panel on submit (not produced by any stream event).
+1. `reduceAgent` / `TranscriptMessage`: new `"user"` kind (with optional
+   attachment names), appended by the panel on submit (not produced by any
+   stream event).
 2. `App` → shell `onDisconnect` callback clearing config via the existing
    `set_config` IPC command.
+3. `session` events optionally carry `slashCommands`; `AgentState` stores
+   the latest list.
+4. New upload path: composer → `upload_file` IPC → Rust proxy →
+   `POST /files` on the agent-host → workspace `uploads/` directory.
 
 ## Error handling
 
@@ -138,6 +186,15 @@ New tests:
 - Disconnect returns to the ConnectionScreen and calls `set_config` with
   empty hosts.
 - Canvas renders the empty state when the registry has no tabs.
+- Slash autocomplete: popup lists prefix matches from the session's command
+  list; selection inserts the command; no popup when the list is empty.
+- Attachments: staged chips render and can be removed; send uploads staged
+  files and appends the `[Attached files: …]` block to the prompt; upload
+  failure keeps the draft and shows an error.
+- agent-host `POST /files`: writes a sanitized, collision-suffixed file
+  under `uploads/`, rejects >20 MB and path-traversal names, requires the
+  control token when configured; `session` events include `slashCommands`
+  when the SDK init message reports them.
 
 Verification beyond unit tests: `npm run typecheck`, `npm run build`, and a
 manual `npm run tauri:dev` smoke check of the connect → chat → surface flow.
