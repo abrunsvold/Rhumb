@@ -40,13 +40,24 @@ export function AgentPanel({ agentBase }: { agentBase: string }) {
     const stop = openAgentStream(agentBase, turnId, (event) => {
       setState((prev) => reduceAgent(prev, event));
       if (event.type === "result" || event.type === "error") {
-        stops.current.get(turnId)?.();
-        stops.current.delete(turnId);
-        setOpenTurns((n) => Math.max(0, n - 1));
+        if (stops.current.has(turnId)) {
+          stops.current.get(turnId)?.();
+          stops.current.delete(turnId);
+          setOpenTurns((n) => Math.max(0, n - 1));
+        }
       }
     });
     stops.current.set(turnId, stop);
-    await sendMessage(agentBase, turnId, prompt, sessionRef.current ?? undefined);
+    try {
+      await sendMessage(agentBase, turnId, prompt, sessionRef.current ?? undefined);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      stops.current.get(turnId)?.();
+      stops.current.delete(turnId);
+      setOpenTurns((n) => Math.max(0, n - 1));
+      setState((prev) => reduceAgent(prev, { type: "error", message: `Send failed: ${detail}` }));
+      return false;
+    }
     return true;
   }
 

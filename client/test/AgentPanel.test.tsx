@@ -93,4 +93,13 @@ describe("AgentPanel", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("analyze");
   });
+
+  it("surfaces a send failure, clears thinking, and keeps the draft", async () => {
+    (sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host down"));
+    render(<AgentPanel agentBase="http://a:8787" />);
+    await userEvent.type(screen.getByRole("textbox"), "hello{Enter}");
+    expect(await screen.findByText(/send failed: host down/i)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/thinking/i)).toBeNull());
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("hello");
+  });
 });
