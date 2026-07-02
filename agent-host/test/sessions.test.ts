@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync as mkdirSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createSessionService, truncateTitle } from "../src/sessions.js";
+import { join, resolve } from "node:path";
+import { createSessionService, truncateTitle, encodeProjectDir } from "../src/sessions.js";
 
 function service(nowRef = { t: "2026-07-02T00:00:00Z" }) {
   const dir = mkdtempSync(join(tmpdir(), "rhumb-sess-"));
@@ -100,5 +100,62 @@ describe("session index", () => {
       now: () => "2026-07-02T00:00:00Z",
     });
     expect(svc.list()).toEqual([]);
+  });
+});
+
+describe("transcript reader", () => {
+  it("encodes the project dir like the SDK (slashes and dots become dashes)", () => {
+    expect(encodeProjectDir("/root/rhumbr-workspace")).toBe("-root-rhumbr-workspace");
+    expect(encodeProjectDir("/Users/x/My.App")).toBe("-Users-x-My-App");
+  });
+
+  function withTranscript(lines: unknown[]) {
+    const { svc, dir } = service();
+    const ws = resolve(join(dir, "ws"));
+    const sessDir = join(dir, "projects", encodeProjectDir(ws));
+    mkdirSyncFs(sessDir, { recursive: true });
+    writeFileSync(
+      join(sessDir, "abc-123.jsonl"),
+      lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n"),
+    );
+    return svc;
+  }
+
+  it("parses user text, assistant text, and tool_use into TranscriptMessages", () => {
+    const svc = withTranscript([
+      { type: "user", isSidechain: false, message: { role: "user", content: [{ type: "text", text: "read the file" }] } },
+      { type: "assistant", isSidechain: false, message: { role: "assistant", content: [
+        { type: "tool_use", id: "t1", name: "Read", input: { file_path: "x.txt" } },
+        { type: "text", text: "done" },
+      ] } },
+    ]);
+    expect(svc.readTranscript("abc-123")).toEqual([
+      { kind: "user", text: "read the file" },
+      { kind: "tool", text: "Read", toolName: "Read", toolInput: { file_path: "x.txt" } },
+      { kind: "text", text: "done" },
+    ]);
+  });
+
+  it("skips sidechains, unknown types, tool_result blocks, string content on unknown roles, and garbage lines", () => {
+    const svc = withTranscript([
+      { type: "queue-operation", operation: "enqueue" },
+      { type: "user", isSidechain: true, message: { role: "user", content: [{ type: "text", text: "hidden" }] } },
+      { type: "user", isSidechain: false, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "..." }] } },
+      "{not json",
+      { type: "assistant", isSidechain: false, message: { role: "assistant", content: [{ type: "text", text: "visible" }] } },
+    ]);
+    expect(svc.readTranscript("abc-123")).toEqual([{ kind: "text", text: "visible" }]);
+  });
+
+  it("handles plain-string user content", () => {
+    const svc = withTranscript([
+      { type: "user", isSidechain: false, message: { role: "user", content: "just a string" } },
+    ]);
+    expect(svc.readTranscript("abc-123")).toEqual([{ kind: "user", text: "just a string" }]);
+  });
+
+  it("returns null for a missing session file", () => {
+    const { svc } = service();
+    expect(svc.readTranscript("nope")).toBeNull();
   });
 });
