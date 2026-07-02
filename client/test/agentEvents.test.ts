@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reduceAgent, initialAgentState, type AgentState } from "../src/lib/agentEvents";
+import { reduceAgent, initialAgentState, appendUserMessage, type AgentState } from "../src/lib/agentEvents";
 import type { AgentEvent } from "../src/lib/types";
 
 function run(events: AgentEvent[]): AgentState {
@@ -64,5 +64,21 @@ describe("reduceAgent", () => {
   it("still renders a successful result as a result message", () => {
     const s = run([{ type: "result", result: "done", isError: false }]);
     expect(s.messages).toEqual([{ kind: "result", text: "done" }]);
+  });
+});
+
+describe("user messages and slash commands", () => {
+  it("appendUserMessage appends a user-kind message with attachments", () => {
+    const next = appendUserMessage(initialAgentState, "analyze this", ["report.csv"]);
+    expect(next.messages).toEqual([
+      { kind: "user", text: "analyze this", attachments: ["report.csv"] },
+    ]);
+  });
+
+  it("session events store slashCommands and keep the previous list when absent", () => {
+    let s = reduceAgent(initialAgentState, { type: "session", sessionId: "s1", slashCommands: ["/compact"] });
+    expect(s.slashCommands).toEqual(["/compact"]);
+    s = reduceAgent(s, { type: "session", sessionId: "s1" });
+    expect(s.slashCommands).toEqual(["/compact"]);
   });
 });
