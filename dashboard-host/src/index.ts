@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import chokidar from "chokidar";
@@ -28,6 +28,8 @@ export function buildApp(deps: {
   const subscribers = new Set<Response>();
   let current: RegistrySnapshot = { surfaces: [] };
 
+  const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+
   const app = createServer({
     getSnapshot: () => ({
       surfaces: [...current.surfaces, ...loadServices(servicesPath).map(serviceToRegistryEntry)],
@@ -35,6 +37,8 @@ export function buildApp(deps: {
     workspace: deps.config.workspace,
     subscribers,
     appOrigins: deps.config.appOrigins,
+    identity: { allowedUsers: deps.config.allowedUsers, insecureDev: deps.config.insecureDev },
+    version,
   });
 
   // Bound request bodies: this host is unauthenticated on the tailnet, and data
@@ -96,13 +100,18 @@ export function main(): void {
   const config = loadConfig(process.env);
   mkdirSync(resolve(config.workspace, "surfaces"), { recursive: true });
   const app = buildApp({ config, watch: chokidarWatch });
-  app.listen(config.port, () => {
-    console.log(`rhumb dashboard-host listening on :${config.port} (workspace ${config.workspace})`);
-    if (!config.controlToken) {
+  const bindHost = config.insecureDev ? "0.0.0.0" : "127.0.0.1";
+  app.listen(config.port, bindHost, () => {
+    console.log(`rhumb dashboard-host listening on ${bindHost}:${config.port} (workspace ${config.workspace})`);
+    if (config.insecureDev) {
       console.warn(
-        "[rhumb] WARNING: RHUMB_CONTROL_TOKEN is not set — the write-approval " +
-          "control plane (/data/pending) is UNAUTHENTICATED. Set a token (shared " +
-          "with the agent host and client) and keep this host on your tailnet only.",
+        "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
+          "host binds all interfaces. Never run this mode outside local development.",
+      );
+    } else {
+      console.log(
+        `[rhumb] identity mode: loopback-only, ${config.allowedUsers.length} allowed user(s); ` +
+          "reachable via tailscale serve at /",
       );
     }
   });

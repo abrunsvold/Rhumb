@@ -35,7 +35,9 @@ describe("buildApp wiring", () => {
         dataSourcesPath: join(workspace, "data-sources.json"),
         dataTrustPath: join(workspace, "data-trust.json"),
         dataAuditPath: join(workspace, "data-audit.jsonl"),
-      },
+        allowedUsers: [],
+        insecureDev: true,
+      } as never,
       watch: noopWatch,
     });
 
@@ -61,6 +63,8 @@ describe("buildApp wiring", () => {
         dataSourcesPath: join(workspace, "data-sources.json"),
         dataTrustPath: join(workspace, "data-trust.json"),
         dataAuditPath: join(workspace, "data-audit.jsonl"),
+        allowedUsers: [],
+        insecureDev: true,
       } as never,
       watch: () => ({ close() {} }),
       executorFor: () => ({ async run() { return { rows: [], rowCount: 0 }; } }),
@@ -74,7 +78,7 @@ describe("buildApp wiring", () => {
     const svcPath = join(workspace, "services.json");
     writeFileSync(svcPath, JSON.stringify([]));
     const app = buildApp({
-      config: { port: 0, workspace, servicesPath: svcPath, dataSourcesPath: join(workspace, "ds.json"), dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl") } as never,
+      config: { port: 0, workspace, servicesPath: svcPath, dataSourcesPath: join(workspace, "ds.json"), dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl"), allowedUsers: [], insecureDev: true } as never,
       watch: () => ({ close() {} }),
     });
     writeFileSync(svcPath, JSON.stringify([{ id: "sales", name: "Sales", containerId: 1, host: "h", port: 3000, basePath: "/services/sales", status: "healthy", createdAt: "T" }]));
@@ -86,7 +90,7 @@ describe("buildApp wiring", () => {
     const dsPath = join(workspace, "data-sources.json");
     writeFileSync(dsPath, JSON.stringify([])); // start empty
     const app = buildApp({
-      config: { port: 0, workspace, dataSourcesPath: dsPath, dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl") } as never,
+      config: { port: 0, workspace, dataSourcesPath: dsPath, dataTrustPath: join(workspace, "t.json"), dataAuditPath: join(workspace, "a.jsonl"), allowedUsers: [], insecureDev: true } as never,
       watch: () => ({ close() {} }),
       executorFor: () => ({ async run() { return { rows: [{ ok: 1 }], rowCount: 1 }; } }),
     });
