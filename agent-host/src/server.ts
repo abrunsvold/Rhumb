@@ -4,6 +4,7 @@ import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
+import type { SessionService } from "./sessions.js";
 
 interface ManagerLike {
   run(
@@ -44,6 +45,7 @@ export function createServer(deps: {
   turnSubscribers?: Map<string, Set<Response>>;
   controlToken?: string;
   workspace?: string;
+  sessions?: SessionService;
 }): Express {
   const app = express();
 
@@ -103,6 +105,9 @@ export function createServer(deps: {
         }
         targetId = e.sessionId;
       }
+      if (e.type === "session" && e.sessionId) {
+        deps.sessions?.upsertFromTurn(e.sessionId, prompt);
+      }
       for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
       if (turn) {
         for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, e);
@@ -150,6 +155,49 @@ export function createServer(deps: {
         }
       }
       res.json({ path: `uploads/${stored}` });
+    });
+  }
+
+  const SESSION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+  if (deps.sessions) {
+    const sessions = deps.sessions;
+
+    app.get("/sessions", (req: Request, res: Response) => {
+      res.json({ sessions: sessions.list(req.query.archived === "1") });
+    });
+
+    app.get("/sessions/:id/transcript", (req: Request, res: Response) => {
+      const id = req.params.id;
+      if (!SESSION_ID_RE.test(id)) {
+        res.status(400).json({ error: "invalid session id" });
+        return;
+      }
+      const messages = sessions.readTranscript(id);
+      if (messages === null) {
+        res.status(404).json({ error: "transcript not found" });
+        return;
+      }
+      res.json({ messages });
+    });
+
+    app.patch("/sessions/:id", (req: Request, res: Response) => {
+      const id = req.params.id;
+      const title = (req.body ?? {}).title;
+      if (!SESSION_ID_RE.test(id) || typeof title !== "string" || title.length < 1 || title.length > 120) {
+        res.status(400).json({ error: "invalid id or title" });
+        return;
+      }
+      res.status(sessions.rename(id, title) ? 204 : 404).end();
+    });
+
+    app.post("/sessions/:id/archive", (req: Request, res: Response) => {
+      const id = req.params.id;
+      if (!SESSION_ID_RE.test(id)) {
+        res.status(400).json({ error: "invalid session id" });
+        return;
+      }
+      res.status(sessions.archive(id) ? 204 : 404).end();
     });
   }
 
