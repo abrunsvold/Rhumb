@@ -2,12 +2,46 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import type { AgentEvent, RegistrySnapshot } from "./types";
 
 export interface AppConfig {
-  agentBase: string;
-  dashboardBase: string;
-  // Optional shared operator secret (RHUMB_CONTROL_TOKEN). The Rust proxy reads it
-  // from persisted config and sends it as a Bearer header on control-plane calls;
-  // it is never passed per-call over IPC.
+  // Single tailscale-serve origin; per-host bases derive from the manifest paths.
+  baseUrl: string;
+  agentPath: string;
+  dashboardPath: string;
+  // Dev-mode hosts only; no UI field (hand-edit config.json for local dev).
   controlToken?: string;
+}
+
+export interface DiscoveredHost {
+  baseUrl: string;
+  version: string;
+}
+
+export interface RhumbManifest {
+  rhumb: boolean;
+  version: string;
+  paths: { agent: string; dashboard: string };
+}
+
+function joinBase(base: string, path: string): string {
+  const b = base.replace(/\/+$/, "");
+  const p = path.replace(/\/+$/, "");
+  if (p === "") return b;
+  return p.startsWith("/") ? `${b}${p}` : `${b}/${p}`;
+}
+
+export function agentBaseOf(c: AppConfig): string {
+  return joinBase(c.baseUrl, c.agentPath);
+}
+
+export function dashboardBaseOf(c: AppConfig): string {
+  return joinBase(c.baseUrl, c.dashboardPath);
+}
+
+export function discoverHosts(): Promise<DiscoveredHost[]> {
+  return invoke<DiscoveredHost[]>("discover_hosts");
+}
+
+export function fetchManifest(baseUrl: string): Promise<RhumbManifest> {
+  return invoke<RhumbManifest>("fetch_manifest", { baseUrl });
 }
 
 export function getConfig(): Promise<AppConfig> {
