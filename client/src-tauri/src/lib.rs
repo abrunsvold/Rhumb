@@ -82,6 +82,12 @@ pub fn run() {
             proxy::stop_infra_pending_stream,
             proxy::resolve_infra_pending,
             proxy::upload_file,
+            proxy::list_sessions,
+            proxy::get_transcript,
+            proxy::rename_session,
+            proxy::archive_session,
+            proxy::start_session_stream,
+            proxy::stop_session_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
