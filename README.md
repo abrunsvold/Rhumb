@@ -81,40 +81,61 @@ You'll need [Node.js](https://nodejs.org), a Claude subscription, and (for the i
 claude setup-token        # produces a long-lived CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-### 2. Run the agent host
+### 2. Put both hosts behind `tailscale serve`
+
+On the box, run the setup script once. It mounts both hosts behind a single
+tailnet HTTPS origin and prints the tailnet login(s) to allowlist:
+
+```sh
+scripts/setup-serve.sh
+```
+
+### 3. Set the allowlist and run the agent host
+
+`RHUMB_ALLOWED_USERS` is a comma-separated list of tailnet logins (e.g.
+`alice@github`) permitted to reach the hosts. Set it on **both** hosts — they
+refuse to start without it:
 
 ```sh
 cd agent-host
 npm install
 npm run build
-CLAUDE_CODE_OAUTH_TOKEN=... npm start
+CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start
 ```
 
-Defaults: port `8787`, model `claude-opus-4-8`, workspace `./workspace`, permission mode `acceptEdits`. See [`agent-host/README.md`](agent-host/README.md) for all environment variables and the security model behind permission modes.
+Defaults: port `8787`, model `claude-opus-4-8`, workspace `./workspace`, permission mode `acceptEdits`. The host binds loopback only — `tailscale serve` is what makes it reachable from the tailnet. See [`agent-host/README.md`](agent-host/README.md) for all environment variables and the security model behind permission modes.
 
-### 3. Run the dashboard host
+### 4. Run the dashboard host
 
-Point it at the **same workspace** as the agent host:
+Point it at the **same workspace** as the agent host, with the same allowlist:
 
 ```sh
 cd dashboard-host
 npm install
 npm run build
-RHUMB_WORKSPACE=../agent-host/workspace npm start
+RHUMB_WORKSPACE=../agent-host/workspace RHUMB_ALLOWED_USERS=you@github npm start
 ```
 
-Defaults: port `8788`. See [`dashboard-host/README.md`](dashboard-host/README.md).
+Defaults: port `8788`, loopback bind. See [`dashboard-host/README.md`](dashboard-host/README.md).
 
-### 4. Connect the client
+### 5. Connect the client
 
-The [`client/`](client/) is a Tauri v2 desktop app. Build and run it with the Tauri CLI (`npm install` then `npm run tauri dev` from `client/`); it will prompt for your agent-host and dashboard-host addresses on first launch.
+The [`client/`](client/) is a Tauri v2 desktop app. Build and run it with the Tauri CLI (`npm install` then `npm run tauri dev` from `client/`). On first launch it discovers boxes running `tailscale serve` with Rhumb's `/.well-known/rhumb.json` manifest and lists them in a picker — click one to connect. If discovery finds nothing (e.g. the `tailscale` CLI isn't available on your laptop), you can enter the box's single HTTPS origin manually instead.
+
+### Local development without a tailnet
+
+Set `RHUMB_INSECURE_DEV=1` on both hosts to skip identity checks and the
+loopback-only bind entirely — useful for running everything on one machine
+without Tailscale. **Never set this on a box reachable by anyone else**: it
+disables the Tailscale identity allowlist and all of the request
+authentication described in [`SECURITY.md`](SECURITY.md).
 
 ---
 
 ## Security model — read before exposing anything
 
 - **The agent host runs Claude Code autonomously** with Bash and Write access to its host machine. The `RHUMB_PERMISSION_MODE` setting controls how much is gated — **`bypassPermissions` removes all gating** and lets the agent run any command or file write without confirmation. Only use it in fully trusted, isolated environments. Details in [`agent-host/README.md`](agent-host/README.md#security).
-- **The dashboard host is unauthenticated.** It serves whatever is under `<workspace>/surfaces/`. Expose it **only on your tailnet**, never on a public interface.
+- **The dashboard host authenticates every request against your Tailscale identity allowlist** (`RHUMB_ALLOWED_USERS`), fronted by `tailscale serve`. It serves whatever is under `<workspace>/surfaces/` to allowlisted logins only. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 - **Expose Rhumb only over Tailscale.** None of these services are designed to face the public internet.
 - Both hosts refuse paths that escape their workspace/surface folders, but the rule of thumb stands: this is your machine, running an autonomous agent, reachable from your devices — keep it on your private network.
 

@@ -201,3 +201,15 @@ pre-release software). The Rust proxy derives agent/dashboard bases from
 - In-process whois mode.
 - Mobile clients (though the manifest + identity model is the foundation they
   will use).
+
+## Addendum (2026-07-02): shell-vs-surface discrimination
+
+Tailnet identity is per-device, and surfaces execute on the operator's device —
+so identity alone cannot keep a malicious surface from calling the approval
+routes. Approval routes (`/data/pending/*`, `/infra/*` — and on the agent host,
+all routes) therefore additionally require the `Sec-Rhumb-Control: 1` header.
+The Fetch standard forbids page JavaScript from setting `Sec-*` request
+headers, so surface content can never present it; the client's Rust proxy sends
+it on every request. This supersedes the spec's implication that identity alone
+gates the approval plane, and removes any need for a shared secret in the
+default flow.
