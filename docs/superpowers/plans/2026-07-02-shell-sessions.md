@@ -338,7 +338,7 @@ import { encodeProjectDir } from "../src/sessions.js";
 
 describe("transcript reader", () => {
   it("encodes the project dir like the SDK (slashes and dots become dashes)", () => {
-    expect(encodeProjectDir("/root/rhumbr-workspace")).toBe("-root-rhumbr-workspace");
+    expect(encodeProjectDir("/srv/rhumb-workspace")).toBe("-srv-rhumb-workspace");
     expect(encodeProjectDir("/Users/x/My.App")).toBe("-Users-x-My-App");
   });
 
