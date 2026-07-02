@@ -36,8 +36,8 @@ fn get_config(app: tauri::AppHandle) -> config::AppConfig {
 
 #[tauri::command]
 fn set_config(app: tauri::AppHandle, config: config::AppConfig) -> Result<(), String> {
-    if !valid_base(&config.agent_base) || !valid_base(&config.dashboard_base) {
-        return Err("agentBase and dashboardBase must be http(s) URLs".into());
+    if !valid_base(&config.base_url) {
+        return Err("baseUrl must be an http(s) URL".into());
     }
     config::write_config(&config_path(&app), &config).map_err(|e| e.to_string())
 }

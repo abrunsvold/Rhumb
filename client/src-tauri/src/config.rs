@@ -1,21 +1,64 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-// rename_all = "camelCase" so the JSON the frontend sees over IPC and on disk is
-// { "agentBase", "dashboardBase" } — matching the TS `AppConfig` interface.
-#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+fn default_agent_path() -> String {
+    "/agent".into()
+}
+fn default_dashboard_path() -> String {
+    "/".into()
+}
+
+// One origin, two mount paths. `tailscale serve` fronts both hosts on a single
+// hostname; agent_base()/dashboard_base() derive the per-host bases the proxy
+// pins its requests to. Legacy configs ({agentBase, dashboardBase}) have no
+// baseUrl key, deserialize to an empty base_url, and are treated as
+// unconfigured — the user reconnects through the discovery picker.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
-    pub agent_base: String,
-    #[serde(default)]
-    pub dashboard_base: String,
-    // Shared operator secret (RHUMB_CONTROL_TOKEN on the hosts). Sent as a Bearer
-    // header on control-plane requests. Optional: absent when the hosts run
-    // unauthenticated. Kept in config (not passed per-call over IPC) so a surface
-    // cannot read it from a command argument.
+    pub base_url: String,
+    #[serde(default = "default_agent_path")]
+    pub agent_path: String,
+    #[serde(default = "default_dashboard_path")]
+    pub dashboard_path: String,
+    // Dev-mode only (RHUMB_INSECURE_DEV hosts): optional shared secret sent as
+    // a Bearer header. Identity-mode hosts ignore it. No UI field — hand-edit
+    // config.json for local development.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_token: Option<String>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            base_url: String::new(),
+            agent_path: default_agent_path(),
+            dashboard_path: default_dashboard_path(),
+            control_token: None,
+        }
+    }
+}
+
+fn join_base(base: &str, path: &str) -> String {
+    let b = base.trim_end_matches('/');
+    let p = path.trim_end_matches('/');
+    if p.is_empty() {
+        b.to_string()
+    } else if p.starts_with('/') {
+        format!("{b}{p}")
+    } else {
+        format!("{b}/{p}")
+    }
+}
+
+impl AppConfig {
+    pub fn agent_base(&self) -> String {
+        join_base(&self.base_url, &self.agent_path)
+    }
+    pub fn dashboard_base(&self) -> String {
+        join_base(&self.base_url, &self.dashboard_path)
+    }
 }
 
 pub fn read_config(path: &Path) -> AppConfig {
@@ -48,12 +91,47 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rhumb-cfg-rt-{}", std::process::id()));
         let path = dir.join("config.json");
         let cfg = AppConfig {
-            agent_base: "http://host-a:8787".into(),
-            dashboard_base: "http://host-d:8788".into(),
+            base_url: "https://box.tail1234.ts.net".into(),
+            agent_path: "/agent".into(),
+            dashboard_path: "/".into(),
             control_token: Some("tok".into()),
         };
         write_config(&path, &cfg).unwrap();
         assert_eq!(read_config(&path), cfg);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn derives_agent_and_dashboard_bases() {
+        let cfg = AppConfig {
+            base_url: "https://box.ts.net/".into(),
+            agent_path: "/agent".into(),
+            dashboard_path: "/".into(),
+            control_token: None,
+        };
+        assert_eq!(cfg.agent_base(), "https://box.ts.net/agent");
+        assert_eq!(cfg.dashboard_base(), "https://box.ts.net");
+    }
+
+    #[test]
+    fn legacy_two_url_config_reads_as_unconfigured() {
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"agentBase":"http://a:8787","dashboardBase":"http://d:8788"}"#).unwrap();
+        assert_eq!(read_config(&path).base_url, "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_paths_default_to_spec_layout() {
+        let dir = std::env::temp_dir().join(format!("rhumb-cfg-defaults-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"baseUrl":"https://box.ts.net"}"#).unwrap();
+        let cfg = read_config(&path);
+        assert_eq!(cfg.agent_path, "/agent");
+        assert_eq!(cfg.dashboard_path, "/");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
