@@ -17,6 +17,8 @@ import { createDataRouter } from "./data/router.js";
 import { resolveSurfaceToken } from "./surfaces/token.js";
 import type { QueryExecutor, DataSource } from "./data/types.js";
 import { startProbe, tcpProbe, makeStatusWriter } from "./services/probe.js";
+import { requireShellHeader } from "./identity.js";
+import { createControlTokenGuard } from "./auth.js";
 
 export function buildApp(deps: {
   config: Config;
@@ -79,7 +81,9 @@ export function buildApp(deps: {
       trustPath: deps.config.dataTrustPath,
       auditPath: deps.config.dataAuditPath,
       now,
-      controlToken: deps.config.controlToken,
+      pendingGuard: deps.config.insecureDev
+        ? createControlTokenGuard(deps.config.controlToken)
+        : requireShellHeader(),
       resolveToken: (t) => resolveSurfaceToken(surfacesRoot, t),
     }),
   );

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createDataRouter } from "../src/data/router.js";
 import { PendingQueue } from "../src/data/writes.js";
 import type { QueryExecutor, DataSource } from "../src/data/types.js";
+import { createControlTokenGuard } from "../src/auth.js";
 
 let dir: string;
 let calls: { text: string; params: unknown[] }[];
@@ -25,6 +26,7 @@ function app() {
   const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "audit.jsonl"), now, id: () => `p${++n}` });
   const router = createDataRouter({
     getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"), auditPath: join(dir, "audit.jsonl"), now,
+    pendingGuard: createControlTokenGuard(undefined),
     resolveToken: () => "d1",
   });
   const a = express();
@@ -101,6 +103,7 @@ describe("data router", () => {
       getSources: () => sources, getExecutor: () => throwing,
       queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
       trustPath: join(dir, "trust.json"), auditPath: join(dir, "a.jsonl"), now: () => "T",
+      pendingGuard: createControlTokenGuard(undefined),
       resolveToken: () => "d1",
     });
     const a = express(); a.use(express.json()); a.use("/data", router);
@@ -121,6 +124,7 @@ describe("data router", () => {
       getSources: () => sources, getExecutor: () => throwing,
       queue: new PendingQueue({ getExecutor: () => throwing, auditPath: join(dir, "a.jsonl"), now: () => "T", id: () => "p1" }),
       trustPath, auditPath: join(dir, "a.jsonl"), now: () => "T",
+      pendingGuard: createControlTokenGuard(undefined),
       resolveToken: () => "d1",
     });
     const a = express(); a.use(express.json()); a.use("/data", router);
@@ -148,7 +152,8 @@ describe("data router", () => {
       const queue = new PendingQueue({ getExecutor, auditPath: join(dir, "audit.jsonl"), now, id: () => `p${++n}` });
       const router = createDataRouter({
         getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"),
-        auditPath: join(dir, "audit.jsonl"), now, controlToken: token,
+        auditPath: join(dir, "audit.jsonl"), now,
+        pendingGuard: createControlTokenGuard(token),
         resolveToken: () => "d1",
       });
       const a = express(); a.use(express.json()); a.use("/data", router);
@@ -195,6 +200,7 @@ describe("data router", () => {
       const router = createDataRouter({
         getSources: () => sources, getExecutor, queue, trustPath: join(dir, "trust.json"),
         auditPath: join(dir, "a.jsonl"), now,
+        pendingGuard: createControlTokenGuard(undefined),
         resolveToken: (t) => (t === TOKEN ? "d1" : null),
       });
       const a = express(); a.use(express.json()); a.use("/data", router);
