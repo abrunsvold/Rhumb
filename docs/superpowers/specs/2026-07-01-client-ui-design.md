@@ -31,6 +31,8 @@ autocomplete, and file attachments that land in the agent's workspace).
   request per file, ≤ 20 MB).
 - Slash-command discovery before the first turn (the SDK only reports the
   command list at session init).
+- Arrow-key selection and Escape dismissal in the autocomplete popup (only
+  the top prefix match is keyboard-accepted; other matches are click-only).
 
 ## Approach
 
@@ -97,10 +99,11 @@ installed skills. The client adds discovery and rendering:
   when the SDK does not report it). `reduceAgent` stores the list on
   `AgentState`.
 - Composer autocomplete: when the draft starts with `/`, a popup above the
-  composer lists matching commands (prefix filter). Arrow keys + Enter or
-  Tab select; Escape dismisses; clicking inserts. Before the first turn the
-  list is empty and the popup does not render — typing a command still sends
-  it.
+  composer lists matching commands (prefix filter). Enter or Tab accepts the
+  top match while the draft is a bare `/prefix`; clicking inserts any match;
+  the popup dismisses when the draft stops matching. Before the first turn
+  the list is empty and the popup does not render — typing a command still
+  sends it.
 - User messages starting with `/` render the leading `/command` token in
   monospace command styling.
 
