@@ -44,7 +44,14 @@ export class SessionManager {
       for await (const message of this.query({ prompt, options: merged })) {
         if (message?.type === "system" && message?.subtype === "init") {
           resolvedId = message.session_id;
-          onEvent({ type: "session", sessionId: resolvedId });
+          const cmds = Array.isArray(message.slash_commands)
+            ? message.slash_commands.filter((c: unknown): c is string => typeof c === "string")
+            : undefined;
+          onEvent(
+            cmds && cmds.length > 0
+              ? { type: "session", sessionId: resolvedId, slashCommands: cmds }
+              : { type: "session", sessionId: resolvedId },
+          );
         } else if (message?.type === "result") {
           onEvent({
             type: "result",
