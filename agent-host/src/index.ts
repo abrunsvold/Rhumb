@@ -18,6 +18,7 @@ import { createLxcClient } from "./services/lxc.js";
 import { createSshExec } from "./services/ssh.js";
 import { createDeployer } from "./services/deployer.js";
 import { createServiceOps } from "./services/ops.js";
+import { createDataSourceResolver } from "./services/datasource.js";
 import { readManifest } from "./services/manifest.js";
 import { loadOntologyConfig } from "./ontology/config.js";
 import { createOntologyOps, ONTOLOGY_TOOL_NAMES } from "./ontology/ops.js";
@@ -41,6 +42,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
           config: svcCfg,
           now,
           readManifest: (id) => readManifest(svcCfg.workspace, id),
+          resolveDataSource: createDataSourceResolver(infra.dataSourcesPath),
         })
       : undefined;
     const server = createInfraServer({

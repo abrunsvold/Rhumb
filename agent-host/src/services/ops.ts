@@ -20,12 +20,29 @@ export function createServiceOps(deps: {
   config: ServiceConfig;
   now: () => string;
   readManifest: (id: string) => ServiceManifest;
+  resolveDataSource?: (id: string) => string | undefined;
   waitForIpMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }): ServiceOps {
   const { lxc, deployer, config, now } = deps;
   const sleep = deps.sleep ?? defaultSleep;
   const waitForIpMs = deps.waitForIpMs ?? 60_000;
+
+  // Resolve each declared data source to a connection string and expose it to the
+  // service as env: RHUMB_DATASOURCE_<ID> per source, plus DATABASE_URL for the
+  // single-source common case. Throws on an unknown source so we fail before
+  // provisioning a container that could never work.
+  function buildExtraEnv(manifest: ServiceManifest): Record<string, string> {
+    const ids = manifest.dataSources ?? [];
+    const env: Record<string, string> = {};
+    for (const sourceId of ids) {
+      const conn = deps.resolveDataSource?.(sourceId);
+      if (!conn) throw new Error(`unknown data source: ${sourceId}`);
+      env[`RHUMB_DATASOURCE_${sourceId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`] = conn;
+    }
+    if (ids.length === 1) env.DATABASE_URL = env[`RHUMB_DATASOURCE_${ids[0].toUpperCase().replace(/[^A-Z0-9]/g, "_")}`];
+    return env;
+  }
 
   function entryFor(id: string): ServiceEntry | undefined {
     return loadServices(config.servicesPath).find((s) => s.id === id);
@@ -53,6 +70,7 @@ export function createServiceOps(deps: {
       assertServiceId(id);                       // reject traversal before any fs/path use
       const manifest = deps.readManifest(id);
       if (manifest.id !== id) throw new Error(`manifest id "${manifest.id}" does not match requested id "${id}"`);
+      const extraEnv = buildExtraEnv(manifest);   // resolve data sources before provisioning (fail fast)
       const spec = {
         name: `rhumb-${manifest.id}`,
         cores: manifest.resources?.cores ?? 1,
@@ -62,6 +80,7 @@ export function createServiceOps(deps: {
         bridge: config.bridge,
         rootfsGb: config.rootfsGb,
         sshPublicKey: config.deployPublicKey,
+        nameserver: config.nameserver,
       };
       const { id: containerId } = await lxc.create(spec);
       try {
@@ -77,6 +96,7 @@ export function createServiceOps(deps: {
           { host, user: "root", privateKeyPath: config.deployKeyPath },
           join(config.workspace, "services", manifest.id),
           manifest,
+          extraEnv,
         );
         const entry: ServiceEntry = {
           id: manifest.id, name: manifest.name, containerId, host, port: manifest.port,

@@ -29,8 +29,9 @@ describe("registry", () => {
 describe("createServiceOps.spawn", () => {
   function fakes(overrides: Partial<LxcClient> = {}) {
     const calls: string[] = [];
+    const specs: Array<Record<string, unknown>> = [];
     const lxc: LxcClient = {
-      async create(s) { calls.push(`create:${s.name}`); return { id: 200 }; },
+      async create(s) { calls.push(`create:${s.name}`); specs.push(s); return { id: 200 }; },
       async start(id) { calls.push(`start:${id}`); },
       async stop(id) { calls.push(`stop:${id}`); },
       async destroy(id) { calls.push(`destroy:${id}`); },
@@ -39,8 +40,9 @@ describe("createServiceOps.spawn", () => {
       ...overrides,
     };
     const deployed: string[] = [];
-    const deployer: ServiceDeployer = { async deploy(_t, dirArg, m) { deployed.push(`${m.id}@${dirArg}`); } };
-    return { calls, deployer, deployed, lxc };
+    const deployedEnv: Array<Record<string, string> | undefined> = [];
+    const deployer: ServiceDeployer = { async deploy(_t, dirArg, m, extraEnv) { deployed.push(`${m.id}@${dirArg}`); deployedEnv.push(extraEnv); } };
+    return { calls, specs, deployer, deployed, deployedEnv, lxc };
   }
 
   it("creates, awaits IP, deploys, and registers", async () => {
@@ -86,5 +88,37 @@ describe("createServiceOps.spawn", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: () => manifest("other"), sleep: async () => {} });
     await expect(ops.spawn("sales")).rejects.toThrow(/does not match/);
     expect(calls).toEqual([]);
+  });
+
+  it("injects a resolved data-source connection as extraEnv (DATABASE_URL for a single source)", async () => {
+    const { deployedEnv, deployer, lxc } = fakes();
+    const withSource = (id: string): ServiceManifest => ({ ...manifest(id), dataSources: ["printers"] });
+    const ops = createServiceOps({
+      lxc, deployer, config: cfg(), now: () => "T", readManifest: withSource, sleep: async () => {},
+      resolveDataSource: (id) => (id === "printers" ? "postgres://u:p@h:5432/printers" : undefined),
+    });
+    await ops.spawn("poller");
+    expect(deployedEnv[0]).toEqual({
+      DATABASE_URL: "postgres://u:p@h:5432/printers",
+      RHUMB_DATASOURCE_PRINTERS: "postgres://u:p@h:5432/printers",
+    });
+  });
+
+  it("throws for an unknown data source before creating a container", async () => {
+    const { calls, deployer, lxc } = fakes();
+    const withSource = (id: string): ServiceManifest => ({ ...manifest(id), dataSources: ["ghost"] });
+    const ops = createServiceOps({
+      lxc, deployer, config: cfg(), now: () => "T", readManifest: withSource, sleep: async () => {},
+      resolveDataSource: () => undefined,
+    });
+    await expect(ops.spawn("poller")).rejects.toThrow(/ghost|unknown data source/);
+    expect(calls).toEqual([]);
+  });
+
+  it("passes config.nameserver through to the container spec (fresh containers otherwise inherit an unusable resolver)", async () => {
+    const { specs, deployer, lxc } = fakes();
+    const ops = createServiceOps({ lxc, deployer, config: { ...cfg(), nameserver: "1.1.1.1" }, now: () => "T", readManifest: manifest, sleep: async () => {} });
+    await ops.spawn("sales");
+    expect(specs[0]).toMatchObject({ nameserver: "1.1.1.1" });
   });
 });

@@ -22,5 +22,8 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv): ServiceConfig | undef
     rootfsGb: Number.parseInt(env.RHUMB_LXC_ROOTFS_GB ?? "", 10) || 8,
     servicesPath: env.RHUMB_SERVICES?.trim() || `${workspace}/services.json`,
     workspace,
+    // Fresh LXCs otherwise inherit a PVE-injected resolver that can be unusable
+    // (e.g. Tailscale MagicDNS with no tailscaled in the container), hanging apt.
+    nameserver: env.RHUMB_LXC_NAMESERVER?.trim() || "1.1.1.1",
   };
 }

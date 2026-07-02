@@ -7,6 +7,7 @@ export interface ServiceConfig {
   rootfsGb: number;                 // e.g. 8
   servicesPath: string;             // <workspace>/services.json
   workspace: string;                // <workspace> (service dirs live at <workspace>/services/<id>)
+  nameserver: string;               // RHUMB_LXC_NAMESERVER; PVE's injected resolver can be unusable in-container
 }
 
 export interface LxcSpec {
@@ -18,6 +19,7 @@ export interface LxcSpec {
   bridge: string;
   rootfsGb: number;
   sshPublicKey: string;
+  nameserver?: string;
 }
 
 export interface LxcClient {
@@ -42,11 +44,15 @@ export interface ServiceManifest {
   name: string;
   start: string;
   port: number;
+  runtime?: "node" | "python" | "none";   // runtime to install in the container before start
+  dataSources?: string[];                  // ids of data sources whose connection string is injected as env
   resources?: { cores?: number; memory?: number };
 }
 
 export interface ServiceDeployer {
-  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest): Promise<void>;
+  // extraEnv: additional Environment= entries for the systemd unit (e.g. injected
+  // data-source connection strings). Resolved by the caller so the deployer stays pure.
+  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest, extraEnv?: Record<string, string>): Promise<void>;
 }
 
 export interface ServiceEntry {
