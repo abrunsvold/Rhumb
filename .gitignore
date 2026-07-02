@@ -22,3 +22,6 @@ id_rsa*
 
 # Scratch workspace created by agent-host's index.smoke.test.ts (relative ./ws default)
 agent-host/ws/
+
+# TypeScript incremental build state
+*.tsbuildinfo

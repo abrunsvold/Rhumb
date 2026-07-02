@@ -79,6 +79,26 @@ mod utf8_tests {
     }
 }
 
+#[cfg(test)]
+mod session_id_tests {
+    use super::valid_session_id;
+
+    #[test]
+    fn accepts_uuid_like_ids() {
+        assert!(valid_session_id("3ed7a8ac-2e68-4bb8-b1a8-85f252647b34"));
+        assert!(valid_session_id("a"));
+    }
+
+    #[test]
+    fn rejects_traversal_empty_and_overlong() {
+        assert!(!valid_session_id(""));
+        assert!(!valid_session_id("../etc"));
+        assert!(!valid_session_id("a/b"));
+        assert!(!valid_session_id("a?x=1"));
+        assert!(!valid_session_id(&"a".repeat(65)));
+    }
+}
+
 #[derive(Default)]
 pub struct StreamState {
     pub agent: Mutex<HashMap<String, CancellationToken>>,
@@ -137,6 +157,12 @@ fn shell_request(mut req: reqwest::RequestBuilder, bearer: &Option<String>) -> r
         req = req.bearer_auth(t);
     }
     req
+}
+
+// Mirrors the agent-host route validation (/^[A-Za-z0-9-]{1,64}$/) so a
+// malformed id never reaches URL construction.
+fn valid_session_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, token: CancellationToken) {
@@ -345,6 +371,9 @@ pub async fn start_session_stream(
     session_id: String,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream", session_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.session.lock().unwrap().insert(session_id.clone(), token.clone()) {
@@ -412,6 +441,9 @@ pub async fn get_transcript(
     agent_base: String,
     session_id: String,
 ) -> Result<Value, String> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/transcript", session_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(client.get(&url), &bearer);
@@ -429,6 +461,9 @@ pub async fn rename_session(
     session_id: String,
     title: String,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}", session_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(client.patch(&url).json(&serde_json::json!({ "title": title })), &bearer);
@@ -445,6 +480,9 @@ pub async fn archive_session(
     agent_base: String,
     session_id: String,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/archive", session_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(client.post(&url), &bearer);

@@ -1,3 +1,5 @@
+// Hand-mirrored in client/src/lib/types.ts (polyglot-by-contract; no shared
+// package). Change both together.
 export type AgentEvent =
   | { type: "session"; sessionId: string; slashCommands?: string[] }
   | { type: "result"; result: string; isError: boolean }
