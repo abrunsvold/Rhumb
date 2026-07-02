@@ -3,9 +3,12 @@ import { Canvas } from "./Canvas";
 import { Rail, type RailSection } from "./Rail";
 import { GearPanel } from "./GearPanel";
 import { SessionsPanel } from "./SessionsPanel";
+import { SurfacesPanel } from "./SurfacesPanel";
 import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
 import { useChatSessions } from "../hooks/useChatSessions";
+import { reduceRegistry, type Tab } from "../lib/registryStore";
+import { openRegistryStream } from "../lib/tauri";
 
 export function Workspace({
   agentBase,
@@ -19,11 +22,22 @@ export function Workspace({
   const [section, setSection] = useState<RailSection | null>(null);
   const chat = useChatSessions(agentBase);
   const active = chat.store.tabs.find((t) => t.key === chat.store.activeKey) ?? null;
+  const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
+  const [activeSurf, setActiveSurf] = useState<string | null>(null);
 
   useEffect(() => {
     if (chat.store.tabs.length === 0) chat.newDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const stop = openRegistryStream(dashboardBase, (snap) => {
+      const next = reduceRegistry(snap);
+      setSurfTabs(next);
+      setActiveSurf((cur) => cur ?? next[0]?.id ?? null);
+    });
+    return stop;
+  }, [dashboardBase]);
 
   function toggle(s: RailSection) {
     setSection((cur) => (cur === s ? null : s));
@@ -45,7 +59,9 @@ export function Workspace({
               onNew={() => chat.newDraft()}
             />
           )}
-          {section === "surfaces" && <div data-testid="surfaces-panel-slot" />}
+          {section === "surfaces" && (
+            <SurfacesPanel tabs={surfTabs} activeId={activeSurf} onSelect={setActiveSurf} />
+          )}
         </aside>
       )}
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -67,7 +83,7 @@ export function Workspace({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <Canvas dashboardBase={dashboardBase} />
+          <Canvas dashboardBase={dashboardBase} tabs={surfTabs} activeId={activeSurf} onSelect={setActiveSurf} />
         </div>
       </div>
     </div>

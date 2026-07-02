@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workspace } from "../src/components/Workspace";
 
@@ -43,5 +43,15 @@ describe("Workspace shell", () => {
     setup();
     expect(await screen.findByRole("tab", { name: /new session/i })).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+
+  it("streams the registry and shows surfaces in the panel and canvas", async () => {
+    const { openRegistryStream } = await import("../src/lib/tauri");
+    setup();
+    const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
+    act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
+    expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Surfaces" }));
+    expect(screen.getByRole("button", { name: /sales/i })).toBeTruthy();
   });
 });
