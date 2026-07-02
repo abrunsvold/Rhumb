@@ -93,4 +93,37 @@ describe("useChatSessions", () => {
     expect(stopSession).toHaveBeenCalled();
     expect(result.current.store.tabs).toHaveLength(0);
   });
+
+  it("sendMessage rejection surfaces a send failure, cleans up the turn, and returns false", async () => {
+    (sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host down"));
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const key = result.current.store.tabs[0].key;
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.send(key, "hello", []);
+    });
+    expect(ok).toBe(false);
+    const tab = result.current.store.tabs[0];
+    expect(tab.openTurns).toBe(0);
+    expect(tab.agent.messages.some((m) => m.kind === "error" && /send failed: host down/i.test(m.text))).toBe(true);
+    // user bubble still appended before the failure
+    expect(tab.agent.messages.some((m) => m.kind === "user" && m.text === "hello")).toBe(true);
+  });
+
+  it("a result event on the turn stream decrements openTurns (thinking clears)", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const key = result.current.store.tabs[0].key;
+    await act(async () => {
+      await result.current.send(key, "hi", []);
+    });
+    expect(result.current.store.tabs[0].openTurns).toBe(1);
+    const turnOn = [...turnHandlers.values()].at(-1)!;
+    act(() => turnOn({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+    // and delivering the same result again must not double-decrement below zero or re-fire cleanup
+    act(() => turnOn({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+  });
 });
