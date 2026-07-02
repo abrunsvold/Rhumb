@@ -20,7 +20,7 @@ export function createLxcClient(cfg: NonNullable<InfraConfig["proxmox"]>): LxcCl
   return {
     async create(spec: LxcSpec): Promise<{ id: number }> {
       const next = (await call("GET", "/cluster/nextid")) as number;
-      await call("POST", `/nodes/${node}/lxc`, {
+      const body: Record<string, unknown> = {
         vmid: next,
         ostemplate: spec.ostemplate,
         hostname: spec.name,
@@ -32,7 +32,12 @@ export function createLxcClient(cfg: NonNullable<InfraConfig["proxmox"]>): LxcCl
         unprivileged: 1,
         onboot: 1,
         start: 0,
-      });
+      };
+      // PVE's own injected resolver can be unusable inside the container (e.g. a
+      // Tailscale-connected host hands out MagicDNS, but the container has no
+      // tailscaled) — that hangs apt/npm indefinitely. Pin a working nameserver.
+      if (spec.nameserver) body.nameserver = spec.nameserver;
+      await call("POST", `/nodes/${node}/lxc`, body);
       return { id: Number(next) };
     },
     async start(id) { await call("POST", `/nodes/${node}/lxc/${id}/status/start`); },

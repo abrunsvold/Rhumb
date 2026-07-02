@@ -20,6 +20,18 @@ export function validateManifest(raw: unknown): ServiceManifest {
     throw new Error("manifest.port must be an integer 1-65535");
   }
   const out: ServiceManifest = { id: r.id, type: "service", name: r.name, start: r.start, port: r.port };
+  if (r.runtime !== undefined) {
+    if (r.runtime !== "node" && r.runtime !== "python" && r.runtime !== "none") {
+      throw new Error('manifest.runtime must be one of "node", "python", "none"');
+    }
+    out.runtime = r.runtime;
+  }
+  if (r.dataSources !== undefined) {
+    if (!Array.isArray(r.dataSources) || r.dataSources.some((d) => typeof d !== "string" || !ID.test(d))) {
+      throw new Error("manifest.dataSources must be an array of valid data-source ids");
+    }
+    out.dataSources = r.dataSources as string[];
+  }
   if (r.resources && typeof r.resources === "object") {
     const res = r.resources as Record<string, unknown>;
     out.resources = {};
