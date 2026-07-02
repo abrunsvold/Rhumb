@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConnectionScreen } from "../src/components/ConnectionScreen";
 
@@ -39,5 +39,13 @@ describe("ConnectionScreen", () => {
 
     expect(onConnected).not.toHaveBeenCalled();
     expect(screen.getByText(/could not reach/i)).toBeTruthy();
+  });
+
+  it("submits with Enter from an input", async () => {
+    const onConnected = vi.fn();
+    render(<ConnectionScreen onConnected={onConnected} />);
+    await userEvent.type(screen.getByLabelText(/agent host/i), "http://a:8787");
+    await userEvent.type(screen.getByLabelText(/dashboard host/i), "http://d:8788{Enter}");
+    await waitFor(() => expect(onConnected).toHaveBeenCalled());
   });
 });

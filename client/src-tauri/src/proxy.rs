@@ -327,3 +327,29 @@ pub async fn resolve_infra_pending(
     }
     Ok(())
 }
+
+#[tauri::command]
+pub async fn upload_file(
+    app: tauri::AppHandle,
+    agent_base: String,
+    name: String,
+    content_base64: String,
+) -> Result<String, String> {
+    let (url, bearer) = agent_target(&app, &agent_base, "/files")?;
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(&url)
+        .json(&serde_json::json!({ "name": name, "contentBase64": content_base64 }));
+    if let Some(t) = &bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    v.get("path")
+        .and_then(|p| p.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "agent host returned a malformed upload response".into())
+}

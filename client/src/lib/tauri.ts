@@ -31,6 +31,10 @@ export function sendMessage(
   return invoke("send_message", { agentBase, turnId, prompt, sessionId: sessionId ?? null });
 }
 
+export function uploadFile(agentBase: string, name: string, contentBase64: string): Promise<string> {
+  return invoke<string>("upload_file", { agentBase, name, contentBase64 });
+}
+
 export function openAgentStream(
   agentBase: string,
   turnId: string,

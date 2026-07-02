@@ -84,4 +84,31 @@ describe("SessionManager.run", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].options.permissionMode).toBe("plan");
   });
+
+  it("includes slashCommands on the session event when the init message reports them", async () => {
+    const events: AgentEvent[] = [];
+    const manager = new SessionManager({
+      query: async function* () {
+        yield { type: "system", subtype: "init", session_id: "s1", slash_commands: ["/compact", "/review"] };
+        yield { type: "result", result: "done", is_error: false };
+      },
+      model: "m",
+      workspace: "/tmp/w",
+    });
+    await manager.run("hi", undefined, (e) => events.push(e));
+    expect(events[0]).toEqual({ type: "session", sessionId: "s1", slashCommands: ["/compact", "/review"] });
+  });
+
+  it("omits slashCommands when the init message has none", async () => {
+    const events: AgentEvent[] = [];
+    const manager = new SessionManager({
+      query: async function* () {
+        yield { type: "system", subtype: "init", session_id: "s2" };
+      },
+      model: "m",
+      workspace: "/tmp/w",
+    });
+    await manager.run("hi", undefined, (e) => events.push(e));
+    expect(events[0]).toEqual({ type: "session", sessionId: "s2" });
+  });
 });

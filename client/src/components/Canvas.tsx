@@ -30,15 +30,43 @@ export function Canvas({ dashboardBase }: { dashboardBase: string }) {
   }
 
   return (
-    <div>
-      <div role="tablist">
+    <div className="flex h-full flex-col bg-bg">
+      <div role="tablist" className="flex items-center gap-1 overflow-x-auto border-b border-line bg-panel px-2 py-1.5">
         {tabs.map((t) => (
-          <button key={t.id} onClick={() => setActiveId(t.id)}>{t.title}</button>
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={t.id === activeId}
+            onClick={() => setActiveId(t.id)}
+            className={
+              t.id === activeId
+                ? "shrink-0 rounded px-3 py-1 text-sm bg-raised text-ink border border-line"
+                : "shrink-0 rounded px-3 py-1 text-sm text-muted hover:text-ink"
+            }
+          >
+            {t.title}
+          </button>
         ))}
-        {active && <button onClick={detach}>Detach</button>}
+        {active && (
+          <button
+            onClick={detach}
+            className="ml-auto shrink-0 rounded px-2 py-1 text-xs text-muted border border-line hover:text-ink"
+          >
+            Detach ↗
+          </button>
+        )}
       </div>
-      {activeUrl && (
-        <iframe title={active!.title} src={activeUrl} sandbox="allow-scripts allow-same-origin" />
+      {activeUrl ? (
+        <iframe
+          title={active!.title}
+          src={activeUrl}
+          sandbox="allow-scripts allow-same-origin"
+          className="h-full w-full flex-1 border-0 bg-white"
+        />
+      ) : (
+        <p className="m-auto max-w-xs text-center text-muted">
+          No surfaces yet — the agent will publish dashboards here.
+        </p>
       )}
     </div>
   );

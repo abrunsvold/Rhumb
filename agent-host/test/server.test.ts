@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { createServer, pruneSubscriber } from "../src/server.js";
 import type { AgentEvent } from "../src/types.js";
+import { mkdtempSync, readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function fakeManager(script: AgentEvent[]) {
   return {
@@ -105,6 +108,74 @@ describe("agent-host server", () => {
       const app = createServer({ manager: fakeManager([]), controlToken: token });
       const res = await request(app).get("/healthz");
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe("POST /files", () => {
+    function appWithWorkspace(extra?: { controlToken?: string }) {
+      const ws = mkdtempSync(join(tmpdir(), "rhumb-ws-"));
+      const app = createServer({ manager: fakeManager([]), workspace: ws, ...extra });
+      return { app, ws };
+    }
+    const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+    it("writes the file under uploads/ and returns its workspace-relative path", async () => {
+      const { app, ws } = appWithWorkspace();
+      const res = await request(app).post("/files").send({ name: "report.csv", contentBase64: b64("a,b\n1,2\n") });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ path: "uploads/report.csv" });
+      expect(readFileSyncFs(join(ws, "uploads", "report.csv"), "utf8")).toBe("a,b\n1,2\n");
+    });
+
+    it("suffixes on filename collision", async () => {
+      const { app, ws } = appWithWorkspace();
+      await request(app).post("/files").send({ name: "r.txt", contentBase64: b64("one") });
+      const res = await request(app).post("/files").send({ name: "r.txt", contentBase64: b64("two") });
+      expect(res.body).toEqual({ path: "uploads/r-2.txt" });
+      expect(readFileSyncFs(join(ws, "uploads", "r-2.txt"), "utf8")).toBe("two");
+      expect(readFileSyncFs(join(ws, "uploads", "r.txt"), "utf8")).toBe("one");
+    });
+
+    it("rejects traversal-shaped and missing names with 400", async () => {
+      const { app, ws } = appWithWorkspace();
+      for (const name of ["../evil.txt", "a/b.txt", "a\\b.txt", ".hidden", ""]) {
+        const res = await request(app).post("/files").send({ name, contentBase64: b64("x") });
+        expect(res.status).toBe(400);
+      }
+      expect(existsSyncFs(join(ws, "..", "evil.txt"))).toBe(false);
+    });
+
+    it("rejects payloads over 20MB decoded with 413", async () => {
+      const { app } = appWithWorkspace();
+      const big = Buffer.alloc(20 * 1024 * 1024 + 1, 7).toString("base64");
+      const res = await request(app).post("/files").send({ name: "big.bin", contentBase64: big });
+      expect(res.status).toBe(413);
+    });
+
+    it("is absent when no workspace is configured", async () => {
+      const app = createServer({ manager: fakeManager([]) });
+      const res = await request(app).post("/files").send({ name: "a.txt", contentBase64: b64("x") });
+      expect(res.status).toBe(404);
+    });
+
+    it("requires the control token when configured", async () => {
+      const { app } = appWithWorkspace({ controlToken: "sekrit" });
+      const denied = await request(app).post("/files").send({ name: "a.txt", contentBase64: b64("x") });
+      expect(denied.status).toBe(401);
+      const ok = await request(app)
+        .post("/files")
+        .set("Authorization", "Bearer sekrit")
+        .send({ name: "a.txt", contentBase64: b64("x") });
+      expect(ok.status).toBe(200);
+    });
+
+    it("rejects an unauthenticated request with an invalid JSON body with 401, not 400", async () => {
+      const { app } = appWithWorkspace({ controlToken: "sekrit" });
+      const res = await request(app)
+        .post("/files")
+        .set("Content-Type", "application/json")
+        .send("{not json");
+      expect(res.status).toBe(401);
     });
   });
 });

@@ -56,6 +56,22 @@ surfaces on an unauthenticated host, and it is the accepted limit. The dangerous
 by the separate control token (`RHUMB_CONTROL_TOKEN`), which is never served to a
 surface.
 
+### Desktop client webview posture
+
+The macOS client ships an App Transport Security exception scoped to web
+content (`NSAllowsArbitraryLoadsInWebContent` in `client/src-tauri/Info.plist`)
+so the webview can frame surfaces served over plain HTTP on the tailnet — the
+same threat model as above; the app shell itself still loads only bundled
+assets. With ATS relaxed, the controls on framed surface content are the
+shell's CSP, the iframe `sandbox` attribute, and Tauri's capability scoping:
+the only capability (`client/src-tauri/capabilities/default.json`) is bound to
+`"windows": ["main"]`, so sandboxed iframes and detached `surface:*` windows
+get no Tauri IPC — including the `create-webview-window` permission the main
+window uses for Detach. Do not add a capability whose `windows` matches
+`surface:*`, and re-verify the iframe/IPC origin separation before shipping a
+Linux build (WebKitGTK cannot always distinguish iframe IPC from top-window
+IPC).
+
 ### Known hardening gaps
 
 Rhumb is **not yet hardened for hostile networks**. Remaining gaps we are tracking
