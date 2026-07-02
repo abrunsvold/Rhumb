@@ -5,6 +5,8 @@ export interface Config {
   oauthToken: string;
   permissionMode: string;
   controlToken?: string;
+  allowedUsers: string[];
+  insecureDev: boolean;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -44,6 +46,20 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     permissionMode = value;
   }
 
+  const insecureDev = env.RHUMB_INSECURE_DEV === "1";
+  const allowedUsers = (env.RHUMB_ALLOWED_USERS ?? "")
+    .split(",")
+    .map((u) => u.trim().toLowerCase())
+    .filter(Boolean);
+  if (!insecureDev && allowedUsers.length === 0) {
+    throw new Error(
+      "RHUMB_ALLOWED_USERS is required (comma-separated tailnet logins, e.g. " +
+        "you@example.com). Rhumb fails closed: every request must carry an " +
+        "allowlisted Tailscale identity. Set RHUMB_INSECURE_DEV=1 only for " +
+        "local development without tailscale serve.",
+    );
+  }
+
   return {
     port,
     model: env.RHUMB_MODEL?.trim() || "claude-opus-4-8",
@@ -51,5 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     oauthToken,
     permissionMode,
     controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
+    allowedUsers,
+    insecureDev,
   };
 }
