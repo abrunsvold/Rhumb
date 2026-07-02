@@ -85,7 +85,9 @@ export function bumpTurns(s: ChatStore, key: string, delta: 1 | -1): ChatStore {
 export function promoteDraft(s: ChatStore, draftKey: string, sessionId: string): ChatStore {
   if (s.tabs.some((t) => t.key === sessionId)) return closeTab(s, draftKey);
   return {
-    tabs: s.tabs.map((t) => (t.key === draftKey ? { ...t, key: sessionId } : t)),
+    tabs: s.tabs.map((t) =>
+      t.key === draftKey ? { ...t, key: sessionId, agent: { ...t.agent, sessionId } } : t,
+    ),
     activeKey: s.activeKey === draftKey ? sessionId : s.activeKey,
   };
 }

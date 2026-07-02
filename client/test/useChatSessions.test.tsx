@@ -61,6 +61,52 @@ describe("useChatSessions", () => {
     expect(openSessionStream).toHaveBeenCalledWith("http://a:8787", "real-1", expect.any(Function));
   });
 
+  it("a promoted draft keeps sending on the real session id (no forked session on 2nd send)", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    await act(() => result.current.send(draftKey, "hello", []));
+    const turnOn = [...turnHandlers.values()][0];
+    act(() => turnOn({ type: "session", sessionId: "real-1" }));
+    act(() => turnOn({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].key).toBe("real-1");
+
+    await act(() => result.current.send("real-1", "again", []));
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenLastCalledWith(
+        "http://a:8787", expect.any(String), "again", "real-1",
+      ),
+    );
+  });
+
+  it("promotion refreshes the tab title from the sent prompt", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    expect(result.current.store.tabs[0].title).toBe("New session");
+    await act(() => result.current.send(draftKey, "hello there", []));
+    const turnOn = [...turnHandlers.values()][0];
+    act(() => turnOn({ type: "session", sessionId: "real-2" }));
+    expect(result.current.store.tabs[0].key).toBe("real-2");
+    expect(result.current.store.tabs[0].title).toBe("hello there");
+  });
+
+  it("turn output still renders while the session stream is stale", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    await act(() => result.current.openSession({ id: "s1", title: "One" }));
+    act(() => sessionHandlers.get("s1")!({ type: "stream_closed" }));
+    expect(result.current.store.tabs.find((t) => t.key === "s1")!.stale).toBe(true);
+
+    await act(() => result.current.send("s1", "ping", []));
+    // measure AFTER the user echo bubble was appended by send(), so this
+    // isolates whether the turn stream's own result content gets reduced
+    const before = result.current.store.tabs.find((t) => t.key === "s1")!.agent.messages.length;
+    const turnOn = [...turnHandlers.values()].at(-1)!;
+    act(() => turnOn({ type: "result", result: "pong", isError: false }));
+    const after = result.current.store.tabs.find((t) => t.key === "s1")!.agent.messages.length;
+    expect(after).toBeGreaterThan(before);
+  });
+
   it("background session events mark unread; stream_closed marks stale", async () => {
     const { result } = renderHook(() => useChatSessions("http://a:8787"));
     await act(() => result.current.openSession({ id: "s1", title: "One" }));

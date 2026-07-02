@@ -22,6 +22,16 @@ export interface ChatSessionsApi {
 
 const RETRY_DELAYS = [2000, 5000, 15000];
 
+// Mirrors the host's title-truncation rule: cut at a word boundary within
+// 60 chars, falling back to a hard cut if the first word is already long.
+function draftTitle(prompt: string): string {
+  const flat = prompt.replace(/\s+/g, " ").trim();
+  if (flat.length <= 60) return flat;
+  const cut = flat.slice(0, 60);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
 export function useChatSessions(agentBase: string): ChatSessionsApi {
   const [store, setStore] = useState<ChatStore>(emptyStore);
   const storeRef = useRef(store);
@@ -120,6 +130,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
   }
 
   async function send(key: string, text: string, files: StagedFile[]): Promise<boolean> {
+    const promptText = text;
     let prompt = text;
     if (files.length > 0) {
       try {
@@ -144,7 +155,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       const k = turnKey.current.get(turnId) ?? key;
       if (event.type === "session" && k.startsWith("draft:")) {
         turnKey.current.set(turnId, event.sessionId);
-        setStore((s) => promoteDraft(s, k, event.sessionId));
+        setStore((s) => setTitle(promoteDraft(s, k, event.sessionId), event.sessionId, draftTitle(promptText)));
         attachSessionStream(event.sessionId);
       }
       // Known double-delivery caveat (accepted per spec): once a tab has an
@@ -152,9 +163,15 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       // BOTH the turn stream and the session stream. To avoid double-rendering,
       // only reduce content here when the tab has NO attached session stream
       // (i.e. draft tabs, before promotion). Turn accounting always runs below.
+      // Two exceptions: "session" events are idempotent metadata (not content)
+      // and must always be reduced, or a promoted draft's sessionId never
+      // lands in its own agent state; and while the tab is stale (its session
+      // stream is down/retrying) the turn stream is the only source of
+      // content, so it must be reduced too.
       const targetKey = turnKey.current.get(turnId) ?? k;
       const hasSessionStream = sessionStops.current.has(targetKey);
-      if (!hasSessionStream) {
+      const targetTab = storeRef.current.tabs.find((t) => t.key === targetKey);
+      if (!hasSessionStream || targetTab?.stale || event.type === "session") {
         setStore((s) => reduceEvent(s, targetKey, event));
       }
       if (event.type === "result" || event.type === "error") {
@@ -162,6 +179,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
           turnStops.current.get(turnId)?.();
           turnStops.current.delete(turnId);
           setStore((s) => bumpTurns(s, turnKey.current.get(turnId) ?? k, -1));
+          turnKey.current.delete(turnId);
         }
       }
     });

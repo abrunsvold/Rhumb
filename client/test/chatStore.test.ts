@@ -50,6 +50,9 @@ describe("chatStore", () => {
     expect(s.tabs[0].key).toBe("real-id");
     expect(s.activeKey).toBe("real-id");
     expect(s.tabs[0].agent.messages[0]).toMatchObject({ kind: "user", text: "hello" });
+    // the tab's own agent.sessionId must also be updated, or the next send
+    // will read a stale/undefined sessionId and fork a brand-new session
+    expect(s.tabs[0].agent.sessionId).toBe("real-id");
   });
 
   it("setStale flags a tab", () => {
