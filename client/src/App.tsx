@@ -9,10 +9,15 @@ export function App() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    getConfig().then((c) => {
-      if (c.agentBase && c.dashboardBase) setConfigState(c);
-      setLoaded(true);
-    });
+    getConfig()
+      .then((c) => {
+        if (c.agentBase && c.dashboardBase) setConfigState(c);
+      })
+      .catch(() => {
+        // getConfig rejects when Tauri IPC is unavailable (plain-browser dev);
+        // fall through to the connection screen instead of hanging on Loading.
+      })
+      .finally(() => setLoaded(true));
   }, []);
 
   async function disconnect() {
