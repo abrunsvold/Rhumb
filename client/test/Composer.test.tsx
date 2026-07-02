@@ -67,4 +67,20 @@ describe("Composer", () => {
       ]),
     );
   });
+
+  it("Enter accepts the top autocomplete match instead of sending", async () => {
+    const { onSend } = setup({ slashCommands: ["/compact", "/cost"] });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/co{Enter}");
+    expect(onSend).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("/compact ");
+  });
+
+  it("Tab accepts the top autocomplete match", async () => {
+    const { onSend } = setup({ slashCommands: ["/compact", "/cost"] });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/co{Tab}");
+    expect(onSend).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("/compact ");
+  });
 });
