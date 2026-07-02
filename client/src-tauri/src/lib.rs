@@ -1,4 +1,5 @@
 mod config;
+mod discover;
 mod proxy;
 mod sse;
 
@@ -69,6 +70,8 @@ pub fn run() {
             get_config,
             set_config,
             check_health,
+            discover::discover_hosts,
+            discover::fetch_manifest,
             proxy::send_message,
             proxy::start_agent_stream,
             proxy::stop_agent_stream,
