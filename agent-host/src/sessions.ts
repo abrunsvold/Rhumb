@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import type { TranscriptMessage } from "./types.js";
 
@@ -20,6 +20,7 @@ export interface SessionService {
 }
 
 const TITLE_MAX = 60;
+const SESSION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
 export function truncateTitle(prompt: string): string {
   const flat = prompt.replace(/\s+/g, " ").trim();
@@ -75,6 +76,25 @@ function blockToMessages(record: Record<string, unknown>): TranscriptMessage[] {
   return out;
 }
 
+function firstUserText(file: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const user = blockToMessages(JSON.parse(line)).find((m) => m.kind === "user");
+      if (user) return user.text;
+    } catch {
+      // corrupt line: keep scanning
+    }
+  }
+  return null;
+}
+
 export function createSessionService(deps: {
   indexPath: string;
   projectsDir: string;
@@ -84,6 +104,40 @@ export function createSessionService(deps: {
   let sessions = load(deps.indexPath);
 
   const persist = () => save(deps.indexPath, sessions);
+
+  // Adopt transcripts that predate the index (or were created by other
+  // clients) so the panel lists them. Best-effort: any disk problem leaves
+  // the index as loaded.
+  function backfillFromDisk(): void {
+    const dir = join(deps.projectsDir, encodeProjectDir(resolve(deps.workspace)));
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    let added = false;
+    for (const name of names) {
+      if (!name.endsWith(".jsonl") || name.startsWith("agent-")) continue;
+      const id = name.slice(0, -".jsonl".length);
+      if (!SESSION_ID_RE.test(id)) continue;
+      if (sessions.some((s) => s.id === id)) continue;
+      const file = join(dir, name);
+      const text = firstUserText(file);
+      if (text === null || text.length === 0) continue;
+      let stamp = deps.now();
+      try {
+        stamp = statSync(file).mtime.toISOString();
+      } catch {
+        // keep now()
+      }
+      const title = truncateTitle(text);
+      sessions.push({ id, title, createdAt: stamp, lastActiveAt: stamp, preview: title, archived: false });
+      added = true;
+    }
+    if (added) persist();
+  }
+  backfillFromDisk();
 
   return {
     upsertFromTurn(id, prompt) {
