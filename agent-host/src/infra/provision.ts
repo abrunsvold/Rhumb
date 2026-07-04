@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync } from "../fsAtomic.js";
 import type { AdminExecutor, DataSourceEntry } from "./types.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -16,8 +16,7 @@ export function appendDataSource(path: string, entry: DataSourceEntry): DataSour
   }
   if (current.some((s) => s.id === entry.id)) return current;
   const next = [...current, entry];
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(next, null, 2));
+  atomicWriteFileSync(path, JSON.stringify(next, null, 2));
   return next;
 }
 

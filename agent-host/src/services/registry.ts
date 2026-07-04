@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync } from "../fsAtomic.js";
 import type { ServiceEntry } from "./types.js";
 
 export function loadServices(path: string): ServiceEntry[] {
@@ -11,8 +11,7 @@ export function loadServices(path: string): ServiceEntry[] {
 }
 
 function write(path: string, list: ServiceEntry[]): ServiceEntry[] {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(list, null, 2));
+  atomicWriteFileSync(path, JSON.stringify(list, null, 2));
   return list;
 }
 
