@@ -18,10 +18,14 @@ const SECRET_LINE = /Environment=|postgres:\/\/|TOKEN|PASSWORD|PRIVATE KEY/i;
 export function redactSshError(verb: "command" | "copy", e: unknown): Error {
   const err = e as { code?: number | string; stderr?: string };
   const code = err?.code ?? "?";
-  const tail = String(err?.stderr ?? "").slice(-400)
+  // Redact BEFORE slicing: truncating first can cut the marker token off an
+  // unbroken >400-char line while the trailing secret value survives. Redacting
+  // whole lines first means the cap only ever trims already-redacted text.
+  const tail = String(err?.stderr ?? "")
     .split("\n")
     .map((l) => (SECRET_LINE.test(l) ? "[redacted line]" : l))
     .join("\n")
+    .slice(-400)
     .trim();
   return new Error(`ssh ${verb} failed (exit ${code})${tail ? `: ${tail}` : ""}`);
 }

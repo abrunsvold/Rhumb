@@ -31,4 +31,21 @@ describe("redactSshError", () => {
     const e = Object.assign(new Error("x"), { code: 1, stderr: "a".repeat(1000) });
     expect(redactSshError("command", e).message.length).toBeLessThan(450);
   });
+
+  it("redacts a secret on a single unbroken line longer than the 400-char cap", () => {
+    const secret = "FAKEKEY051Hq8x9AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEF";
+    const e = Object.assign(new Error("x"), { code: 1, stderr: `Environment=DATABASE_URL=${"z".repeat(420)} ${secret}` });
+    const out = redactSshError("command", e);
+    expect(out.message).not.toContain(secret);
+    expect(out.message.length).toBeLessThan(450);
+  });
+
+  it("redacts a secret even on a single unbroken line longer than the 400-char cap", () => {
+    const secret = "FAKEKEY0ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const longLine = "Environment=DATABASE_URL=" + "z".repeat(500) + secret;
+    const e = Object.assign(new Error("boom"), { code: 1, stderr: longLine });
+    const out = redactSshError("command", e);
+    expect(out.message).not.toContain(secret);
+    expect(out.message).not.toContain("FAKEKEY0");
+  });
 });
