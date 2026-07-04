@@ -10,8 +10,11 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const defaultDeployId = () =>
   `${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
 
+export interface RedeployResult { entry: ServiceEntry; warning?: string }
+
 export interface ServiceOps {
   spawn(id: string): Promise<ServiceEntry>;
+  redeploy(id: string): Promise<RedeployResult>;
   stop(id: string): Promise<void>;
   start(id: string): Promise<void>;
   destroy(id: string): Promise<void>;
@@ -129,6 +132,34 @@ export function createServiceOps(deps: {
       };
       appendService(config.servicesPath, entry);
       return entry;
+    },
+    // Blue-green replace. End-states (see spec): (a) nothing changed on validation
+    // errors; (b) gate/deploy failure destroys the new container, old untouched;
+    // (c) cutover complete — an old-container destroy failure is a WARNING naming
+    // the orphan, never silent, never a rollback (the registry already moved).
+    async redeploy(id: string): Promise<RedeployResult> {
+      assertServiceId(id);
+      const old = entryFor(id);
+      if (!old) throw new Error(`service "${id}" is not deployed; use spawn_service`);
+      const manifest = deps.readManifest(id);
+      if (manifest.id !== id) throw new Error(`manifest id "${manifest.id}" does not match requested id "${id}"`);
+      const extraEnv = buildExtraEnv(manifest);
+      const deployId = (deps.newDeployId ?? defaultDeployId)();
+      const { containerId, host } = await provisionHealthy(manifest, extraEnv, deployId);
+      const entry: ServiceEntry = {
+        ...old, name: manifest.name, containerId, host, port: manifest.port,
+        status: "healthy", deployId, updatedAt: now(),
+      };
+      replaceService(config.servicesPath, entry);
+      let warning: string | undefined;
+      try {
+        try { await lxc.stop(old.containerId); } catch { /* may already be stopped */ }
+        await waitStopped(old.containerId);
+        await lxc.destroy(old.containerId);
+      } catch (e) {
+        warning = `cutover complete, but destroying the OLD container ${old.containerId} failed: ${String(e)} — clean it up manually (pct stop/destroy ${old.containerId})`;
+      }
+      return { entry, warning };
     },
     async stop(id: string): Promise<void> {
       const e = entryFor(id);
