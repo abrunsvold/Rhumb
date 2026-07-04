@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Tab } from "../lib/registryStore";
 
@@ -14,6 +15,7 @@ export function Canvas({
 }) {
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeUrl = active ? `${dashboardBase}${active.url}` : null;
+  const [detachError, setDetachError] = useState(false);
 
   function detach() {
     if (!active || !activeUrl) return;
@@ -22,7 +24,9 @@ export function Canvas({
     // src-tauri/capabilities/default.json (that capability is scoped to
     // `"windows": ["main"]`), so this window inherits no Tauri IPC/command
     // access. Do not add a capability whose `windows` matches `surface:*`.
-    new WebviewWindow(`surface:${active.id}`, { url: activeUrl, title: active.title });
+    const w = new WebviewWindow(`surface:${active.id}`, { url: activeUrl, title: active.title });
+    void w.once("tauri://created", () => setDetachError(false));
+    void w.once("tauri://error", () => setDetachError(true));
   }
 
   return (
@@ -51,6 +55,7 @@ export function Canvas({
             Detach ↗
           </button>
         )}
+        {detachError && <span className="shrink-0 text-xs text-danger">Detach failed</span>}
       </div>
       {activeUrl ? (
         <iframe

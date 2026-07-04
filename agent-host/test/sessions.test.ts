@@ -105,7 +105,7 @@ describe("session index", () => {
 
 describe("transcript reader", () => {
   it("encodes the project dir like the SDK (slashes and dots become dashes)", () => {
-    expect(encodeProjectDir("/root/rhumbr-workspace")).toBe("-root-rhumbr-workspace");
+    expect(encodeProjectDir("/srv/rhumb-workspace")).toBe("-srv-rhumb-workspace");
     expect(encodeProjectDir("/Users/x/My.App")).toBe("-Users-x-My-App");
   });
 
@@ -157,5 +157,58 @@ describe("transcript reader", () => {
   it("returns null for a missing session file", () => {
     const { svc } = service();
     expect(svc.readTranscript("nope")).toBeNull();
+  });
+});
+
+describe("index backfill", () => {
+  function makeEnv() {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-backfill-"));
+    const ws = resolve(join(dir, "ws"));
+    const sessDir = join(dir, "projects", encodeProjectDir(ws));
+    mkdirSyncFs(sessDir, { recursive: true });
+    const build = () =>
+      createSessionService({
+        indexPath: join(dir, "sessions.json"),
+        projectsDir: join(dir, "projects"),
+        workspace: ws,
+        now: () => "2026-07-02T12:00:00Z",
+      });
+    return { dir, sessDir, build };
+  }
+  const userLine = (text: string) =>
+    JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: [{ type: "text", text }] } });
+
+  it("adopts on-disk transcripts not in the index, titled from the first user message", () => {
+    const { sessDir, build } = makeEnv();
+    writeFileSync(join(sessDir, "aaa-111.jsonl"), userLine("fix the printer dashboard"));
+    writeFileSync(join(sessDir, "agent-xyz.jsonl"), userLine("sidechain — must be skipped"));
+    writeFileSync(join(sessDir, "not-a-transcript.txt"), "nope");
+    writeFileSync(join(sessDir, "bbb-222.jsonl"), "{corrupt");
+    const svc = build();
+    const list = svc.list();
+    expect(list.map((s) => s.id)).toEqual(["aaa-111"]);
+    expect(list[0].title).toBe("fix the printer dashboard");
+    expect(list[0].archived).toBe(false);
+  });
+
+  it("does not duplicate already-indexed sessions and persists the backfill", () => {
+    const { sessDir, build } = makeEnv();
+    writeFileSync(join(sessDir, "ccc-333.jsonl"), userLine("already known"));
+    const first = build();
+    expect(first.list()).toHaveLength(1);
+    first.upsertFromTurn("ccc-333", "already known"); // bump only
+    const second = build(); // fresh service over the same index
+    expect(second.list()).toHaveLength(1);
+  });
+
+  it("survives a missing projects dir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-backfill-"));
+    const svc = createSessionService({
+      indexPath: join(dir, "sessions.json"),
+      projectsDir: join(dir, "does-not-exist"),
+      workspace: join(dir, "ws"),
+      now: () => "2026-07-02T12:00:00Z",
+    });
+    expect(svc.list()).toEqual([]);
   });
 });

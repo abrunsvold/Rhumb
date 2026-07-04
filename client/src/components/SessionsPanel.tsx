@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listSessions, renameSession, archiveSession } from "../lib/tauri";
 import type { SessionMeta } from "../lib/types";
 
@@ -28,19 +28,31 @@ export function SessionsPanel({
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [error, setError] = useState(false);
 
   async function refresh() {
     try {
       setSessions(await listSessions(agentBase));
+      setError(false);
     } catch {
-      // host unreachable: keep the last list
+      setError(true); // keep the last list; retry via interval
     }
   }
 
   useEffect(() => {
     void refresh();
+    const t = setInterval(() => void refresh(), 15000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentBase]);
+
+  const runningCount = tabs.filter((t) => t.openTurns > 0).length;
+  const prevRunning = useRef(runningCount);
+  useEffect(() => {
+    if (runningCount < prevRunning.current) void refresh();
+    prevRunning.current = runningCount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningCount]);
 
   async function submitRename(id: string) {
     const title = draftTitle.trim();
@@ -69,6 +81,7 @@ export function SessionsPanel({
       >
         New session
       </button>
+      {error && <p className="px-2 text-xs text-danger">Couldn't load sessions — retrying…</p>}
       <ul className="flex flex-col gap-0.5">
         {sessions.map((s) => {
           const tab = tabs.find((t) => t.key === s.id);
