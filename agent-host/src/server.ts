@@ -2,7 +2,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
-import { writeSseEvent } from "./sse.js";
+import { writeSseEvent, attachHeartbeat } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
 import { createIdentityGuard, requireShellHeader } from "./identity.js";
 import type { SessionService } from "./sessions.js";
@@ -105,6 +105,7 @@ export function createServer(deps: {
     res.flushHeaders?.();
     const id = req.params.id;
     subsFor(subscribers, id).add(res);
+    attachHeartbeat(res, req);
     req.on("close", () => pruneSubscriber(subscribers, id, res));
   });
 
@@ -113,6 +114,7 @@ export function createServer(deps: {
     res.flushHeaders?.();
     const turnId = req.params.turnId;
     subsFor(turnSubscribers, turnId).add(res);
+    attachHeartbeat(res, req);
     req.on("close", () => pruneSubscriber(turnSubscribers, turnId, res));
   });
 
