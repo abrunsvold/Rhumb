@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceOps } from "../src/services/ops.js";
-import { loadServices, appendService } from "../src/services/registry.js";
+import { loadServices, appendService, removeService } from "../src/services/registry.js";
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest } from "../src/services/types.js";
 import type { HealthGate } from "../src/services/health.js";
 
@@ -89,5 +89,21 @@ describe("createServiceOps.redeploy", () => {
     const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T1", readManifest: m, sleep: async () => {}, gate: passGate, resolveDataSource: () => undefined });
     await expect(ops.redeploy("sales")).rejects.toThrow("unknown data source: nope");
     expect(calls).toEqual([]);
+  });
+
+  it("tears down the NEW container when the registry write fails mid-flight (race with destroy_service)", async () => {
+    seed();
+    const { calls, lxc } = fakes();
+    // Simulate another actor racing this redeploy: by the time deploy runs (before
+    // the gate and the registry cutover), the "sales" entry has already been removed
+    // from the registry — a faithful stand-in for a concurrent destroy_service.
+    const deployer: ServiceDeployer = {
+      async deploy() { removeService(cfg().servicesPath, "sales"); },
+    };
+    const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T1", readManifest: manifest, sleep: async () => {}, gate: passGate, newDeployId: () => "NEW" });
+    await expect(ops.redeploy("sales")).rejects.toThrow(/is not registered/);
+    expect(calls.filter((c) => c.startsWith("destroy:"))).toEqual(["destroy:200"]);
+    const reg = loadServices(cfg().servicesPath);
+    expect(reg.find((s) => s.id === "sales")).toBeUndefined();
   });
 });

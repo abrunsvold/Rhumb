@@ -170,4 +170,22 @@ describe("createServiceOps.spawn", () => {
     await expect(ops.spawn("sales")).rejects.toThrow('service "sales" is already deployed (container 105); use redeploy_service to update it');
     expect(calls).toEqual([]);                                        // end-state (a): no container created
   });
+
+  it("tears down the NEW container when the registry write fails after a healthy gate (race with a concurrent spawn/registration)", async () => {
+    const { calls, lxc } = fakes();
+    // Simulate another actor racing this spawn: by the time deploy runs (before the
+    // gate and this spawn's own registry append), a conflicting "sales" entry has
+    // already been registered against a different container (999).
+    const deployer: ServiceDeployer = {
+      async deploy() {
+        appendService(cfg().servicesPath, { id: "sales", name: "sales", containerId: 999, host: "h", port: 3000, basePath: "/services/sales", status: "healthy", createdAt: "T" });
+      },
+    };
+    const ops = createServiceOps({ lxc, deployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {}, gate: passGate });
+    await expect(ops.spawn("sales")).rejects.toThrow(/already registered/);
+    expect(calls).toContain("destroy:200");
+    const reg = loadServices(cfg().servicesPath);
+    expect(reg).toHaveLength(1);
+    expect(reg[0].containerId).toBe(999);
+  });
 });

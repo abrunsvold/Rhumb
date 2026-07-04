@@ -108,12 +108,17 @@ export function createServiceOps(deps: {
       if (!gate.ok) throw new Error(`service "${manifest.id}" failed its health gate: ${gate.reason} (last state: ${JSON.stringify(gate.lastState)})`);
       return { containerId, host };
     } catch (e) {
-      // Best-effort rollback: a running container can't be DELETEd on PVE, so
-      // stop it first, then destroy. Both are swallowed — the original error wins.
-      try { await lxc.stop(containerId); await waitStopped(containerId); } catch { /* may not be running */ }
-      try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
+      await teardown(containerId);
       throw e;
     }
+  }
+
+  // Best-effort rollback: a running container can't be DELETEd on PVE, so stop it
+  // first, then destroy. Both are swallowed — callers rethrow their own original
+  // error, which always wins over any teardown failure.
+  async function teardown(containerId: number): Promise<void> {
+    try { await lxc.stop(containerId); await waitStopped(containerId); } catch { /* may not be running */ }
+    try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
   }
 
   return {
@@ -130,13 +135,31 @@ export function createServiceOps(deps: {
         id: manifest.id, name: manifest.name, containerId, host, port: manifest.port,
         basePath: `/services/${manifest.id}`, status: "healthy", createdAt: now(), deployId,
       };
-      appendService(config.servicesPath, entry);
+      try {
+        appendService(config.servicesPath, entry);
+      } catch (e) {
+        // The container is up and healthy but we couldn't register it (e.g. a
+        // concurrent actor registered the same id first) — tear it down rather
+        // than leaving a running, unregistered container behind.
+        await teardown(containerId);
+        throw e;
+      }
       return entry;
     },
     // Blue-green replace. End-states (see spec): (a) nothing changed on validation
     // errors; (b) gate/deploy failure destroys the new container, old untouched;
     // (c) cutover complete — an old-container destroy failure is a WARNING naming
     // the orphan, never silent, never a rollback (the registry already moved).
+    //
+    // Concurrency: intentionally no lock here. This is a single-operator tool and
+    // every mutation already passes a separate operator approval, so a genuine
+    // concurrent redeploy of the same service is an operator error, not something
+    // we need to defend against with a mutex. Worst case, post-teardown-on-failure
+    // above: two racing redeploys provision two containers, one registry write
+    // wins (last-write-wins) and the other throws, and the losing side tears its
+    // own new container down — at most a wasted container plus, if the loser also
+    // raced the old container's destroy, a spurious old-destroy warning. No path
+    // leaves a running container silently unregistered.
     async redeploy(id: string): Promise<RedeployResult> {
       assertServiceId(id);
       const old = entryFor(id);
@@ -150,7 +173,16 @@ export function createServiceOps(deps: {
         ...old, name: manifest.name, containerId, host, port: manifest.port,
         status: "healthy", deployId, updatedAt: now(),
       };
-      replaceService(config.servicesPath, entry);
+      try {
+        replaceService(config.servicesPath, entry);
+      } catch (e) {
+        // The new container is up and healthy but the cutover write failed (e.g. a
+        // concurrent destroy_service removed the entry out from under us) — tear
+        // down the new container rather than leaving it running and unregistered.
+        // The old container is untouched.
+        await teardown(containerId);
+        throw e;
+      }
       let warning: string | undefined;
       try {
         try { await lxc.stop(old.containerId); } catch { /* may already be stopped */ }
