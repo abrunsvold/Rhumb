@@ -37,4 +37,21 @@ describe("buildApp wiring", () => {
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
   });
+
+  it("sessions disallow AskUserQuestion and append the Rhumb system prompt", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const app = buildApp({
+      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true },
+      query: (args: { options?: Record<string, unknown> }) => {
+        captured = args.options;
+        return (async function* () { yield { type: "result", result: "", is_error: false }; })();
+      },
+    });
+    await request(app).post("/messages").send({ prompt: "hi" });
+    for (let i = 0; i < 100 && !captured; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(captured?.disallowedTools).toContain("AskUserQuestion");
+    const sp = captured?.systemPrompt as { type: string; preset: string; append: string };
+    expect(sp).toMatchObject({ type: "preset", preset: "claude_code" });
+    expect(sp.append).toContain("operator approval");
+  });
 });

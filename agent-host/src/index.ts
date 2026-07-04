@@ -6,6 +6,7 @@ import { join as joinPath, resolve as resolvePath } from "node:path";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { loadConfig, type Config } from "./config.js";
+import { RHUMB_PROMPT_APPEND } from "./prompt.js";
 import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
@@ -32,6 +33,8 @@ import type { Express } from "express";
 
 export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   const sessionExtraOptions: Record<string, unknown> = {};
+  sessionExtraOptions.disallowedTools = ["AskUserQuestion"];
+  sessionExtraOptions.systemPrompt = { type: "preset", preset: "claude_code", append: RHUMB_PROMPT_APPEND };
   const infra = loadInfraConfig(process.env);
   let infraPending: PendingActions | undefined;
 
