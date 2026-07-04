@@ -53,7 +53,8 @@ export interface ServiceManifest {
 export interface ServiceDeployer {
   // extraEnv: additional Environment= entries for the systemd unit (e.g. injected
   // data-source connection strings). Resolved by the caller so the deployer stays pure.
-  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest, extraEnv?: Record<string, string>): Promise<void>;
+  // deployId: provenance stamp — written into the unit env and /opt/rhumb/<id>/.rhumb-deploy.json.
+  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest, extraEnv: Record<string, string> | undefined, deployId: string): Promise<void>;
 }
 
 export interface ServiceEntry {

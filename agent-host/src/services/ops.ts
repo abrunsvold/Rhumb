@@ -97,6 +97,7 @@ export function createServiceOps(deps: {
           join(config.workspace, "services", manifest.id),
           manifest,
           extraEnv,
+          "", // deployId threaded properly in the redeploy task
         );
         const entry: ServiceEntry = {
           id: manifest.id, name: manifest.name, containerId, host, port: manifest.port,

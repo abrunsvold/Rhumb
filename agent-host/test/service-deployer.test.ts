@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployer } from "../src/services/deployer.js";
+import { createDeployer, isVendoredComplete } from "../src/services/deployer.js";
 import type { SshExec, SshTarget } from "../src/services/types.js";
 
 function fakeExec() {
@@ -18,10 +18,65 @@ function fakeExec() {
 const target: SshTarget = { host: "10.0.0.5", user: "root", privateKeyPath: "/k" };
 const manifest = { id: "sales", type: "service" as const, name: "Sales", start: "npm ci && npm start", port: 3000 };
 
+describe("isVendoredComplete", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-vendor-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("false without node_modules; false when a top-level dep is missing; true when all present (incl. scoped)", () => {
+    const d = join(dir, "svc");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "package.json"), JSON.stringify({ dependencies: { pg: "^8", "@scope/x": "^1" } }));
+    expect(isVendoredComplete(d)).toBe(false);                       // no node_modules
+    mkdirSync(join(d, "node_modules", "pg"), { recursive: true });
+    expect(isVendoredComplete(d)).toBe(false);                       // @scope/x missing
+    mkdirSync(join(d, "node_modules", "@scope", "x"), { recursive: true });
+    expect(isVendoredComplete(d)).toBe(true);
+    writeFileSync(join(d, "package.json"), "not json");
+    expect(isVendoredComplete(d)).toBe(false);                       // unreadable manifest → not vendored
+  });
+});
+
+describe("deploy provenance + backoff", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-deploy-prov-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("unit contains StartLimit lines in [Unit], RHUMB_DEPLOY_ID env, and writes .rhumb-deploy.json", async () => {
+    // fixture: node runtime, package.json + COMPLETE node_modules → no npm install commands
+    const d = join(dir, "svc2");
+    mkdirSync(join(d, "node_modules", "pg"), { recursive: true });
+    writeFileSync(join(d, "package.json"), JSON.stringify({ dependencies: { pg: "^8" } }));
+    const cmds: string[] = [];
+    const exec = { async run(_t: unknown, c: string) { cmds.push(c); return { stdout: "", stderr: "" }; }, async pushDir() {} };
+    const dep = createDeployer(exec as never, () => "2026-07-04T20:00:00.000Z");
+    await dep.deploy({ host: "h", user: "root", privateKeyPath: "/k" }, d,
+      { id: "svc2", type: "service", name: "s", start: "node index.js", port: 3000, runtime: "node" }, {}, "20260704200000-abc123");
+    const unitCmd = cmds.find((c) => c.includes("cat > /etc/systemd/system/rhumb-svc2.service"))!;
+    const unitSection = unitCmd.slice(0, unitCmd.indexOf("[Service]"));
+    expect(unitSection).toContain("StartLimitIntervalSec=60");
+    expect(unitSection).toContain("StartLimitBurst=5");
+    expect(unitCmd).toContain("Environment=RHUMB_DEPLOY_ID=20260704200000-abc123");
+    expect(cmds.some((c) => c.includes(".rhumb-deploy.json") && c.includes("20260704200000-abc123") && c.includes("2026-07-04T20:00:00.000Z"))).toBe(true);
+    expect(cmds.some((c) => c.includes("apt-get install -y --no-install-recommends npm"))).toBe(false); // vendored-complete → no npm
+  });
+
+  it("runs npm install when node_modules exists but is missing a top-level dep", async () => {
+    const d = join(dir, "svc3");
+    mkdirSync(join(d, "node_modules", "not-pg"), { recursive: true });
+    writeFileSync(join(d, "package.json"), JSON.stringify({ dependencies: { pg: "^8" } }));
+    const cmds: string[] = [];
+    const exec = { async run(_t: unknown, c: string) { cmds.push(c); return { stdout: "", stderr: "" }; }, async pushDir() {} };
+    await createDeployer(exec as never).deploy({ host: "h", user: "root", privateKeyPath: "/k" }, d,
+      { id: "svc3", type: "service", name: "s", start: "node index.js", port: 3000, runtime: "node" }, {}, "d1");
+    expect(cmds.some((c) => c.includes("npm ci --omit=dev"))).toBe(true);   // the day-2 failure now installs
+  });
+});
+
 describe("createDeployer", () => {
   it("pushes the code to /opt/rhumb/<id> then installs+enables a systemd unit", async () => {
     const { exec, runs, pushes } = fakeExec();
-    await createDeployer(exec).deploy(target, "/ws/services/sales", manifest);
+    await createDeployer(exec).deploy(target, "/ws/services/sales", manifest, {}, "d1");
 
     expect(pushes).toEqual([{ localDir: "/ws/services/sales", remoteDir: "/opt/rhumb/sales" }]);
     const script = runs.join("\n");
@@ -49,7 +104,7 @@ describe("createDeployer", () => {
       writeFileSync(join(dir, "package.json"), "{}");
       mkdirSync(join(dir, "node_modules"), { recursive: true });
       const { exec, runs } = fakeExec();
-      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", start: "node index.js", runtime: "node" });
+      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", start: "node index.js", runtime: "node" }, {}, "d1");
       const script = runs.join("\n");
       expect(script).toContain("apt-get install -y --no-install-recommends nodejs");
       expect(script).not.toMatch(/install[^\n]*\bnpm\b/);
@@ -59,7 +114,7 @@ describe("createDeployer", () => {
     it("installs nodejs + npm and runs npm ci when package.json exists with no vendored node_modules", async () => {
       writeFileSync(join(dir, "package.json"), "{}");
       const { exec, runs } = fakeExec();
-      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" });
+      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" }, {}, "d1");
       const script = runs.join("\n");
       expect(script).toContain("apt-get install -y --no-install-recommends nodejs");
       expect(script).toMatch(/install[^\n]*\bnpm\b/);
@@ -68,7 +123,7 @@ describe("createDeployer", () => {
 
     it("installs nodejs only when there is no package.json at all", async () => {
       const { exec, runs } = fakeExec();
-      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" });
+      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" }, {}, "d1");
       const script = runs.join("\n");
       expect(script).toContain("apt-get install -y --no-install-recommends nodejs");
       expect(script).not.toMatch(/install[^\n]*\bnpm\b/);
@@ -77,7 +132,7 @@ describe("createDeployer", () => {
     it("runs the runtime install before enabling the unit", async () => {
       writeFileSync(join(dir, "package.json"), "{}");
       const { exec, runs } = fakeExec();
-      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" });
+      await createDeployer(exec).deploy(target, dir, { ...manifest, id: "poller", runtime: "node" }, {}, "d1");
       const installIdx = runs.findIndex((c) => c.includes("nodejs"));
       const enableIdx = runs.findIndex((c) => c.includes("enable --now"));
       expect(installIdx).toBeGreaterThanOrEqual(0);
@@ -87,7 +142,7 @@ describe("createDeployer", () => {
 
   it("installs Python when runtime is python", async () => {
     const { exec, runs } = fakeExec();
-    await createDeployer(exec).deploy(target, "/ws/services/p", { ...manifest, id: "p", runtime: "python" });
+    await createDeployer(exec).deploy(target, "/ws/services/p", { ...manifest, id: "p", runtime: "python" }, {}, "d1");
     const script = runs.join("\n");
     expect(script).toContain("python3");
     expect(script).toContain("python3-pip");
@@ -97,7 +152,7 @@ describe("createDeployer", () => {
   it("installs no runtime when runtime is absent or none", async () => {
     for (const m of [manifest, { ...manifest, runtime: "none" as const }]) {
       const { exec, runs } = fakeExec();
-      await createDeployer(exec).deploy(target, "/ws/services/sales", m);
+      await createDeployer(exec).deploy(target, "/ws/services/sales", m, {}, "d1");
       expect(runs.join("\n")).not.toContain("apt-get install");
     }
   });
@@ -107,7 +162,7 @@ describe("createDeployer", () => {
     await createDeployer(exec).deploy(target, "/ws/services/sales", manifest, {
       DATABASE_URL: "postgres://u:p@h:5432/db",
       RHUMB_DATASOURCE_PRINTERS: "postgres://u:p@h:5432/db",
-    });
+    }, "d1");
     const script = runs.join("\n");
     expect(script).toContain("Environment=DATABASE_URL=postgres://u:p@h:5432/db");
     expect(script).toContain("Environment=RHUMB_DATASOURCE_PRINTERS=postgres://u:p@h:5432/db");

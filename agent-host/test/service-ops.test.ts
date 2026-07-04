@@ -60,7 +60,7 @@ describe("createServiceOps.spawn", () => {
     };
     const deployed: string[] = [];
     const deployedEnv: Array<Record<string, string> | undefined> = [];
-    const deployer: ServiceDeployer = { async deploy(_t, dirArg, m, extraEnv) { deployed.push(`${m.id}@${dirArg}`); deployedEnv.push(extraEnv); } };
+    const deployer: ServiceDeployer = { async deploy(_t, dirArg, m, extraEnv, _deployId) { deployed.push(`${m.id}@${dirArg}`); deployedEnv.push(extraEnv); } };
     return { calls, specs, deployer, deployed, deployedEnv, lxc };
   }
 
@@ -76,7 +76,7 @@ describe("createServiceOps.spawn", () => {
 
   it("rolls back (destroys the container) if deploy fails", async () => {
     const { calls, lxc } = fakes();
-    const badDeployer: ServiceDeployer = { async deploy() { throw new Error("scp failed"); } };
+    const badDeployer: ServiceDeployer = { async deploy(_t, _dir, _m, _env, _id) { throw new Error("scp failed"); } };
     const ops = createServiceOps({ lxc, deployer: badDeployer, config: cfg(), now: () => "T", readManifest: manifest, sleep: async () => {} });
     await expect(ops.spawn("sales")).rejects.toThrow(/scp failed/);
     // rollback stops the (running) container before destroying it
