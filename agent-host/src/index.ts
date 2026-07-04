@@ -21,6 +21,7 @@ import { createLxcClient } from "./services/lxc.js";
 import { createSshExec } from "./services/ssh.js";
 import { createDeployer } from "./services/deployer.js";
 import { createServiceOps } from "./services/ops.js";
+import { createHealthGate, createNetProbes } from "./services/health.js";
 import { createDataSourceResolver } from "./services/datasource.js";
 import { readManifest } from "./services/manifest.js";
 import { loadOntologyConfig } from "./ontology/config.js";
@@ -39,14 +40,18 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     const pending = new PendingActions({ now, id: () => randomUUID() });
     const svcCfg = loadServiceConfig(process.env);
     const serviceOps = svcCfg
-      ? createServiceOps({
-          lxc: createLxcClient(infra.proxmox),
-          deployer: createDeployer(createSshExec()),
-          config: svcCfg,
-          now,
-          readManifest: (id) => readManifest(svcCfg.workspace, id),
-          resolveDataSource: createDataSourceResolver(infra.dataSourcesPath),
-        })
+      ? (() => {
+          const sshExec = createSshExec();
+          return createServiceOps({
+            lxc: createLxcClient(infra.proxmox),
+            deployer: createDeployer(sshExec),
+            config: svcCfg,
+            now,
+            readManifest: (id) => readManifest(svcCfg.workspace, id),
+            resolveDataSource: createDataSourceResolver(infra.dataSourcesPath),
+            gate: createHealthGate({ exec: sshExec, ...createNetProbes(), deadlineMs: svcCfg.healthGateMs }),
+          });
+        })()
       : undefined;
     const server = createInfraServer({
       proxmox: createProxmoxClient(infra.proxmox),

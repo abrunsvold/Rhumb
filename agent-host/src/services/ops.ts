@@ -1,9 +1,14 @@
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest, ServiceEntry } from "./types.js";
-import { loadServices, appendService, removeService } from "./registry.js";
+import type { HealthGate } from "./health.js";
+import { loadServices, appendService, removeService, replaceService } from "./registry.js";
 import { assertServiceId } from "./manifest.js";
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const defaultDeployId = () =>
+  `${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
 
 export interface ServiceOps {
   spawn(id: string): Promise<ServiceEntry>;
@@ -23,6 +28,8 @@ export function createServiceOps(deps: {
   resolveDataSource?: (id: string) => string | undefined;
   waitForIpMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  gate: HealthGate;
+  newDeployId?: () => string;
 }): ServiceOps {
   const { lxc, deployer, config, now } = deps;
   const sleep = deps.sleep ?? defaultSleep;
@@ -65,53 +72,63 @@ export function createServiceOps(deps: {
     }
   }
 
+  // Provision a fresh container and get the service healthy in it, or destroy the
+  // container and throw. Shared by spawn and redeploy; never touches the registry.
+  async function provisionHealthy(manifest: ServiceManifest, extraEnv: Record<string, string>, deployId: string): Promise<{ containerId: number; host: string }> {
+    const spec = {
+      name: `rhumb-${manifest.id}`,
+      cores: manifest.resources?.cores ?? 1,
+      memory: manifest.resources?.memory ?? 512,
+      ostemplate: config.ostemplate, storage: config.storage, bridge: config.bridge,
+      rootfsGb: config.rootfsGb, sshPublicKey: config.deployPublicKey, nameserver: config.nameserver,
+    };
+    const { id: containerId } = await lxc.create(spec);
+    try {
+      await lxc.start(containerId);
+      let host: string | null = null;
+      const deadline = Date.now() + waitForIpMs;
+      while (host === null && Date.now() < deadline) {
+        host = await lxc.ip(containerId);
+        if (host === null) await sleep(2000);
+      }
+      if (host === null) throw new Error(`container ${containerId} never reported an IP`);
+      await deployer.deploy(
+        { host, user: "root", privateKeyPath: config.deployKeyPath },
+        join(config.workspace, "services", manifest.id),
+        manifest, extraEnv, deployId,
+      );
+      const gate = await deps.gate.waitHealthy({
+        ssh: { host, user: "root", privateKeyPath: config.deployKeyPath },
+        unit: `rhumb-${manifest.id}.service`,
+        host, port: manifest.port, healthPath: manifest.healthPath,
+      });
+      if (!gate.ok) throw new Error(`service "${manifest.id}" failed its health gate: ${gate.reason} (last state: ${JSON.stringify(gate.lastState)})`);
+      return { containerId, host };
+    } catch (e) {
+      // Best-effort rollback: a running container can't be DELETEd on PVE, so
+      // stop it first, then destroy. Both are swallowed — the original error wins.
+      try { await lxc.stop(containerId); await waitStopped(containerId); } catch { /* may not be running */ }
+      try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
+      throw e;
+    }
+  }
+
   return {
     async spawn(id: string): Promise<ServiceEntry> {
       assertServiceId(id);                       // reject traversal before any fs/path use
+      const existing = entryFor(id);
+      if (existing) throw new Error(`service "${id}" is already deployed (container ${existing.containerId}); use redeploy_service to update it`);
       const manifest = deps.readManifest(id);
       if (manifest.id !== id) throw new Error(`manifest id "${manifest.id}" does not match requested id "${id}"`);
       const extraEnv = buildExtraEnv(manifest);   // resolve data sources before provisioning (fail fast)
-      const spec = {
-        name: `rhumb-${manifest.id}`,
-        cores: manifest.resources?.cores ?? 1,
-        memory: manifest.resources?.memory ?? 512,
-        ostemplate: config.ostemplate,
-        storage: config.storage,
-        bridge: config.bridge,
-        rootfsGb: config.rootfsGb,
-        sshPublicKey: config.deployPublicKey,
-        nameserver: config.nameserver,
+      const deployId = (deps.newDeployId ?? defaultDeployId)();
+      const { containerId, host } = await provisionHealthy(manifest, extraEnv, deployId);
+      const entry: ServiceEntry = {
+        id: manifest.id, name: manifest.name, containerId, host, port: manifest.port,
+        basePath: `/services/${manifest.id}`, status: "healthy", createdAt: now(), deployId,
       };
-      const { id: containerId } = await lxc.create(spec);
-      try {
-        await lxc.start(containerId);
-        let host: string | null = null;
-        const deadline = Date.now() + waitForIpMs;
-        while (host === null && Date.now() < deadline) {
-          host = await lxc.ip(containerId);
-          if (host === null) await sleep(2000);
-        }
-        if (host === null) throw new Error(`container ${containerId} never reported an IP`);
-        await deployer.deploy(
-          { host, user: "root", privateKeyPath: config.deployKeyPath },
-          join(config.workspace, "services", manifest.id),
-          manifest,
-          extraEnv,
-          "", // deployId threaded properly in the redeploy task
-        );
-        const entry: ServiceEntry = {
-          id: manifest.id, name: manifest.name, containerId, host, port: manifest.port,
-          basePath: `/services/${manifest.id}`, status: "healthy", createdAt: now(),
-        };
-        appendService(config.servicesPath, entry);
-        return entry;
-      } catch (e) {
-        // Best-effort rollback: a running container can't be DELETEd on PVE, so
-        // stop it first, then destroy. Both are swallowed — the original error wins.
-        try { await lxc.stop(containerId); await waitStopped(containerId); } catch { /* may not be running */ }
-        try { await lxc.destroy(containerId); } catch { /* best-effort rollback */ }
-        throw e;
-      }
+      appendService(config.servicesPath, entry);
+      return entry;
     },
     async stop(id: string): Promise<void> {
       const e = entryFor(id);

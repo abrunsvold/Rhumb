@@ -8,6 +8,7 @@ export interface ServiceConfig {
   servicesPath: string;             // <workspace>/services.json
   workspace: string;                // <workspace> (service dirs live at <workspace>/services/<id>)
   nameserver: string;               // RHUMB_LXC_NAMESERVER; PVE's injected resolver can be unusable in-container
+  healthGateMs: number;             // RHUMB_HEALTH_GATE_MS; deadline for the post-deploy health gate
 }
 
 export interface LxcSpec {

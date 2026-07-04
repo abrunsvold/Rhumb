@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config.js";
+import { loadServiceConfig } from "../src/services/config.js";
 
 describe("loadConfig", () => {
   it("throws when CLAUDE_CODE_OAUTH_TOKEN is missing", () => {
@@ -87,5 +88,24 @@ describe("identity config", () => {
     const cfg = loadConfig({ ...base, RHUMB_INSECURE_DEV: "1" });
     expect(cfg.insecureDev).toBe(true);
     expect(cfg.allowedUsers).toEqual([]);
+  });
+});
+
+describe("loadServiceConfig healthGateMs", () => {
+  const base = {
+    RHUMB_DEPLOY_KEY: "/k",
+    RHUMB_LXC_TEMPLATE: "t",
+    RHUMB_LXC_STORAGE: "s",
+    RHUMB_LXC_BRIDGE: "b",
+  };
+
+  it("honors RHUMB_HEALTH_GATE_MS", () => {
+    const cfg = loadServiceConfig({ ...base, RHUMB_HEALTH_GATE_MS: "120000" });
+    expect(cfg?.healthGateMs).toBe(120_000);
+  });
+
+  it("defaults healthGateMs to 90000 when absent", () => {
+    const cfg = loadServiceConfig({ ...base });
+    expect(cfg?.healthGateMs).toBe(90_000);
   });
 });
