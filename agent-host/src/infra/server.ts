@@ -8,7 +8,7 @@ import type { ServiceOps } from "../services/ops.js";
 
 export const GATED_TOOLS: readonly GatedTool[] = [
   "create_vm", "start_vm", "stop_vm", "resize_vm", "destroy_vm", "provision_database",
-  "spawn_service", "stop_service", "start_service", "destroy_service",
+  "spawn_service", "redeploy_service", "stop_service", "start_service", "destroy_service",
 ];
 export const READ_TOOL_NAMES: readonly string[] = [
   "mcp__infra__list_vms", "mcp__infra__vm_status", "mcp__infra__list_services", "mcp__infra__service_status",
@@ -100,6 +100,13 @@ export function createInfraServer(deps: InfraDeps) {
           if (!deps.serviceOps) return fail("services are not configured");
           const entry = await deps.serviceOps.spawn(a.id);
           return ok(`spawned service "${entry.id}" at ${entry.basePath}`);
+        } catch (e) { return fail(String(e)); }
+      }),
+      tool("redeploy_service", "Blue-green replace an EXISTING service: spawn a new container, deploy, health-gate it, cut the registry over, then destroy the old container. The old container is destroyed only after the new one passes its health gate.", { id: z.string() }, async (a) => {
+        try {
+          if (!deps.serviceOps) return fail("services are not configured");
+          const { entry, warning } = await deps.serviceOps.redeploy(a.id);
+          return ok(`redeployed "${entry.id}" (deploy ${entry.deployId}, container ${entry.containerId})${warning ? ` — WARNING: ${warning}` : ""}`);
         } catch (e) { return fail(String(e)); }
       }),
       tool("stop_service", "Stop a service's container", { id: z.string() }, async (a) => {

@@ -71,4 +71,4 @@ export interface ServiceEntry {
   updatedAt?: string;               // set on redeploy cutover
 }
 
-export type GatedServiceTool = "spawn_service" | "stop_service" | "start_service" | "destroy_service";
+export type GatedServiceTool = "spawn_service" | "stop_service" | "start_service" | "destroy_service" | "redeploy_service";
