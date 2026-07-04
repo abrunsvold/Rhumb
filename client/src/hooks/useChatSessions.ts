@@ -55,6 +55,17 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     };
   }, []);
 
+  // Close out a turn exactly once: stop its stream, drop its busy count, forget it.
+  // Safe to call from the turn stream, its stream_closed, or the session stream.
+  function finishTurn(turnId: string) {
+    if (!turnStops.current.has(turnId)) return;
+    turnStops.current.get(turnId)?.();
+    turnStops.current.delete(turnId);
+    const k = turnKey.current.get(turnId);
+    if (k) setStore((s) => bumpTurns(s, k, -1));
+    turnKey.current.delete(turnId);
+  }
+
   function attachSessionStream(sessionId: string) {
     sessionStops.current.get(sessionId)?.();
     const stop = openSessionStream(agentBase, sessionId, (raw) => {
@@ -75,7 +86,11 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
         return;
       }
       retryCount.current.set(sessionId, 0);
-      setStore((s) => reduceEvent(setStale(s, sessionId, false), sessionId, raw as AgentEvent));
+      const ev = raw as AgentEvent;
+      if (ev.type === "result" || ev.type === "error") {
+        for (const [tid, k] of turnKey.current.entries()) if (k === sessionId) finishTurn(tid);
+      }
+      setStore((s) => reduceEvent(setStale(s, sessionId, false), sessionId, ev));
     });
     sessionStops.current.set(sessionId, stop);
   }
@@ -153,6 +168,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     setStore((s) => bumpTurns(s, key, 1));
 
     const stop = openAgentStream(agentBase, turnId, (event) => {
+      if ((event as { type?: string }).type === "stream_closed") { finishTurn(turnId); return; }
       const k = turnKey.current.get(turnId) ?? key;
       if (event.type === "session" && k.startsWith("draft:")) {
         turnKey.current.set(turnId, event.sessionId);
@@ -175,14 +191,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       if (!hasSessionStream || targetTab?.stale || event.type === "session") {
         setStore((s) => reduceEvent(s, targetKey, event));
       }
-      if (event.type === "result" || event.type === "error") {
-        if (turnStops.current.has(turnId)) {
-          turnStops.current.get(turnId)?.();
-          turnStops.current.delete(turnId);
-          setStore((s) => bumpTurns(s, turnKey.current.get(turnId) ?? k, -1));
-          turnKey.current.delete(turnId);
-        }
-      }
+      if (event.type === "result" || event.type === "error") finishTurn(turnId);
     });
     turnStops.current.set(turnId, stop);
 
@@ -191,11 +200,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const k = turnKey.current.get(turnId) ?? key;
-      if (turnStops.current.has(turnId)) {
-        turnStops.current.get(turnId)?.();
-        turnStops.current.delete(turnId);
-        setStore((s) => bumpTurns(s, k, -1));
-      }
+      finishTurn(turnId);
       setStore((s) => reduceEvent(s, k, { type: "error", message: `Send failed: ${detail}` }));
       return false;
     }

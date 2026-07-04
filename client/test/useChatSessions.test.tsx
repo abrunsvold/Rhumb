@@ -172,4 +172,51 @@ describe("useChatSessions", () => {
     act(() => turnOn({ type: "result", result: "done", isError: false }));
     expect(result.current.store.tabs[0].openTurns).toBe(0);
   });
+
+  it("clears busy when the terminal result arrives on the SESSION stream, not the turn stream", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    await act(async () => {
+      await result.current.send(draftKey, "hello", []);
+    });
+    const turnId = [...turnHandlers.keys()][0];
+    act(() => turnHandlers.get(turnId)!({ type: "session", sessionId: "real-3" }));
+    expect(result.current.store.tabs[0].key).toBe("real-3");
+    expect(result.current.store.tabs[0].openTurns).toBe(1);
+
+    // the turn stream goes silent; the session stream delivers the terminal event instead
+    act(() => sessionHandlers.get("real-3")!({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+  });
+
+  it("clears busy when the turn stream closes with no terminal event", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const key = result.current.store.tabs[0].key;
+    await act(async () => {
+      await result.current.send(key, "hi", []);
+    });
+    expect(result.current.store.tabs[0].openTurns).toBe(1);
+    const turnOn = [...turnHandlers.values()].at(-1)!;
+    act(() => turnOn({ type: "stream_closed" } as unknown as AgentEvent));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+  });
+
+  it("does not double-decrement if result arrives on both streams", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    await act(async () => {
+      await result.current.send(draftKey, "hello", []);
+    });
+    const turnId = [...turnHandlers.keys()][0];
+    act(() => turnHandlers.get(turnId)!({ type: "session", sessionId: "real-4" }));
+    expect(result.current.store.tabs[0].openTurns).toBe(1);
+
+    act(() => turnHandlers.get(turnId)!({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+    act(() => sessionHandlers.get("real-4")!({ type: "result", result: "done", isError: false }));
+    expect(result.current.store.tabs[0].openTurns).toBe(0);
+  });
 });
