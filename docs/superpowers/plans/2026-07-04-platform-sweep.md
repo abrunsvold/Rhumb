@@ -200,10 +200,13 @@ const SECRET_LINE = /Environment=|postgres:\/\/|TOKEN|PASSWORD|PRIVATE KEY/i;
 export function redactSshError(verb: "command" | "copy", e: unknown): Error {
   const err = e as { code?: number | string; stderr?: string };
   const code = err?.code ?? "?";
-  const tail = String(err?.stderr ?? "").slice(-400)
+  // Redact FULL lines first, then cap — slicing before redaction can drop a
+  // marker token off a >400-char line and leak the trailing secret.
+  const tail = String(err?.stderr ?? "")
     .split("\n")
     .map((l) => (SECRET_LINE.test(l) ? "[redacted line]" : l))
     .join("\n")
+    .slice(-400)
     .trim();
   return new Error(`ssh ${verb} failed (exit ${code})${tail ? `: ${tail}` : ""}`);
 }
