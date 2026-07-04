@@ -20,6 +20,12 @@ export function validateManifest(raw: unknown): ServiceManifest {
     throw new Error("manifest.port must be an integer 1-65535");
   }
   const out: ServiceManifest = { id: r.id, type: "service", name: r.name, start: r.start, port: r.port };
+  if (r.healthPath !== undefined) {
+    if (typeof r.healthPath !== "string" || !r.healthPath.startsWith("/")) {
+      throw new Error('manifest.healthPath must be a string starting with "/"');
+    }
+    out.healthPath = r.healthPath;
+  }
   if (r.runtime !== undefined) {
     if (r.runtime !== "node" && r.runtime !== "python" && r.runtime !== "none") {
       throw new Error('manifest.runtime must be one of "node", "python", "none"');

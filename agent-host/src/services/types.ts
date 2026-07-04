@@ -44,6 +44,7 @@ export interface ServiceManifest {
   name: string;
   start: string;
   port: number;
+  healthPath?: string;                     // HTTP path for health checks (e.g., /health)
   runtime?: "node" | "python" | "none";   // runtime to install in the container before start
   dataSources?: string[];                  // ids of data sources whose connection string is injected as env
   resources?: { cores?: number; memory?: number };
