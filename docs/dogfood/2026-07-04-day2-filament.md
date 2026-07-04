@@ -141,7 +141,7 @@ _All times EDT (America/New_York). Driven from the Tauri client, Task 4._
 
 ### C1 — data preserved: **PASS**
 
-`services.json` (`$WS/services.json`) confirms container **unchanged**: `containerId 105`, `host 192.168.1.95`, `createdAt 2026-07-02T00:55:09.836Z` — identical to baseline. No new container was spawned.
+`services.json` (`$WS/services.json`) confirms the **registered** container unchanged: `containerId 105`, `host 192.168.1.95`, `createdAt 2026-07-02T00:55:09.836Z` — identical to baseline. *(Correction to the initial pass: a second, unregistered container WAS spawned — LXC 106, see C3. It has never successfully run — it crash-loops at module load before any DB connection — so it has performed zero DB writes and does not affect any count below. The +500 telemetry growth is fully accounted for by container 105 alone.)*
 
 Row counts (queried live via the poller container's own `pg` module, read-only SELECT):
 
@@ -169,7 +169,14 @@ All 6 baseline tables present; every count ≥ baseline. +500 telemetry rows ove
 - Container ID/IP: **unchanged** (105 / 192.168.1.95) — same container, not recreated.
 - Hands-off: Task 4's log shows zero manual interventions beyond the one UI approval (`spawn_service` at 15:29:17 EDT) — confirmed by re-reading task-4-report.md; no other operator action on the box was taken by the human.
 
-**The service is healthy and has been continuously since before the turn — but it was never restarted during or after the turn.** "One redeploy restart cycle is normal" does not apply here because there were **zero** restart cycles, not one. This is evidence, not an inference — see C3.
+**The registered service (LXC 105) is healthy and has been continuously since before the turn — it was never restarted during or after the turn** (zero restart cycles on 105; "one redeploy restart cycle is normal" does not apply).
+
+**CORRECTED CAVEAT (post-spot-check):** full `pct list` shows **TWO** running containers named `rhumb-printer-poller`: 105 (registered, audited above) **and 106** — an orphan left by the redeploy attempt (see C3 for the mechanism). Container 106 state, verified directly:
+- `pct config 106`: same hostname `rhumb-printer-poller`, own MAC (`BC:24:11:10:E3:0B`), DHCP; inside, `ip -4 addr` → **192.168.1.176**.
+- Its `rhumb-printer-poller.service`: `ActiveState=activating`, `SubState=auto-restart`, `ExecMainStatus=1`, **`NRestarts=497` and climbing** (observed ~19:48 UTC; coordinator spot-check saw 464 minutes earlier; `RestartSec=2`, no backoff) — a **restart storm burning CPU indefinitely**, invisible to `services.json`, the health URL, and the dashboard.
+- **Recommended operator cleanup (NOT performed — read-only task): `pct stop 106 && pct destroy 106`.**
+
+So C2's "healthy" verdict holds for the registered service and the hands-off criterion, but the redeploy attempt left an unmonitored crash-looping container that no health surface reports.
 
 ### C3 — the actual change is live: **FAIL** (this is the headline finding)
 
@@ -205,13 +212,25 @@ This is the exact **bare `filament_used = $7`** assignment the agent said it fix
 ```
 (and the equivalent `closeJob`/`print_duration` GREATEST/COALESCE changes, plus new code comments explaining the Klipper-reset rationale). **The fix is real, was correctly implemented, and was verified in the agent's simulation harness (per Task 4 log) — it simply never reached the running container.**
 
-**Root cause of the gap:** `/root/rhumbr-workspace/infra-audit.jsonl` (the platform's own audit trail) records:
-```
-{"ts":"2026-07-04T19:29:17.382Z","tool":"mcp__infra__spawn_service","input":{"id":"printer-poller"},"decision":"approved"}
-```
-— timestamp matches the operator's approval exactly (15:29:17 EDT = 19:29:17 UTC). This is the **only** infra event in the turn window. Comparing against the container's journal (zero entries, zero restarts, same PID) and the file's mtime (unchanged): **`spawn_service` on an already-running service id was a silent no-op.** It updated the staged workspace copy but did not push it into the container or restart the process. The platform reported the call as `"decision":"approved"` (i.e. gate passed) with no indication to the agent or operator that the deployed artifact was untouched — the agent's health/telemetry check after the call only exercises the *health endpoint*, which was never affected by the bug and so kept returning healthy regardless.
+**Root cause of the gap — CORRECTED after review spot-checks.** The initial pass concluded `spawn_service` was a silent no-op. That was wrong: the mechanism is a **replace-style redeploy that half-completed**. The 105-side evidence above (old code, zero restarts, same PID) remains valid — but a second container tells the other half of the story:
 
-This directly resolves **F11** from the Task 4 report, but as the **negative** branch: `spawn_service` does **not** reliably redeploy an existing service's code — for this call shape (`{"id": "<existing-id>"}`, no image/command/force flag), it appears to be a pure no-op against a service that's already running, silently. The agent's claim *"redeployed to the live container ... confirmed /health is ticking and telemetry is still flowing"* is **technically true but misleading**: health/telemetry were never at risk (the bug only manifests on job-close with a real print), so that verification could not and did not detect the redeploy failure.
+- `/root/rhumbr-workspace/infra-audit.jsonl` records the sole infra event of the turn: `{"ts":"2026-07-04T19:29:17.382Z","tool":"mcp__infra__spawn_service","input":{"id":"printer-poller"},"decision":"approved"}` (= the operator's 15:29:17 EDT approval, exact match).
+- **LXC 106 was created by that call**: full `pct list` shows 106 running, hostname `rhumb-printer-poller`, IP 192.168.1.176. Its `/opt/rhumb/printer-poller/index.js` has mtime **2026-07-04 19:29:24 UTC — 7 seconds after the audit entry** — and **contains the FIXED code** (verified: `GREATEST(COALESCE($7, 0), COALESCE(filament_used, 0))` guards at lines 120/125/142/145). The fix DID ship — to a new container nothing points at.
+- **106 has never successfully started.** Its journal shows, on every restart attempt:
+  ```
+  Error: Cannot find module 'pg'
+  Require stack:
+  - /opt/rhumb/printer-poller/index.js
+  ```
+  `systemctl show`: `ActiveState=activating`, `SubState=auto-restart`, `ExecMainStatus=1`, `NRestarts=497` and climbing (RestartSec=2, no backoff). It dies at the top-level `require` — before any DB connection — hence zero DB writes (C1 unaffected, no double-polling ever occurred).
+- **Why `pg` is missing:** 106's `node_modules` (13 packages) is a byte-level copy of the staged dir `$WS/services/printer-poller/node_modules` — which contains pg's transitive deps (`pg-pool`, `pg-protocol`, `pg-types`, ...) but **not the top-level `pg` package itself**. Healthy 105's `node_modules` has 14 packages including `pg`. The staged vendored tree is incomplete (plausibly a side effect of the build agent's earlier DB-probe improvisations, F10).
+- **The exact code path that misfired** (local worktree, `agent-host/src/services/deployer.ts`): line 23 `const alreadyVendored = existsSync(join(localDir, "node_modules"));` → line 24 `if (hasPackageJson && !alreadyVendored)` gates the remote `npm ci --omit=dev`. The check tests only the *existence* of `node_modules`, not its completeness — the incomplete vendored tree made `alreadyVendored` true, so **the dependency install was skipped** and the broken tree shipped verbatim.
+- **Why no error, no cutover, no rollback** (all sourced from the local worktree):
+  - `deployer.ts:55` — the deploy's final step is `systemctl enable --now`, which **exits 0 even when the unit immediately crash-loops**. There is **no health gate** anywhere in the deploy path, so `spawn()` believed it succeeded.
+  - `agent-host/src/services/registry.ts:19-22` — `appendService` **silently returns the existing list when an entry with the same id already exists**: `if (cur.some((s) => s.id === entry.id)) return cur;`. So the registry cutover to 106 was silently dropped; `services.json` still points at 105.
+  - `agent-host/src/services/ops.ts:107-113` — rollback (stop+destroy the new container) only runs in the `catch` block. Since nothing threw, **no rollback ran and 106 was left behind**, running, unregistered, in a restart storm. (Run-1's observed behavior — rollback+destroy on failure — only triggers when a step actually throws; a crash-looping-but-enabled unit doesn't.)
+
+Net: **`spawn_service` on an existing id is a replace-redeploy that half-completed** — new container spawned ✓, fixed code pushed ✓, dependency install skipped ✗ (vendored-check false positive), health never gated ✗, registry never cut over ✗ (silent dedupe), old container left serving ✓(accidentally safe), failed container orphaned in an unbounded restart loop ✗. The agent's claim *"redeployed to the live container (192.168.1.95) ... confirmed /health is ticking and telemetry is still flowing"* is **misleading on two counts**: the redeploy target that actually received the code was 106 (192.168.1.176), not 192.168.1.95; and the health/telemetry it checked was the OLD container's (via the unchanged `services.json` routing), which was never at risk — that check could not distinguish a successful cutover from this half-failure.
 
 **(b) Filament column plumbing at idle — PASS (as far as it goes).**
 
@@ -220,7 +239,7 @@ Column identified from C1 schema: `filament_used (double precision)` present in 
 printer_id 1 (K2Plus-Right): sample_state=standby, filament_used=0, sampled_at=2026-07-04T19:40:32Z
 printer_id 2 (K2Plus-FE91):  sample_state=standby, filament_used=0, sampled_at=2026-07-04T19:40:32Z
 ```
-Both printers idle (`standby`), `filament_used=0` on current rows — this is the expected/passing idle state (not evidence either way on the fix, since no real print ran during or after the turn). **No real print ran during the verification window**, so the fix's actual field behavior (accumulate through a terminal-reset poll) remains unexercised in production — and per (a), it cannot be exercised until the container is actually restarted with the staged code.
+Both printers idle (`standby`), `filament_used=0` on current rows — this is the expected/passing idle state (not evidence either way on the fix, since no real print ran during or after the turn). **No real print ran during the verification window**, so the fix's actual field behavior (accumulate through a terminal-reset poll) remains unexercised in production — and per (a), it cannot be exercised until a container running the fixed code actually starts and is cut over to (106 has the code but can't boot; 105 serves traffic with the old code).
 
 ### C4 — surface renders filament: **PASS**
 
@@ -244,26 +263,26 @@ ls $WS/ontology && grep -ril printer $WS/ontology | sort
   system/datasource-printers.md
   system/service-printer-poller.md
 ```
-All four baseline system entries present (plus the two domain printer files and print-jobs domain file) — identical set to Phase 1. `system/service-printer-poller.md` frontmatter `updated: 2026-07-01T21:05:14.447Z` — **unchanged** by the redeploy attempt (consistent with C3's finding that nothing actually redeployed). The stale `host: 192.168.1.238` (noted at baseline as non-responsive; live address is `192.168.1.95`) **still persists**, uncorrected — the no-op `spawn_service` had no occasion to touch it, and the platform does not appear to reconcile ontology host fields on redeploy attempts generally.
+All four baseline system entries present (plus the two domain printer files and print-jobs domain file) — identical set to Phase 1. `system/service-printer-poller.md` frontmatter `updated: 2026-07-01T21:05:14.447Z` — **unchanged** by the redeploy attempt (consistent with C3: the registry cutover never happened, and nothing in the spawn path updates ontology). The stale `host: 192.168.1.238` (noted at baseline as non-responsive; live address is `192.168.1.95`) **still persists**, uncorrected — and the orphaned 106 (192.168.1.176) is likewise absent from the ontology, so the ontology now under-represents reality by one running container.
 
 ## Verdict
 
 | Criterion | Result |
 |---|---|
-| C1 — data preserved | **PASS** |
-| C2 — service healthy, hands-off | **PASS** (healthy + zero manual intervention; "hands-off" true, but see C3 for what "healthy" did NOT catch) |
-| C3 — actual change live | **FAIL** — fix correctly written and staged, but the running container still executes the pre-turn buggy code; `spawn_service` on an existing id was a silent no-op |
+| C1 — data preserved | **PASS** (orphan 106 never ran → zero writes; counts unaffected) |
+| C2 — service healthy, hands-off | **PASS** (registered service healthy + zero manual intervention; caveat: redeploy orphaned a crash-looping container no health surface reports — operator cleanup `pct stop 106` + destroy recommended, not performed) |
+| C3 — actual change live | **FAIL** — replace-style redeploy half-completed: fixed code shipped to a NEW container (106) that crash-loops on a missing `pg` dependency; registry/traffic still on old container (105) running the pre-turn buggy code |
 | C4 — surface renders filament | **PASS** |
-| C5 — ontology consistent | **PASS** (stale IP finding persists, unrelated to this turn) |
+| C5 — ontology consistent | **PASS** (stale IP persists; orphan 106 also absent from ontology) |
 
-**Overall: PARTIAL.** Four of five criteria pass outright. C3 is a hard fail on the turn's actual headline claim ("fixed a latent poller bug ... redeployed the live poller service"): the bug was correctly diagnosed and correctly fixed in a staged file, but the fix never reached production. The container serving live traffic today is running byte-identical code to the Jul 2 deploy (confirmed via file mtime, journal history, and `NRestarts=0`). Every other claim in Task 4's report (no schema change, no dashboard change, DB data intact, service healthy, hands-off except one approval) is verified true. The false claim is specifically the deployment step — "redeployed to the live container" did not happen; only the health check (which the bug doesn't affect) was actually exercised, so the agent had no way to detect the gap from its own vantage point, and reported success in good faith.
+**Overall: PARTIAL.** Four of five criteria pass. C3 is a hard fail on the turn's headline claim ("fixed a latent poller bug ... redeployed the live poller service"): the bug was correctly diagnosed, correctly fixed, and the fixed code even shipped — but to a new container (106) that has never successfully booted (`Cannot find module 'pg'`, NRestarts≈500 and climbing), while registry and traffic remain on the old container (105) running byte-identical pre-turn code (confirmed via file mtime, journal history, `NRestarts=0`). Every other Task-4 claim (no schema change, no dashboard change, DB data intact, registered service healthy, hands-off except one approval) is verified true. The deployment claim failed at four distinct platform seams — vendored-deps check skipped the install (`deployer.ts:23-24`), no health gate (`deployer.ts:55`), silent registry dedupe blocked cutover (`registry.ts:21`), rollback only fires on a thrown error so the orphan survived (`ops.ts:107-113`) — and the agent's health check (routed via the unchanged registry to the OLD container) was structurally incapable of detecting any of it. Reported success in good faith.
 
 **Run-scope note (per brief):** the spec's original schema-migration and surface-change dimensions were not exercised this turn (agent's correct reframe that neither was needed) — this is a scope note, not a criterion failure, and is orthogonal to the C3 finding above.
 
 **Claims that could not be verified / are now falsified:**
-- "redeployed to the live container (192.168.1.95)" — **falsified**: no restart, no file write to the deployed path, `NRestarts=0`.
-- "confirmed /health is ticking and telemetry is still flowing (16 samples in the last 2 min)" — **true but not informative to the redeploy question**: the health/telemetry stream was never interrupted because the process was never restarted; this check cannot distinguish "redeployed successfully" from "nothing happened."
-- Simulation-harness verification of the fix logic itself — **not independently re-run** (out of scope for read-only box verification; the fix's correctness as *code* is plausible on inspection — the GREATEST/COALESCE pattern is a standard monotonic-accumulator idiom — but its production behavior remains unverified because it isn't running).
-- "the fix will visibly prove itself on the next real print" — **cannot occur as stated**: the running container doesn't have the fix, so the next real print will still exhibit the original bug (filament reset to 0) until an actual redeploy/restart happens.
+- "redeployed to the live container (192.168.1.95)" — **falsified as stated**: 192.168.1.95 (LXC 105) was never touched (no restart, no file write, `NRestarts=0`). The code actually deployed to a new container 106 (192.168.1.176) that never came up.
+- "confirmed /health is ticking and telemetry is still flowing (16 samples in the last 2 min)" — **true but not informative to the redeploy question**: that health/telemetry belongs to the OLD container, reached via the never-cut-over registry; it cannot distinguish a successful cutover from this half-failure.
+- Simulation-harness verification of the fix logic itself — **not independently re-run** (out of scope for read-only box verification; the GREATEST/COALESCE pattern is a sound monotonic-accumulator idiom on inspection, but production behavior remains unverified because the fixed code has never executed).
+- "the fix will visibly prove itself on the next real print" — **cannot occur as stated**: the traffic-serving container doesn't have the fix; the next real print will still exhibit the original bug (filament zeroed at job close) until the fixed code actually boots and is cut over.
 
 ## Outcome
