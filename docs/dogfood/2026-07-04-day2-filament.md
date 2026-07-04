@@ -435,7 +435,8 @@ Per the plan's judgment call: the original day-2 vector (strip `pg` from the ven
   (last state: {"active":"unknown","nRestarts":5,"tier":"http","netOk":false})
   ```
   `nRestarts:5` = the new unit hit its `StartLimitBurst=5` ceiling inside `StartLimitIntervalSec=60` and systemd stopped the crash-loop — the day-2 unbounded restart storm (NRestarts≈500, climbing) is structurally capped. The gate burned its full 90s window before failing (expected behavior, approve 21:27:06 → container gone by ~21:29:15, ~2m09s total). The agent relayed the failure verbatim and did not retry.
-- **Failed NEW container auto-destroyed; exactly one poller remains: PASS** — during the window `pct list` showed the transient new container (CTID 105 reused) alongside 106; by 17:29:25 EDT only `106 running rhumb-printer-poller` remained, and it is the healthy Step-3 container. No orphan.
+- **Failed NEW container auto-destroyed; exactly one poller remains: PASS** — during the window `pct list` showed the transient new container alongside 106; by 17:29:25 EDT only `106 running rhumb-printer-poller` remained, and it is the healthy Step-3 container. No orphan.
+  **CTID-reuse note (read this before interpreting `pct list` history):** Proxmox recycles freed container IDs, so the sabotage-leg container was transiently allocated **CTID 105** — the id freed when Step 3 destroyed the old poller. It was an UNRELATED, freshly created container, not the Step-3-destroyed old poller resurrected: it was created by the sabotaged redeploy and auto-destroyed by the failed health gate, and the controller-verified end-state listing below shows no 105 exists. A "105" sighted in monitoring output during the sabotage window (17:27–17:29 EDT) is the doomed new container, not the day-2 original.
 - **Registry unchanged: PASS** — `services.json` byte-identical to the Step-3 state: containerId 106, `deployId 20260704212359-d25440`, `updatedAt 2026-07-04T21:24:36.142Z`.
 - **`/health` still ticking: PASS** — `21:33:26Z → {"ok":true,…,"lastTick":"2026-07-04T21:33:16.139Z"}`, and again `lastTick 21:33:46.145Z` after restore.
 - **Manifest restored: PASS** — `"start": "node index.js"` written back; verified by re-read. Pending queue empty (`{"pending":[]}`).
@@ -448,5 +449,21 @@ Per the plan's judgment call: the original day-2 vector (strip `pg` from the ven
 | Sabotage replay — failed deploy changes nothing (gate error surfaced, new container destroyed, registry/health untouched, restart ceiling held) | **PASS — 5/5 criteria** |
 
 **F11 is fixed on the real box.** Each of the four day-2 seams was individually exercised live: (1) the incomplete vendored tree that shipped verbatim now triggers a remote `npm ci` (proven by `pg` present in 106 while still absent from the staged tree); (2) the cutover is health-gated — the sabotaged deploy never touched the registry; (3) the registry replace-by-id actually repointed (105→106 with a fresh `deployId`); (4) the failed container was destroyed instead of orphaned, and the restart ceiling (`nRestarts:5`, capped) replaced the unbounded storm. F12's provenance chain held end-to-end: registry `deployId` = `.rhumb-deploy.json` = unit `RHUMB_DEPLOY_ID`, so "healthy" now names *which build* is healthy. The exact failure recorded in Phase 3/C3 — fixed code shipped to a container nothing points at, while the old code keeps serving and a zombie burns CPU — can no longer occur silently: it either completes (leg 1) or fails loudly and leaves the world unchanged (leg 2).
+
+**Post-run end-state (controller-verified).** Gathered by the controller 2026-07-04 ~17:37 EDT, after the run completed — independent confirmation of the three end-state claims (exactly one poller container; manifest restored; health ticking):
+
+```
+$ pct list
+101  running  molding-harvester
+102  running  rhumbr-test
+103  stopped  erpnext
+106  running  rhumb-printer-poller
+$ grep '"start"' /root/rhumbr-workspace/services/printer-poller/service.json
+  "start": "node index.js",
+$ curl -s http://192.168.1.83:8080/health
+{"ok":true,"printers":["K2Plus-FE91","K2Plus-Right"],"lastTick":"2026-07-04T21:37:46.195Z"}
+```
+
+Note the listing also closes the CTID-reuse question above: no container 105 exists in the end state — the id appeared only transiently, on the sabotage leg's doomed new container.
 
 **Box end-state:** agent-host running the branch build (`/healthz` ok); poller = container 106 @ 192.168.1.83, fixed code, healthy, ticking; registry consistent; staged manifest restored (with `healthPath` kept); pending queue empty; backup `rhumb-backup-20260704-172022.tgz` retained on the box; capstone temp files removed from `/tmp`. Residual notes: the ontology still carries the pre-existing stale poller IP (F16 — now stale twice over after the 105→106 move; unchanged by design, the redeploy path still doesn't write ontology) and the day-2 cleanup notes above otherwise stand.
