@@ -49,12 +49,15 @@ export interface InfraDeps {
   password: () => string;
   adminConnectionString?: string;
   serviceOps?: ServiceOps;
+  onMutate?: () => void;
 }
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true as const });
 
 export function createInfraServer(deps: InfraDeps) {
+  // Best-effort post-mutation hook (ontology auto-sync). Never affects the tool result.
+  const mutated = () => { try { deps.onMutate?.(); } catch { /* swallowed */ } };
   return createSdkMcpServer({
     name: "infra",
     version: "1.0.0",
@@ -66,7 +69,7 @@ export function createInfraServer(deps: InfraDeps) {
         try { return ok(JSON.stringify(await deps.proxmox.status(a.id))); } catch (e) { return fail(String(e)); }
       }),
       tool("create_vm", "Create a VM", { name: z.string(), cores: z.number().int().default(1), memory: z.number().int().default(1024) }, async (a) => {
-        try { return ok(JSON.stringify(await deps.proxmox.create(a))); } catch (e) { return fail(String(e)); }
+        try { const r = await deps.proxmox.create(a); mutated(); return ok(JSON.stringify(r)); } catch (e) { return fail(String(e)); }
       }),
       tool("start_vm", "Start a VM", { id: z.number().int() }, async (a) => {
         try { await deps.proxmox.start(a.id); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
@@ -78,7 +81,7 @@ export function createInfraServer(deps: InfraDeps) {
         try { await deps.proxmox.resize(a.id, { cores: a.cores, memory: a.memory }); return ok(`resized ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("destroy_vm", "Destroy a VM", { id: z.number().int() }, async (a) => {
-        try { await deps.proxmox.destroy(a.id); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { await deps.proxmox.destroy(a.id); mutated(); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("provision_database", "Create a Postgres database and register it as a data source", { name: z.string() }, async (a) => {
         try {
@@ -86,6 +89,7 @@ export function createInfraServer(deps: InfraDeps) {
             { admin: deps.admin, dataSourcesPath: deps.dataSourcesPath, password: deps.password, adminConnectionString: deps.adminConnectionString },
             a.name,
           );
+          mutated();
           return ok(`provisioned database "${entry.id}" and registered it as a data source`);
         } catch (e) { return fail(String(e)); }
       }),
@@ -99,6 +103,7 @@ export function createInfraServer(deps: InfraDeps) {
         try {
           if (!deps.serviceOps) return fail("services are not configured");
           const entry = await deps.serviceOps.spawn(a.id);
+          mutated();
           return ok(`spawned service "${entry.id}" at ${entry.basePath}`);
         } catch (e) { return fail(String(e)); }
       }),
@@ -106,17 +111,18 @@ export function createInfraServer(deps: InfraDeps) {
         try {
           if (!deps.serviceOps) return fail("services are not configured");
           const { entry, warning } = await deps.serviceOps.redeploy(a.id);
+          mutated();
           return ok(`redeployed "${entry.id}" (deploy ${entry.deployId}, container ${entry.containerId})${warning ? ` — WARNING: ${warning}` : ""}`);
         } catch (e) { return fail(String(e)); }
       }),
       tool("stop_service", "Stop a service's container", { id: z.string() }, async (a) => {
-        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.stop(a.id); return ok(`stopped ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.stop(a.id); mutated(); return ok(`stopped ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("start_service", "Start a service's container", { id: z.string() }, async (a) => {
-        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.start(a.id); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.start(a.id); mutated(); return ok(`started ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
       tool("destroy_service", "Stop, destroy, and deregister a service", { id: z.string() }, async (a) => {
-        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.destroy(a.id); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
+        try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.destroy(a.id); mutated(); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
     ],
   });
