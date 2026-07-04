@@ -10,7 +10,7 @@ vi.mock("../src/lib/tauri", async () => {
     getConfig: vi.fn().mockResolvedValue({ baseUrl: "", agentPath: "/agent", dashboardPath: "/" }),
     checkHealth: vi.fn(),
     setConfig: vi.fn().mockResolvedValue(undefined),
-    discoverHosts: vi.fn().mockResolvedValue([]),
+    discoverHosts: vi.fn().mockResolvedValue({ hosts: [], scanned: 0, attempts: [] }),
     fetchManifest: vi.fn(),
     openAgentStream: vi.fn(() => () => {}),
     sendMessage: vi.fn(),

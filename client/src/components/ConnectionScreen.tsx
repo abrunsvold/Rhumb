@@ -8,11 +8,12 @@ import {
   fetchManifest,
   setConfig,
   type AppConfig,
-  type DiscoveredHost,
+  type DiscoveryReport,
 } from "../lib/tauri";
 
 export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) => void }) {
-  const [found, setFound] = useState<DiscoveredHost[]>([]);
+  const [report, setReport] = useState<DiscoveryReport | null>(null);
+  const found = report?.hosts ?? [];
   const [scanning, setScanning] = useState(true);
   const [manualUrl, setManualUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -21,9 +22,9 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
   async function scan() {
     setScanning(true);
     try {
-      setFound(await discoverHosts());
+      setReport(await discoverHosts());
     } catch {
-      setFound([]);
+      setReport({ hosts: [], scanned: 0, attempts: [] });
     }
     setScanning(false);
   }
@@ -94,6 +95,26 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
             <span className="text-xs text-muted">v{h.version}</span>
           </button>
         ))}
+        {!scanning && found.length === 0 && report && (
+          <div className="text-sm text-muted" data-testid="discovery-diagnostic">
+            <p>
+              Scanned {report.scanned} tailnet {report.scanned === 1 ? "peer" : "peers"} — none responded as Rhumb.
+            </p>
+            {report.attempts.length > 0 && (
+              <details className="mt-1">
+                <summary className="cursor-pointer">Details</summary>
+                <ul className="mt-1 space-y-0.5">
+                  {report.attempts.map((a, i) => (
+                    <li key={i} className="font-mono text-xs">
+                      {a.peer} → {a.outcome}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <p className="mt-1">Enter the server URL manually below.</p>
+          </div>
+        )}
         {!scanning && (
           <button type="button" onClick={() => void scan()} className="self-start text-xs text-muted underline">
             Rescan
