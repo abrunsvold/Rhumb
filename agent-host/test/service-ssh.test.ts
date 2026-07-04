@@ -32,20 +32,15 @@ describe("redactSshError", () => {
     expect(redactSshError("command", e).message.length).toBeLessThan(450);
   });
 
-  it("redacts a secret on a single unbroken line longer than the 400-char cap", () => {
-    const secret = "FAKEKEY051Hq8x9AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEF";
-    const e = Object.assign(new Error("x"), { code: 1, stderr: `Environment=DATABASE_URL=${"z".repeat(420)} ${secret}` });
-    const out = redactSshError("command", e);
-    expect(out.message).not.toContain(secret);
-    expect(out.message.length).toBeLessThan(450);
-  });
-
   it("redacts a secret even on a single unbroken line longer than the 400-char cap", () => {
+    // Regression: slicing the tail before redaction could drop the Environment=
+    // marker off a long line and leak the trailing secret. Redact-then-slice fixes it.
     const secret = "FAKEKEY0ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const longLine = "Environment=DATABASE_URL=" + "z".repeat(500) + secret;
     const e = Object.assign(new Error("boom"), { code: 1, stderr: longLine });
     const out = redactSshError("command", e);
     expect(out.message).not.toContain(secret);
     expect(out.message).not.toContain("FAKEKEY0");
+    expect(out.message.length).toBeLessThan(450);
   });
 });
