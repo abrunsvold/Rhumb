@@ -537,9 +537,12 @@ async fn probe(client: &reqwest::Client, cand: Candidate) -> (Option<DiscoveredH
         Ok(r) => r,
         Err(_) => return (None, attempt("unreachable")),
     };
+    // Route through manifest_to_host so the rhumb:true gate lives in one place.
     match resp.json::<RhumbManifest>().await {
-        Ok(m) if m.rhumb => (Some(DiscoveredHost { base_url: cand.origin.clone(), version: m.version }), attempt("matched")),
-        Ok(_) => (None, attempt("not-rhumb")),
+        Ok(m) => match manifest_to_host(cand.origin.clone(), m) {
+            Some(h) => (Some(h), attempt("matched")),
+            None => (None, attempt("not-rhumb")),
+        },
         Err(_) => (None, attempt("bad-response")),
     }
 }
