@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { TranscriptMessage } from "../lib/agentEvents";
+import { Markdown } from "./Markdown";
 
 function ToolChip({ m }: { m: TranscriptMessage }) {
   const [open, setOpen] = useState(false);
@@ -68,8 +69,8 @@ function Message({ m }: { m: TranscriptMessage }) {
       );
     default:
       return (
-        <div data-kind="text" className="self-start max-w-[85%] whitespace-pre-wrap">
-          {m.text}
+        <div data-kind="text" className="self-start max-w-[85%]">
+          <Markdown text={m.text} />
         </div>
       );
   }
