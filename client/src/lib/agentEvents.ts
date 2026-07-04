@@ -6,6 +6,10 @@ export interface TranscriptMessage {
   toolName?: string;
   toolInput?: unknown;
   attachments?: string[];
+  // Optional stable identifier for list rendering. Nothing populates this
+  // yet — reducer reshaping to assign ids is out of scope here — so
+  // consumers fall back to index (`m.id ?? i`), matching current behavior.
+  id?: string;
 }
 
 export interface AgentState {
