@@ -362,3 +362,91 @@ Not everything broke, and the parts that held are load-bearing for the platform'
 - **Box debris (safe to clean after run acceptance):** the Phase-0 backup tarball `/root/rhumb-backup-20260704-142532.tgz` and the source tarballs left in `/tmp/` (which join a pre-existing tarball pile — itself the hygiene tail of F15).
 
 **Read of the run.** This was a *good* dogfood in the only sense that matters: it broke where it needed to and told us exactly what to build next. The model reasoned well; the platform's day-2 delivery path did not. Run-1 proved Rhumb can *build* a whole tool in one gated turn. Run-2's lesson is that it cannot yet reliably *change* one — and the specific reason (redeploy half-completes silently, and nothing can tell you it did) is now the top of the roadmap.
+
+## Capstone — F11 fix live verification (2026-07-04)
+
+**Claim under test:** the `feat/service-redeploy` branch (F11/F12 fix — blue-green `redeploy_service` with vendored-completeness check, tiered health gate, replace-by-id registry, rollback-on-gate-failure, deploy provenance, restart backoff/ceiling) makes the Phase-3 failure above impossible on the real box. Two live gated redeploys: one that must succeed completely, one sabotaged that must fail completely. All timestamps UTC; all verification over SSH, read-only. Evidence redacted only where secrets would leak (DB connection string in the unit file).
+
+**Preconditions verified (17:19–17:21 EDT):** exactly one poller container (`pct list`: 105 running `rhumb-printer-poller` — the day-2 orphan 106 had been cleaned up since Phase 3); registry `services.json` → containerId 105, host 192.168.1.95, no `deployId`; staged fixed poller at `$WS/services/printer-poller` (`grep -c GREATEST index.js` → 4; `node_modules` still the incomplete 13-package tree **missing top-level `pg`** — the exact day-2 poison, deliberately left in place); both hosts `active`, `/healthz` → `{"ok":true}`.
+
+### Procedure
+
+1. **Backup:** `tar czf /root/rhumb-backup-20260704-172022.tgz -C /root rhumb` (70,928,243 bytes, verified present).
+2. **Deploy the branch (agent-host only):** built locally (`npm ci && npm run build` → clean tsc), tarred SOURCE only (`src package.json package-lock.json tsconfig.json vitest.config.ts test`, 83,537 bytes), scp'd, extracted over `/root/rhumb/agent-host`, then `npm ci` (175 packages) `&& npm run build` ON the box; `systemctl restart rhumbr-agent.service` →
+   ```
+   active
+   {"ok":true}      # curl -s http://127.0.0.1:8787/healthz
+   active           # dashboard untouched, still active
+   ```
+3. **Manifest healthPath** added to the staged copy (before → after):
+   ```diff
+    {
+      "id": "printer-poller", ... "start": "node index.js", "port": 8080, ...
+   +  "healthPath": "/health"
+    }
+   ```
+4. **Pre-capstone telemetry baseline.** The session's permission policy denied direct prod-DB row counts (nested-SSH `SELECT count(*)` into the live DB was classified out-of-scope for this capstone), so the row-count criterion is evidenced by its validated proxy from C1/Phase 3: the poller writes telemetry every tick and `/health.lastTick` advances per tick (15s cadence, cadence↔row-growth cross-checked in C1). Baseline, old container:
+   ```
+   2026-07-04T21:21:36Z
+   {"ok":true,"printers":["K2Plus-FE91","K2Plus-Right"],"lastTick":"2026-07-04T21:21:33.048Z"}
+   {"ok":true,...,"lastTick":"2026-07-04T21:21:48.053Z"}   # 20s later — ticking
+   ```
+
+### Happy path — gated `redeploy_service` (Step 3)
+
+Turn driven over HTTPS (`POST /agent/messages`, `Sec-Rhumb-Control: 1`) asking the agent to use `redeploy_service` for `printer-poller`. The gate appeared in <15s and was approved via the pending API:
+
+```
+GET /agent/infra/pending → {"pending":[{"pendingId":"f303e9f9-…","tool":"redeploy_service",
+  "input":{"id":"printer-poller"},"createdAt":"2026-07-04T21:23:38.774Z"}]}
+POST …/f303e9f9-…/resolve {"decision":"approve"} → {"ok":true}   # 21:23:59Z
+```
+
+Note the tool identity: **`redeploy_service`, not `spawn_service`** — the day-2 ambiguity (redeploy masquerading as a fresh spawn) is gone. Audit log: `{"ts":"2026-07-04T21:23:59.160Z","tool":"mcp__infra__redeploy_service","input":{"id":"printer-poller"},"decision":"approved"}`. Cutover completed at 21:24:36Z (~37s: fresh container → deploy → 2-probe gate → registry swap → old container destroyed).
+
+**Per-criterion evidence (all read-only SSH):**
+
+- **Registry — NEW containerId, NEW deployId, updatedAt, healthy: PASS**
+  ```json
+  { "id": "printer-poller", "containerId": 106, "host": "192.168.1.83", "port": 8080,
+    "status": "healthy", "createdAt": "2026-07-02T00:55:09.836Z",
+    "deployId": "20260704212359-d25440", "updatedAt": "2026-07-04T21:24:36.142Z" }
+  ```
+- **Exactly ONE poller container, old 105 gone: PASS** — `pct list` → `101 molding-harvester / 102 rhumbr-test / 103 erpnext (stopped) / 106 rhumb-printer-poller`; no 105. `curl -m 3 http://192.168.1.95:8080/health` → unreachable (old container destroyed, as designed). LXC 101/102/103 and the pr21 units untouched throughout.
+- **Provenance stamp matches registry: PASS** — in container 106: `cat /opt/rhumb/printer-poller/.rhumb-deploy.json` → `{"deployId":"20260704212359-d25440","deployedAt":"2026-07-04T21:24:29.677Z"}` — byte-equal to the registry's `deployId`.
+- **Unit file carries deploy id + start-limit: PASS** — `rhumb-printer-poller.service` contains `Environment=RHUMB_DEPLOY_ID=20260704212359-d25440`, `StartLimitIntervalSec=60`, `StartLimitBurst=5`, `RestartSec=2` (DB connection-string env lines redacted). Unit `active`, `NRestarts=0`.
+- **The filament fix is finally live: PASS** — `grep -c "GREATEST(" /opt/rhumb/printer-poller/index.js` → **4** in the traffic-serving container. (Day-2's C3 headline — fixed code never serving — is now closed.)
+- **Vendored-completeness check fired (F11 seam #1): PASS** — the staged tree still lacks top-level `pg` (13 packages: `pg-pool pg-protocol pg-types … xtend`, `pg` absent) yet container 106 has `node_modules/pg` installed — i.e. the deployer detected the incomplete vendored tree and ran the remote `npm ci` that day-2's existence-only check skipped. The exact day-2 poison, neutralized.
+- **`/health` ok + telemetry climbing: PASS**
+  ```
+  2026-07-04T21:25:43Z  {"ok":true,"printers":["K2Plus-FE91","K2Plus-Right"],"lastTick":"2026-07-04T21:25:31.047Z"}
+  (+20s)                {"ok":true,...,"lastTick":"2026-07-04T21:26:01.050Z"}
+  ```
+  lastTick advancing at the 15s cadence on the NEW container, past the pre-capstone baseline (21:21:48) — telemetry rows growing under the fixed code (row-count proxy per the note above).
+
+### Sabotage replay — the day-2 outcome made impossible (Step 4)
+
+Per the plan's judgment call: the original day-2 vector (strip `pg` from the vendored tree) is *fixed by this feature* — the happy path above proves the completeness check installs through it — so a genuine gate failure needs a different poison. Staged manifest's start command sabotaged: `"start": "node missing.js"`. Second gated turn, same flow (`pendingId 527f4d2d-…`, approved 21:27:06.882Z, audit-logged).
+
+- **Tool call FAILS with a health-gate error naming the last state: PASS** — verbatim `tool_result` from the turn's SSE stream (`is_error: true`):
+  ```
+  Error: service "printer-poller" failed its health gate: health gate deadline (90000ms)
+  expired without two stable good probes
+  (last state: {"active":"unknown","nRestarts":5,"tier":"http","netOk":false})
+  ```
+  `nRestarts:5` = the new unit hit its `StartLimitBurst=5` ceiling inside `StartLimitIntervalSec=60` and systemd stopped the crash-loop — the day-2 unbounded restart storm (NRestarts≈500, climbing) is structurally capped. The gate burned its full 90s window before failing (expected behavior, approve 21:27:06 → container gone by ~21:29:15, ~2m09s total). The agent relayed the failure verbatim and did not retry.
+- **Failed NEW container auto-destroyed; exactly one poller remains: PASS** — during the window `pct list` showed the transient new container (CTID 105 reused) alongside 106; by 17:29:25 EDT only `106 running rhumb-printer-poller` remained, and it is the healthy Step-3 container. No orphan.
+- **Registry unchanged: PASS** — `services.json` byte-identical to the Step-3 state: containerId 106, `deployId 20260704212359-d25440`, `updatedAt 2026-07-04T21:24:36.142Z`.
+- **`/health` still ticking: PASS** — `21:33:26Z → {"ok":true,…,"lastTick":"2026-07-04T21:33:16.139Z"}`, and again `lastTick 21:33:46.145Z` after restore.
+- **Manifest restored: PASS** — `"start": "node index.js"` written back; verified by re-read. Pending queue empty (`{"pending":[]}`).
+
+### Verdict
+
+| Leg | Result |
+|---|---|
+| Happy path — complete, all-or-nothing cutover (new container, new deployId, provenance stamped, fix serving, old destroyed, registry atomic) | **PASS — 7/7 criteria** |
+| Sabotage replay — failed deploy changes nothing (gate error surfaced, new container destroyed, registry/health untouched, restart ceiling held) | **PASS — 5/5 criteria** |
+
+**F11 is fixed on the real box.** Each of the four day-2 seams was individually exercised live: (1) the incomplete vendored tree that shipped verbatim now triggers a remote `npm ci` (proven by `pg` present in 106 while still absent from the staged tree); (2) the cutover is health-gated — the sabotaged deploy never touched the registry; (3) the registry replace-by-id actually repointed (105→106 with a fresh `deployId`); (4) the failed container was destroyed instead of orphaned, and the restart ceiling (`nRestarts:5`, capped) replaced the unbounded storm. F12's provenance chain held end-to-end: registry `deployId` = `.rhumb-deploy.json` = unit `RHUMB_DEPLOY_ID`, so "healthy" now names *which build* is healthy. The exact failure recorded in Phase 3/C3 — fixed code shipped to a container nothing points at, while the old code keeps serving and a zombie burns CPU — can no longer occur silently: it either completes (leg 1) or fails loudly and leaves the world unchanged (leg 2).
+
+**Box end-state:** agent-host running the branch build (`/healthz` ok); poller = container 106 @ 192.168.1.83, fixed code, healthy, ticking; registry consistent; staged manifest restored (with `healthPath` kept); pending queue empty; backup `rhumb-backup-20260704-172022.tgz` retained on the box; capstone temp files removed from `/tmp`. Residual notes: the ontology still carries the pre-existing stale poller IP (F16 — now stale twice over after the 105→106 move; unchanged by design, the redeploy path still doesn't write ontology) and the day-2 cleanup notes above otherwise stand.
