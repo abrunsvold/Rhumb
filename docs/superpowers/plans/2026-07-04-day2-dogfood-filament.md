@@ -244,6 +244,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
   -d '{"decision":"approve"}' https://micropx-pve.tail731306.ts.net/agent/infra/pending/<ID>/resolve
 ```
 
+> **STALE (kept for the historical record):** identity mode requires the `Sec-Rhumb-Control: 1` shell header instead of Bearer auth — this recipe 403s against a current deployment. See "Driving and approving over HTTP" in `agent-host/README.md`. Discovered as a finding during the run this plan drove.
+
 - [ ] **Step 3: Declare the turn over**
 
 The turn ends when the agent reports completion, or is stuck with no forward progress for ~15 minutes, or has plainly failed. Record end time and the agent's own final claim (we check it against ground truth in Task 5 — run 1 showed self-reports can be trusted but must be verified).

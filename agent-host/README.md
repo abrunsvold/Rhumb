@@ -59,3 +59,26 @@ Set via the `RHUMB_PERMISSION_MODE` environment variable
 - `GET /sessions/:id/stream` — Server-Sent Events; each frame is one `AgentEvent`
   (`session` | `result` | `error` | `raw`).
 - `GET /healthz` — `{ ok: true }`.
+
+## Driving and approving over HTTP
+
+In identity mode (the default), every control-plane request must arrive through
+`tailscale serve` with a tailnet identity on the allowlist, AND carry the shell
+header `Sec-Rhumb-Control: 1`. Browsers cannot set `Sec-*` headers, so surface
+iframes can never approve their own writes; the Tauri client's Rust proxy sends
+the header automatically. For scripting/debugging from a tailnet machine:
+
+    # send a message (starts or continues a session)
+    curl -s -X POST -H 'Sec-Rhumb-Control: 1' -H 'content-type: application/json' \
+      -d '{"prompt":"hello"}' https://<your-box>.ts.net/agent/messages
+
+    # list pending gated infra actions
+    curl -s -H 'Sec-Rhumb-Control: 1' https://<your-box>.ts.net/agent/infra/pending
+
+    # approve (or deny) one
+    curl -s -X POST -H 'Sec-Rhumb-Control: 1' -H 'content-type: application/json' \
+      -d '{"decision":"approve"}' https://<your-box>.ts.net/agent/infra/pending/<id>/resolve
+
+`Authorization: Bearer <RHUMB_CONTROL_TOKEN>` is only checked in
+`RHUMB_INSECURE_DEV=1` mode — against an identity-mode host it returns
+`403 {"error":"shell only"}`.
