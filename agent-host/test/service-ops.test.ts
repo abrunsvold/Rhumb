@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceOps } from "../src/services/ops.js";
-import { loadServices, appendService, removeService } from "../src/services/registry.js";
+import { loadServices, appendService, removeService, replaceService } from "../src/services/registry.js";
 import type { LxcClient, ServiceDeployer, ServiceConfig, ServiceManifest } from "../src/services/types.js";
 
 let dir: string;
@@ -16,13 +16,32 @@ function cfg(): ServiceConfig {
 const manifest = (id: string): ServiceManifest => ({ id, type: "service", name: id, start: "run", port: 3000 });
 
 describe("registry", () => {
-  it("append dedups by id, remove drops, corrupt→[]", () => {
+  const entry = (id: string, containerId = 1) => ({
+    id, name: id, containerId, host: "h", port: 3000,
+    basePath: `/services/${id}`, status: "healthy" as const, createdAt: "t",
+  });
+
+  it("append adds, throws on duplicate id, remove drops, corrupt→[]", () => {
     const p = join(dir, "s.json");
-    const e = { id: "a", name: "a", containerId: 1, host: "h", port: 3000, basePath: "/services/a", status: "healthy" as const, createdAt: "t" };
-    expect(appendService(p, e)).toHaveLength(1);
-    expect(appendService(p, e)).toHaveLength(1);
+    expect(appendService(p, entry("a"))).toHaveLength(1);
+    expect(() => appendService(p, entry("a"))).toThrow('service "a" already registered');
     expect(removeService(p, "a")).toHaveLength(0);
     expect(loadServices(join(dir, "missing.json"))).toEqual([]);
+  });
+
+  it("replace swaps the entry in place and preserves order", () => {
+    const p = join(dir, "s.json");
+    appendService(p, entry("a", 1));
+    appendService(p, entry("b", 2));
+    const swapped = { ...entry("a", 9), deployId: "20260704120000-abc123", updatedAt: "T2" };
+    const out = replaceService(p, swapped);
+    expect(out.map((s) => s.id)).toEqual(["a", "b"]);
+    expect(out[0]).toMatchObject({ containerId: 9, deployId: "20260704120000-abc123", updatedAt: "T2" });
+  });
+
+  it("replace throws when the id is not registered", () => {
+    const p = join(dir, "s.json");
+    expect(() => replaceService(p, entry("ghost"))).toThrow('service "ghost" is not registered');
   });
 });
 

@@ -18,8 +18,17 @@ function write(path: string, list: ServiceEntry[]): ServiceEntry[] {
 
 export function appendService(path: string, entry: ServiceEntry): ServiceEntry[] {
   const cur = loadServices(path);
-  if (cur.some((s) => s.id === entry.id)) return cur;
+  if (cur.some((s) => s.id === entry.id)) throw new Error(`service "${entry.id}" already registered`);
   return write(path, [...cur, entry]);
+}
+
+export function replaceService(path: string, entry: ServiceEntry): ServiceEntry[] {
+  const cur = loadServices(path);
+  const i = cur.findIndex((s) => s.id === entry.id);
+  if (i === -1) throw new Error(`service "${entry.id}" is not registered`);
+  const next = [...cur];
+  next[i] = entry;
+  return write(path, next);
 }
 
 export function removeService(path: string, id: string): ServiceEntry[] {

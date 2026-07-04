@@ -64,6 +64,8 @@ export interface ServiceEntry {
   basePath: string;                 // /services/<id>
   status: "healthy" | "unhealthy" | "starting";
   createdAt: string;
+  deployId?: string;                // provenance stamp; absent on pre-F12 entries
+  updatedAt?: string;               // set on redeploy cutover
 }
 
 export type GatedServiceTool = "spawn_service" | "stop_service" | "start_service" | "destroy_service";
