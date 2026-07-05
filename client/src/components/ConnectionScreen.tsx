@@ -106,7 +106,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
                 <ul className="mt-1 space-y-0.5">
                   {report.attempts.map((a, i) => (
                     <li key={i} className="font-mono text-xs">
-                      {a.peer} → {a.outcome}
+                      {a.peer} ({a.target}) → {a.outcome}
                     </li>
                   ))}
                 </ul>

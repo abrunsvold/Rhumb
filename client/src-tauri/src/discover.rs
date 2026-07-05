@@ -128,6 +128,24 @@ async fn probe(client: &reqwest::Client, cand: Candidate) -> (Option<DiscoveredH
     }
 }
 
+/// Assemble the final report from per-candidate probe results: every attempt is
+/// kept for diagnostics, but a peer whose name AND IP both resolve to a host
+/// contributes only its first match to the pick list (first-match-wins).
+fn assemble_report(scanned: usize, results: Vec<(Option<DiscoveredHost>, ProbeAttempt)>) -> DiscoveryReport {
+    let mut hosts = Vec::new();
+    let mut attempts = Vec::new();
+    let mut matched: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (h, a) in results {
+        if let Some(h) = h {
+            if matched.insert(a.peer.clone()) {
+                hosts.push(h);
+            }
+        }
+        attempts.push(a);
+    }
+    DiscoveryReport { hosts, scanned, attempts }
+}
+
 #[tauri::command]
 pub async fn discover_hosts() -> DiscoveryReport {
     let empty = DiscoveryReport { hosts: Vec::new(), scanned: 0, attempts: Vec::new() };
@@ -140,20 +158,18 @@ pub async fn discover_hosts() -> DiscoveryReport {
     };
     let Some(client) = probe_client() else { return empty; };
     let candidates = parse_status_candidates(&json);
-    let scanned = candidates.len();
+    let scanned = candidates
+        .iter()
+        .map(|c| c.peer.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let results: Vec<(Option<DiscoveredHost>, ProbeAttempt)> =
         futures_util::stream::iter(candidates)
             .map(|c| probe(&client, c))
             .buffer_unordered(8)
             .collect()
             .await;
-    let mut hosts = Vec::new();
-    let mut attempts = Vec::new();
-    for (h, a) in results {
-        if let Some(h) = h { hosts.push(h); }
-        attempts.push(a);
-    }
-    DiscoveryReport { hosts, scanned, attempts }
+    assemble_report(scanned, results)
 }
 
 #[tauri::command]
@@ -199,12 +215,36 @@ mod tests {
         assert!(!origins.iter().any(|o| o.contains("off.tail1")));  // offline skipped
         // every candidate is labeled with its peer name for the report
         assert!(c.iter().all(|x| !x.peer.is_empty()));
+        // one online peer with both a name and an IP yields two candidates...
+        assert_eq!(c.len(), 2);
+        // ...but "scanned" must count distinct peers, not candidates (IMPORTANT #2)
+        let scanned = c.iter().map(|x| x.peer.clone()).collect::<std::collections::HashSet<_>>().len();
+        assert_eq!(scanned, 1);
     }
 
     #[test]
     fn tolerates_malformed_or_peerless_status() {
         assert!(parse_status_candidates("not json").is_empty());
         assert!(parse_status_candidates("{}").is_empty());
+    }
+
+    #[test]
+    fn assemble_report_dedups_hosts_per_peer_but_keeps_every_attempt() {
+        // A peer whose MagicDNS name AND Tailscale IP both probe as a matching
+        // Rhumb host must show up once in the pick list (first-match-wins),
+        // while both probe attempts remain for the diagnostic view.
+        let host = DiscoveredHost { base_url: "https://box.tail1.ts.net".into(), version: "1.0".into() };
+        let name_attempt = ProbeAttempt { peer: "box".into(), target: "https://box.tail1.ts.net".into(), outcome: "matched".into() };
+        let ip_attempt = ProbeAttempt { peer: "box".into(), target: "https://100.64.0.1".into(), outcome: "matched".into() };
+        let results = vec![
+            (Some(host.clone()), name_attempt.clone()),
+            (Some(DiscoveredHost { base_url: "https://100.64.0.1".into(), version: "1.0".into() }), ip_attempt.clone()),
+        ];
+        let report = assemble_report(2, results);
+        assert_eq!(report.hosts.len(), 1);
+        assert_eq!(report.hosts[0], host);
+        assert_eq!(report.attempts.len(), 2);
+        assert_eq!(report.attempts, vec![name_attempt, ip_attempt]);
     }
 
     #[test]

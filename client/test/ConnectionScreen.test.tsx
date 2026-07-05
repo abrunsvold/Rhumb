@@ -115,6 +115,6 @@ describe("ConnectionScreen", () => {
 
     const diagnostic = await screen.findByTestId("discovery-diagnostic");
     expect(diagnostic).toHaveTextContent(/scanned 3/i);
-    expect(diagnostic).toHaveTextContent(/box.*unreachable/i);
+    expect(diagnostic).toHaveTextContent(/box \(https:\/\/box\).*unreachable/i);
   });
 });
