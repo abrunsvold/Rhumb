@@ -39,6 +39,28 @@ describe("Transcript", () => {
     expect(screen.getByText(/"\/tmp\/x"/)).toBeTruthy();
   });
 
+  it("exposes the tool chip's expanded state via aria-expanded", async () => {
+    render(
+      <Transcript
+        messages={[{ kind: "tool", text: "Read", toolName: "Read", toolInput: { path: "/tmp/x" } }]}
+        busy={false}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /Read/ });
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(btn);
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("lets a truncated result line be expanded to full text", async () => {
+    const long = "turn done " + "x".repeat(200);
+    render(<Transcript messages={[{ kind: "result", text: long }]} busy={false} />);
+    const line = screen.getByTitle(long);
+    expect(line.className).toMatch(/truncate/);
+    await userEvent.click(line);
+    expect(line.className).not.toMatch(/truncate/);
+  });
+
   it("shows a thinking indicator while busy", () => {
     render(<Transcript messages={[]} busy={true} />);
     expect(screen.getByText(/thinking/i)).toBeTruthy();

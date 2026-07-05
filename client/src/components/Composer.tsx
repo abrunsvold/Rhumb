@@ -103,11 +103,11 @@ export function Composer({
     >
       {matches.length > 0 && (
         <ul role="listbox" className="absolute bottom-full left-2 mb-1 w-64 rounded border border-line bg-raised shadow-lg overflow-hidden">
-          {matches.map((c) => (
+          {matches.map((c, i) => (
             <li key={c}>
               <button
                 role="option"
-                aria-selected={false}
+                aria-selected={i === 0}
                 onClick={() => pick(c)}
                 className="w-full text-left font-mono text-xs px-2 py-1.5 hover:bg-accent-soft"
               >

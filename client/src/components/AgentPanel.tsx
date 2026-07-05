@@ -18,6 +18,11 @@ export function AgentPanel({
           Live updates interrupted — reconnecting…
         </div>
       )}
+      {tab.historyNotice && (
+        <div className="border-b border-line bg-raised px-3 py-1 text-xs text-muted">
+          History unavailable for this session — showing live messages only.
+        </div>
+      )}
       <Transcript messages={tab.agent.messages} busy={tab.openTurns > 0} />
       <Composer slashCommands={slashCommands} onSend={onSend} />
     </div>

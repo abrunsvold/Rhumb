@@ -28,4 +28,14 @@ describe("AgentPanel (presentational)", () => {
     render(<AgentPanel tab={tab({ stale: true })} slashCommands={[]} onSend={vi.fn()} />);
     expect(screen.getByText(/reconnecting/i)).toBeTruthy();
   });
+
+  it("shows a banner when session history could not be loaded", () => {
+    render(<AgentPanel tab={tab({ historyNotice: true })} slashCommands={[]} onSend={vi.fn()} />);
+    expect(screen.getByText(/history unavailable/i)).toBeTruthy();
+  });
+
+  it("shows no history banner by default", () => {
+    render(<AgentPanel tab={tab()} slashCommands={[]} onSend={vi.fn()} />);
+    expect(screen.queryByText(/history unavailable/i)).toBeNull();
+  });
 });

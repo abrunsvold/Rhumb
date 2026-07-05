@@ -44,6 +44,14 @@ describe("Composer", () => {
     expect((box as HTMLTextAreaElement).value).toBe("/compact ");
   });
 
+  it("marks the first slash match — the one Enter/Tab picks — as selected", async () => {
+    setup({ slashCommands: ["/compact", "/review", "/cost"] });
+    await userEvent.type(screen.getByRole("textbox"), "/co");
+    const options = screen.getAllByRole("option");
+    expect(options[0].getAttribute("aria-selected")).toBe("true");
+    expect(options[1].getAttribute("aria-selected")).toBe("false");
+  });
+
   it("shows no popup when the command list is empty", async () => {
     setup({ slashCommands: [] });
     await userEvent.type(screen.getByRole("textbox"), "/co");

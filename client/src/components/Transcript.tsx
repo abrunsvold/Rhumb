@@ -8,6 +8,7 @@ function ToolChip({ m }: { m: TranscriptMessage }) {
     <div data-kind="tool" className="self-start max-w-full">
       <button
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         className="font-mono text-xs px-2 py-1 rounded border border-line bg-raised text-muted hover:text-ink"
       >
         🔧 {m.toolName}
@@ -17,6 +18,28 @@ function ToolChip({ m }: { m: TranscriptMessage }) {
           {JSON.stringify(m.toolInput ?? null, null, 2)}
         </pre>
       )}
+    </div>
+  );
+}
+
+function ResultLine({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div data-kind="result" className="self-stretch flex items-center gap-2 text-xs text-muted">
+      <span className="h-px flex-1 bg-line" />
+      <button
+        title={text}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((e) => !e)}
+        className={
+          expanded
+            ? "max-w-[70%] whitespace-pre-wrap break-words text-left"
+            : "max-w-[70%] truncate"
+        }
+      >
+        {text}
+      </button>
+      <span className="h-px flex-1 bg-line" />
     </div>
   );
 }
@@ -60,13 +83,7 @@ function Message({ m }: { m: TranscriptMessage }) {
         </div>
       );
     case "result":
-      return (
-        <div data-kind="result" className="self-stretch flex items-center gap-2 text-xs text-muted">
-          <span className="h-px flex-1 bg-line" />
-          <span className="max-w-[70%] truncate">{m.text}</span>
-          <span className="h-px flex-1 bg-line" />
-        </div>
-      );
+      return <ResultLine text={m.text} />;
     default:
       return (
         <div data-kind="text" className="self-start max-w-[85%]">
