@@ -11,15 +11,16 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-at-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("appendAudit", () => {
-  it("appends JSONL lines", () => {
+  it("appends JSONL lines and preserves the auth field", () => {
     const p = join(dir, "a.jsonl");
-    const e: AuditEntry = { ts: "t1", source: "ops", surfaceId: "d1", op: { kind: "delete", table: "t", where: { id: 1 } }, decision: "executed", rowCount: 1 };
+    const e: AuditEntry = { ts: "t1", source: "ops", surfaceId: "d1", op: { kind: "delete", table: "t", where: { id: 1 } }, decision: "executed", rowCount: 1, auth: "approval" };
     appendAudit(p, e);
-    appendAudit(p, { ...e, ts: "t2", decision: "denied" });
+    appendAudit(p, { ...e, ts: "t2", decision: "denied", auth: undefined });
     const lines = readFileSync(p, "utf8").trim().split("\n");
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]).ts).toBe("t1");
+    expect(JSON.parse(lines[0])).toMatchObject({ ts: "t1", auth: "approval" });
     expect(JSON.parse(lines[1]).decision).toBe("denied");
+    expect(JSON.parse(lines[1]).auth).toBeUndefined();
   });
 });
 
