@@ -5,6 +5,9 @@
 **Headline claim:** redeploy_service now cleanly cuts over a real change (the day-2 orphaned-container BLOCKER, fixed).
 
 ## Phase 0 — fix-stack deploy (on-ramp friction)
+
+Deployed branch tip `2f0f179` (carrying all of PR #25 + #26 + #28) to the box via the established tarball convention (backup `/root/rhumb` first → ship source → `npm ci && npm run build` on box → restart `rhumbr-agent`/`rhumbr-dashboard`). **~2 min / 7 steps, zero deviations** — a sharp drop from day-2's ~13 min, because the convention is now known (the on-ramp is still fully manual, so F15 stands). Both hosts healthy after restart (`/healthz` → `{"ok":true}` on 8787/8788 and via the serve origin `/agent/healthz`). The new capabilities were confirmed present in the deployed build before the turn depended on them — `redeploy_service` (grep count 2 in `dist/infra/server.js`), the `:keepalive` SSE heartbeat (`dist/sse.js`), and the F16 `onMutate` auto-sync hook (`dist/infra/server.js`) — and re-verified live by the controller (2/1/1, both hosts `{"ok":true}`). The client was rebuilt from the branch (`tsc`/vite clean).
+
 ## Phase 1 — baseline
 
 ### Datasource ($DB, redacted)
