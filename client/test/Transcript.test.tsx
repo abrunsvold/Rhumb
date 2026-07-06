@@ -1,8 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Transcript } from "../src/components/Transcript";
 import type { TranscriptMessage } from "../src/lib/agentEvents";
+
+function setGeometry(el: HTMLElement, { scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+  Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+  Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+  Object.defineProperty(el, "scrollTop", { value: scrollTop, configurable: true, writable: true });
+}
 
 describe("Transcript", () => {
   it("shows the empty state when there are no messages", () => {
@@ -50,6 +56,69 @@ describe("Transcript", () => {
     expect(cmd.className).toMatch(/font-mono/);
     const bubble = cmd.closest("[data-kind='user']")!;
     expect(bubble.textContent).toBe("/compact then summarize");
+  });
+
+  it("auto-scrolls to bottom on a new message while stuck to bottom", () => {
+    const one: TranscriptMessage[] = [{ kind: "text", text: "first" }];
+    const { rerender, getByTestId } = render(<Transcript messages={one} busy={false} />);
+    const container = getByTestId("transcript");
+    setGeometry(container, { scrollHeight: 500, clientHeight: 300, scrollTop: 0 });
+
+    const two: TranscriptMessage[] = [...one, { kind: "text", text: "second" }];
+    rerender(<Transcript messages={two} busy={false} />);
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("shows a jump-to-latest pill and does NOT auto-scroll after the user scrolls up", () => {
+    const one: TranscriptMessage[] = [{ kind: "text", text: "first" }];
+    const { rerender, getByTestId, getByTestId: query } = render(<Transcript messages={one} busy={false} />);
+    const container = getByTestId("transcript");
+
+    // Simulate the user scrolling far away from the bottom via a wheel event.
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 300, scrollTop: 0 });
+    fireEvent.wheel(container);
+
+    const two: TranscriptMessage[] = [...one, { kind: "text", text: "second" }];
+    rerender(<Transcript messages={two} busy={false} />);
+
+    expect(container.scrollTop).toBe(0);
+    expect(query("jump-latest")).toBeTruthy();
+  });
+
+  it("clicking jump-to-latest scrolls to bottom and hides the pill", () => {
+    const one: TranscriptMessage[] = [{ kind: "text", text: "first" }];
+    const { rerender, getByTestId, queryByTestId } = render(<Transcript messages={one} busy={false} />);
+    const container = getByTestId("transcript");
+
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 300, scrollTop: 0 });
+    fireEvent.wheel(container);
+
+    const two: TranscriptMessage[] = [...one, { kind: "text", text: "second" }];
+    rerender(<Transcript messages={two} busy={false} />);
+    expect(queryByTestId("jump-latest")).toBeTruthy();
+
+    fireEvent.click(getByTestId("jump-latest"));
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(queryByTestId("jump-latest")).toBeNull();
+  });
+
+  it("a programmatic scroll event does not unlatch stick-to-bottom", () => {
+    const one: TranscriptMessage[] = [{ kind: "text", text: "first" }];
+    const { rerender, getByTestId } = render(<Transcript messages={one} busy={false} />);
+    const container = getByTestId("transcript");
+
+    // A raw 'scroll' event fires on reflow/programmatic scroll too — it must
+    // NOT be treated as user intent to leave the bottom.
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 300, scrollTop: 0 });
+    fireEvent.scroll(container);
+
+    const two: TranscriptMessage[] = [...one, { kind: "text", text: "second" }];
+    setGeometry(container, { scrollHeight: 2500, clientHeight: 300, scrollTop: 0 });
+    rerender(<Transcript messages={two} busy={false} />);
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
   });
 
   describe("assistant markdown rendering", () => {

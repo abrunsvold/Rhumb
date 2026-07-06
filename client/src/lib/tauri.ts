@@ -16,6 +16,18 @@ export interface DiscoveredHost {
   version: string;
 }
 
+export interface ProbeAttempt {
+  peer: string;
+  target: string;
+  outcome: "matched" | "unreachable" | "not-rhumb" | "bad-response";
+}
+
+export interface DiscoveryReport {
+  hosts: DiscoveredHost[];
+  scanned: number;
+  attempts: ProbeAttempt[];
+}
+
 export interface RhumbManifest {
   rhumb: boolean;
   version: string;
@@ -37,8 +49,8 @@ export function dashboardBaseOf(c: AppConfig): string {
   return joinBase(c.baseUrl, c.dashboardPath);
 }
 
-export function discoverHosts(): Promise<DiscoveredHost[]> {
-  return invoke<DiscoveredHost[]>("discover_hosts");
+export function discoverHosts(): Promise<DiscoveryReport> {
+  return invoke<DiscoveryReport>("discover_hosts");
 }
 
 export function fetchManifest(baseUrl: string): Promise<RhumbManifest> {

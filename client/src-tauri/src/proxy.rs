@@ -3,6 +3,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
@@ -165,7 +166,17 @@ fn valid_session_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, token: CancellationToken) {
+// A healthy stream sends a heartbeat every ~15s (agent-host SSE keepalive), so
+// >40s of total byte-silence means the socket is wedged, not merely quiet.
+const PUMP_IDLE_TIMEOUT: Duration = Duration::from_secs(40);
+
+async fn pump(
+    url: String,
+    bearer: Option<String>,
+    on_event: Channel<Value>,
+    token: CancellationToken,
+    idle: Option<Duration>,
+) {
     let client = reqwest::Client::new();
     let req = shell_request(client.get(&url), &bearer);
     let resp = match req.send().await {
@@ -178,7 +189,12 @@ async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, tok
     loop {
         tokio::select! {
             _ = token.cancelled() => break,
-            chunk = stream.next() => {
+            chunk = async {
+                match idle {
+                    Some(d) => tokio::time::timeout(d, stream.next()).await.unwrap_or(None),
+                    None => stream.next().await,
+                }
+            } => {
                 match chunk {
                     Some(Ok(bytes)) => {
                         let text = decoder.push(&bytes);
@@ -188,7 +204,7 @@ async fn pump(url: String, bearer: Option<String>, on_event: Channel<Value>, tok
                             }
                         }
                     }
-                    _ => break,
+                    _ => break,   // None = stream end OR (via unwrap_or) idle timeout
                 }
             }
         }
@@ -230,7 +246,15 @@ pub async fn start_agent_stream(
     if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
         old.cancel();
     }
-    tokio::spawn(async move { pump(url, bearer, on_event, token).await });
+    tokio::spawn(async move {
+        pump(url, bearer, on_event.clone(), token.clone(), Some(PUMP_IDLE_TIMEOUT)).await;
+        // The turn stream ended (result/error already forwarded, network drop, or
+        // idle timeout). Tell the webview so it can close out turn accounting even
+        // if the terminal event never arrived on this channel.
+        if !token.is_cancelled() {
+            let _ = on_event.send(serde_json::json!({ "type": "stream_closed" }));
+        }
+    });
     Ok(())
 }
 
@@ -266,7 +290,7 @@ pub async fn start_registry_stream(
     if let Some(old) = state.registry.lock().unwrap().replace(token.clone()) {
         old.cancel();
     }
-    tokio::spawn(async move { pump(url, bearer, on_update, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_update, token, None).await });
     Ok(())
 }
 
@@ -289,7 +313,7 @@ pub async fn start_pending_stream(
     if let Some(old) = state.pending.lock().unwrap().replace(token.clone()) {
         old.cancel();
     }
-    tokio::spawn(async move { pump(url, bearer, on_pending, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_pending, token, None).await });
     Ok(())
 }
 
@@ -335,7 +359,7 @@ pub async fn start_infra_pending_stream(
     if let Some(old) = state.infra.lock().unwrap().replace(token.clone()) {
         old.cancel();
     }
-    tokio::spawn(async move { pump(url, bearer, on_pending, token).await });
+    tokio::spawn(async move { pump(url, bearer, on_pending, token, None).await });
     Ok(())
 }
 
@@ -380,7 +404,7 @@ pub async fn start_session_stream(
         old.cancel();
     }
     tokio::spawn(async move {
-        pump(url, bearer, on_event.clone(), token.clone()).await;
+        pump(url, bearer, on_event.clone(), token.clone(), Some(PUMP_IDLE_TIMEOUT)).await;
         // The stream ended (network drop, host restart, or cancel). Tell the
         // webview so it can retry; harmless if the channel is already gone.
         if !token.is_cancelled() {
@@ -491,4 +515,16 @@ pub async fn archive_session(
         return Err(format!("agent host returned {}", resp.status()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pump_idle_timeout_tolerates_a_missed_heartbeat() {
+        // heartbeat ~15s; timeout must exceed 2 intervals so one dropped beat
+        // plus jitter doesn't kill a healthy long-running turn.
+        assert!(PUMP_IDLE_TIMEOUT.as_secs() >= 30);
+    }
 }

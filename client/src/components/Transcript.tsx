@@ -79,33 +79,69 @@ function Message({ m }: { m: TranscriptMessage }) {
 export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; busy: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const prevLen = useRef(messages.length);
 
-  function onScroll() {
+  function atBottom(el: HTMLDivElement): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  // Only genuine user-initiated scrolling changes the follow decision — a raw
+  // 'scroll' event also fires on reflow/programmatic scroll and must NOT unlatch.
+  function onUserScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottom.current = atBottom(el);
+    if (stickToBottom.current) setShowJump(false);
+  }
+
+  function jump() {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottom.current = true;
+    setShowJump(false);
   }
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (stickToBottom.current) {
+      el.scrollTop = el.scrollHeight;
+    } else if (messages.length > prevLen.current) {
+      setShowJump(true);
+    }
+    prevLen.current = messages.length;
   }, [messages, busy]);
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      data-testid="transcript"
-      className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2"
-    >
-      {messages.length === 0 && !busy && (
-        <p className="m-auto text-muted">Send a message to start a session.</p>
-      )}
-      {messages.map((m, i) => (
-        <Message key={i} m={m} />
-      ))}
-      {busy && (
-        <div className="self-start text-muted text-xs animate-pulse">thinking…</div>
+    <div className="relative flex-1 min-h-0 flex flex-col">
+      <div
+        ref={scrollRef}
+        onWheel={onUserScroll}
+        onTouchMove={onUserScroll}
+        onKeyDown={onUserScroll}
+        data-testid="transcript"
+        className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2"
+      >
+        {messages.length === 0 && !busy && (
+          <p className="m-auto text-muted">Send a message to start a session.</p>
+        )}
+        {messages.map((m, i) => (
+          <Message key={m.id ?? i} m={m} />
+        ))}
+        {busy && (
+          <div className="self-start text-muted text-xs animate-pulse">thinking…</div>
+        )}
+      </div>
+      {showJump && (
+        <button
+          onClick={jump}
+          data-testid="jump-latest"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-line bg-raised px-3 py-1 text-xs text-ink shadow"
+        >
+          Jump to latest ↓
+        </button>
       )}
     </div>
   );
