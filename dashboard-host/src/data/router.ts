@@ -63,7 +63,7 @@ export function createDataRouter(deps: DataRouterDeps): Router {
       try {
         const result = await executeWrite(
           { getExecutor: deps.getExecutor, auditPath: deps.auditPath, now: deps.now, id: () => "" },
-          source.id, op, surfaceId,
+          source.id, op, surfaceId, "trust",
         );
         return void res.json({ status: "executed", result });
       } catch (err) {

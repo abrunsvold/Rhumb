@@ -20,21 +20,22 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-w-")); calls = []; n 
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("executeWrite", () => {
-  it("runs parameterized SQL and audits an executed write", async () => {
+  it("runs parameterized SQL and audits an executed write with its auth path", async () => {
     const d = deps();
-    const r = await executeWrite(d, "ops", op, "d1");
+    const r = await executeWrite(d, "ops", op, "d1", "trust");
     expect(r.rowCount).toBe(3);
     expect(calls[0]).toEqual({ text: 'DELETE FROM "t" WHERE "id" = $1', params: [1] });
     const line = JSON.parse(readFileSync(d.auditPath, "utf8").trim());
-    expect(line).toMatchObject({ source: "ops", surfaceId: "d1", decision: "executed", rowCount: 3 });
+    expect(line).toMatchObject({ source: "ops", surfaceId: "d1", decision: "executed", rowCount: 3, auth: "trust" });
   });
 
-  it("audits an error and rethrows when the executor fails", async () => {
+  it("audits an error without an auth field and rethrows when the executor fails", async () => {
     const failing: QueryExecutor = { async run() { throw new Error("boom"); } };
     const d = { ...deps(), getExecutor: () => failing };
-    await expect(executeWrite(d, "ops", op, "d1")).rejects.toThrow("boom");
+    await expect(executeWrite(d, "ops", op, "d1", "approval")).rejects.toThrow("boom");
     const line = JSON.parse(readFileSync(d.auditPath, "utf8").trim());
     expect(line).toMatchObject({ decision: "error", error: "boom" });
+    expect(line.auth).toBeUndefined();
   });
 });
 
@@ -47,14 +48,15 @@ describe("PendingQueue", () => {
     expect(q.get("p1")).toEqual({ status: "pending" });
   });
 
-  it("resolve approve executes, audits, and flips status to executed", async () => {
+  it("resolve approve executes, audits with auth:approval, and flips status to executed", async () => {
     const d = deps();
     const q = new PendingQueue(d);
     q.enqueue("ops", op, "d1");
     await q.resolve("p1", "approve");
     expect(calls).toHaveLength(1);
     expect(q.get("p1")).toEqual({ status: "executed", result: { rowCount: 3 } });
-    expect(existsSync(d.auditPath)).toBe(true);
+    const line = JSON.parse(readFileSync(d.auditPath, "utf8").trim());
+    expect(line).toMatchObject({ decision: "executed", auth: "approval" });
   });
 
   it("resolve deny audits and flips status to denied without executing", async () => {

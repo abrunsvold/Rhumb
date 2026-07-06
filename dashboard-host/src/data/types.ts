@@ -31,4 +31,5 @@ export interface AuditEntry {
   decision: "executed" | "denied" | "error";
   rowCount?: number;
   error?: string;
+  auth?: "approval" | "trust";
 }
