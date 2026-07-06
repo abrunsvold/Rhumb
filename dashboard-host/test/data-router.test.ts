@@ -257,4 +257,42 @@ describe("data router", () => {
       expect(res.body.status).toBe("executed");
     });
   });
+
+  it("a trusted surface's DELETE re-gates (enqueues) instead of auto-executing", async () => {
+    const { addTrust } = await import("../src/data/trust.js");
+    addTrust(join(dir, "trust.json"), { source: "ops", surfaceId: "d1" });
+    const a = app();
+    const res = await request(a).post("/data/ops/write")
+      .set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "delete", table: "t", where: { id: 1 } } });
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe("pending");
+    expect(calls).toHaveLength(0); // not executed under trust
+  });
+
+  it("a trusted surface's INSERT and UPDATE still auto-execute", async () => {
+    const { addTrust } = await import("../src/data/trust.js");
+    addTrust(join(dir, "trust.json"), { source: "ops", surfaceId: "d1" });
+    const a = app();
+    const ins = await request(a).post("/data/ops/write")
+      .set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+    expect(ins.body.status).toBe("executed");
+    const upd = await request(a).post("/data/ops/write")
+      .set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "update", table: "t", where: { id: 1 }, values: { a: 2 } } });
+    expect(upd.body.status).toBe("executed");
+  });
+
+  it("a re-gated trusted DELETE audits as auth:approval once approved", async () => {
+    const { addTrust } = await import("../src/data/trust.js");
+    addTrust(join(dir, "trust.json"), { source: "ops", surfaceId: "d1" });
+    const a = app();
+    const w = await request(a).post("/data/ops/write")
+      .set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "delete", table: "t", where: { id: 1 } } });
+    await request(a).post(`/data/pending/${w.body.pendingId}/resolve`).send({ decision: "approve" });
+    const line = JSON.parse(readFileSync(join(dir, "audit.jsonl"), "utf8").trim());
+    expect(line).toMatchObject({ decision: "executed", op: { kind: "delete" }, auth: "approval" });
+  });
 });

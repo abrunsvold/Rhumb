@@ -59,7 +59,9 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     if (!op || op.kind === "select") return void res.status(400).json({ error: "write requires a mutating op" });
     const surfaceId = surfaceIdFromToken(req);
 
-    if (isTrusted(loadTrust(deps.trustPath), source.id, surfaceId)) {
+    // Trust lets a surface add and edit rows freely; a deletion always re-gates
+    // for a human, so a trusted DELETE falls through to the pending queue.
+    if (op.kind !== "delete" && isTrusted(loadTrust(deps.trustPath), source.id, surfaceId)) {
       try {
         const result = await executeWrite(
           { getExecutor: deps.getExecutor, auditPath: deps.auditPath, now: deps.now, id: () => "" },
