@@ -3,7 +3,7 @@
 **Date:** 2026-07-06 · **Spec:** ../superpowers/specs/2026-07-06-crud-trust-dogfood-design.md
 **Box code:** merged main (cd1266e) — no redeploy this run.
 **Claim under test:** the write-back loop (provision → write → gate → trust → audit) works end-to-end live, and the trust model's real (coarse) behavior is documented.
-**Verdict: PASS.** The write-back/CRUD/trust stack ran live end-to-end for the first time; the trust model's coarseness is documented with controller-verified evidence. See Findings (F22 headline) and the ranked roadmap in Outcome.
+**Verdict: PASS** (provisioning / infra-gate leg not exercised — agent reused the existing RW source; see Outcome gap). The write-back/CRUD/trust stack ran live end-to-end for the first time; the trust model's coarseness is documented with controller-verified evidence. See Findings (F22 headline) and the ranked roadmap in Outcome.
 
 ## Phase 0/1 — client ready + baseline
 
@@ -83,7 +83,7 @@ Timezone: EDT. Driver: computer-use (Task D3 recorder, packaged-app retry).
 ### Discover-first results (replace the brief's placeholders)
 - **Write target TABLE:** `filament_spools` (reads go through the `spool_inventory` view). Source: `printers` (reused RW source; no new source). Both read from the surface JS: `write({kind:"insert", table:"filament_spools", values})`, `update` with `values:{remaining_g, updated_at}, where:{id}`, `delete` with `where:{id}`; reads via `query("spool_inventory")`.
 - **Insert value columns (from surface JS):** `material, color, remaining_g, color_hex, brand, name, notes` (+ `total_weight_g`).
-- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tail731306.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: the surface HTML route served 200 to an unauthenticated curl this run — the identity guard did not 403 the HTML; the token is embedded in that public HTML.)
+- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tail731306.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: an earlier read of this — that the surface HTML served 200 unauthenticated — was **superseded, see F25 / Phase 4**: that 200 was authorized serve-path access with an injected tailnet identity; the raw loopback route returns 403, so the HTML is identity-gated, not public.)
 - **Real row ids used:** id `2` = Spool One (update target), id `3` = Spool Two (DELETE probe target).
 
 ### Baseline (start of Phase 3, pre-writes)
@@ -198,7 +198,7 @@ The first build-turn attempt was **blocked**: the dev build (`target/debug/app`)
 The add form's FULL WEIGHT / REMAINING defaults (1000/1000) did not carry into the insert op — the dialog and DB both showed `remaining_g:0, total_weight_g:0` for both spools (cards read "0 g of 0 g / No full weight set"). Update-weight works (set 750 cleanly). This is a bug in the **agent-built surface's** insert value-assembly, surfaced only because the write loop now actually runs. The trust/gate mechanics under test are unaffected.
 **Action:** fix the built surface's value assembly (out of scope for the platform; a defect in the generated tool).
 
-### F26 — Add-spool form modal Save button sits at the window's bottom fold *(LOW — client layout nit)*
+### F26 — Add-spool form modal Save button sits at the window's bottom fold *(LOW — generated-tool UI nit, not the platform)*
 The add-spool *form* modal (not the ConfirmationDialog) rendered its Cancel/Save row flush at the bottom edge of the client window; Save was only clickable after nudging the window up. The **ConfirmationDialog itself rendered fine** (well-centered every time). Minor; the taller add form overflows the default window height.
 **Action:** constrain the built surface's modal height / make its footer sticky (again a nit in the generated tool, not the ConfirmationDialog).
 
@@ -241,7 +241,7 @@ All five lines match the Phase-3 session log exactly (5 writes attempted, 5 audi
 
 **C1 — Provisioning (reframed): PASS (as observation, not defect).**
 No new source was provisioned this run — the agent reused the existing `printers` read-write source and co-mingled the new `filament_spools` table into the printer-tracker's DB (confirmed via Phase-2 log: "printers data source is already read-write" → no `provision_database` call; `data-sources.json` shows a single source, id `printers`, unchanged from the D1 baseline). The `filament_spools` table (material, color, remaining_g, color_hex, brand, name, notes, total_weight_g columns — per the insert op JSON in Phase 3 and the D4 report's discover-first results) exists in the `printers` DB; the `filament-spools` surface is registered (confirmed live in the dashboard-host registry: 3 entries incl. `filament-spools`, created `2026-07-06T12:40:00Z`, Phase-2 post-turn check).
-**Observation / finding candidate (isolation, blast-radius):** the agent chose reuse-over-provision. A new tool's tables (and its DDL, applied via the agent's own ungated `db/apply.js`) now live inside the printer-tracker's database rather than an isolated store — a blast-radius/isolation concern for future multi-tool growth, distinct from the provisioning+infra-gate path (which was NOT exercised this run since no `provision_database` call occurred). Logged as an observation, not a pass/fail defect.
+**Observation (now finding F27 — isolation, blast-radius):** the agent chose reuse-over-provision. A new tool's tables (and its DDL, applied via the agent's own ungated `db/apply.js`) now live inside the printer-tracker's database rather than an isolated store — a blast-radius/isolation concern for future multi-tool growth, distinct from the provisioning+infra-gate path (which was NOT exercised this run since no `provision_database` call occurred). Logged as an observation, not a pass/fail defect.
 
 **C2 — Gated write executed: PASS.**
 The first untrusted-approved insert (Spool One) landed a real row: `filament_spools`/`spool_inventory` id:2, created `2026-07-06T16:47:09.925Z`, confirmed via direct DB read in Phase 3. Matching audit line: `decision:"executed", rowCount:1` (audit line 1, ground-truth tail above). Baseline audit count was 0 (D1); post-session count is 5 — this is the first of those 5.
@@ -285,3 +285,14 @@ The write-back / trust-gate loop works end-to-end, live, for real: enqueue → C
 4. **Tool/UI bugs in the generated surface (F24, F26) — low priority, not platform defects.** The add form drops weight fields on insert (F24) and its Save button sits at the window fold (F26). Both live in the agent-built surface, not the platform; fix when convenient.
 
 **Gap for a future run:** this run did **not** exercise the provisioning / infra-gate path — the agent reused the existing RW `printers` source, so `provision_database` and its operator gate never fired (Phase-2 watch-list (a), Phase-4 C1). A future dogfood should force a from-scratch provision (no reusable RW source available) to verify the infra-gate end-to-end, and separately exercise the novel-field schema-migration path.
+
+### Box end-state & operator cleanup (recorded, not performed)
+
+The run left the box in this state (kept, not torn down — the spool tool is a real, useful tool):
+- `filament_spools` table present in the **printers** DB (co-mingled — see F27), plus the `spool_inventory` read view.
+- Rows: id `2` "Spool One" (remaining_g 750, from the trusted update) present; id `3` "Spool Two" deleted by the coarseness probe; the malformed-identifier insert never landed (audit `error`). So one real spool row remains.
+- `data-trust.json` persists the `{printers, filament-spools}` pair — future writes from that surface auto-execute (F22). Remove the pair to re-gate the surface.
+- `data-audit.jsonl` now holds the 5 session write lines (2 insert, 1 update, 1 delete, 1 error) — the first real data-audit entries on this box.
+- `filament-spools` surface registered in the dashboard-host registry.
+
+**Cleanup options (operator's choice, none performed):** keep the tool as-is; OR drop `filament_spools`/`spool_inventory` + deregister the `filament-spools` surface + clear the trust pair to return to the D1 baseline; OR delete just the trust pair to re-gate while keeping the tool.
