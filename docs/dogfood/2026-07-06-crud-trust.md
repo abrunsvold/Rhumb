@@ -1,0 +1,298 @@
+# Dogfood run — write-back / CRUD trust-gate (filament spool inventory)
+
+**Date:** 2026-07-06 · **Spec:** ../superpowers/specs/2026-07-06-crud-trust-dogfood-design.md
+**Box code:** merged main (cd1266e) — no redeploy this run.
+**Claim under test:** the write-back loop (provision → write → gate → trust → audit) works end-to-end live, and the trust model's real (coarse) behavior is documented.
+**Verdict: PASS** (provisioning / infra-gate leg not exercised — agent reused the existing RW source; see Outcome gap). The write-back/CRUD/trust stack ran live end-to-end for the first time; the trust model's coarseness is documented with controller-verified evidence. See Findings (F22 headline) and the ranked roadmap in Outcome.
+
+## Phase 0/1 — client ready + baseline
+
+Read-only snapshot taken via SSH against `micropx-pve.tail731306.ts.net` (WS=`/root/rhumbr-workspace`, REPO_DIR=`/root/rhumb`), before any live CRUD/trust turn.
+
+**data-sources.json** — one existing source:
+- id `printers`, type `postgres`, mode `read-write` (connection string password redacted)
+
+**data-trust.json** — absent. Trust store starts clean; any file/content appearing after the build turn is new.
+
+**data-audit.jsonl** — absent. Baseline line count: 0. Any lines appearing after the build turn are new writes to count against.
+
+**services.json** — one existing service:
+- id `printer-poller`
+
+**ontology** — pre-existing entries (context, not touched by this baseline):
+- `ontology/domain/`: `printer-k2plus-fe91.md`, `printer-k2plus-right.md`, `print-jobs.md`
+- `ontology/system/`: `container-105.md`, `dashboard-printer-tracker.md`, `datasource-printers.md`, `service-printer-poller.md`
+
+## Phase 2 — the build turn (live log)
+
+**Note on F20 (resolved):** the prior attempt was BLOCKED by a tooling/env issue — the dev build was a bundle-less Tauri debug binary shadowed by a launchd-relaunched stale `Rhumb.app`, so computer-use could not focus/type into it. **FIX applied:** the client is now a properly packaged app (`/Users/anderson/Applications/Rhumb.app`, bundle `com.rhumb.client`, built today from merged main — F8/F9/F14 + markdown), running as the ONLY Rhumb process (PID 24146). request_access → granted full tier; screenshot renders the window; typing focus transfers cleanly. F20 no longer blocks. What follows is the real build turn.
+
+Timezone: EDT. Driver: computer-use (Task D3 recorder, packaged-app retry).
+
+- **12:29:48** — Task start. `ps` confirms exactly one Rhumb process: packaged `/Users/anderson/Applications/Rhumb.app/Contents/MacOS/app` PID **24146**. No dev binary, no stale app.
+- **12:29:54** — request_access("Rhumb") → granted `com.rhumb.client`, tier **full**, screenshotFiltering native. Screenshot: window titled "Rhumb", dashboard "3D Printer Tracker" **live** (updated 12:29:54), K2Plus-FE91 nozzle 25.3 / bed 23.8 Standby, "Printer Poller" tab present. Matches D1 baseline (source `printers`, service `printer-poller`). SSE live, no freeze. Left panel "New session", empty "Send a message to start a session", input "Message the agent — /", Send button.
+- **12:30:14** — Clicked input, typed the verbatim prompt; text landed in the (auto-expanded) input field ("…weight from the dashboard." visible at tail). **Focus transfer works** — F20 resolved.
+- **12:30:22** — Clicked Send. **Verbatim build prompt sent:** `Track my filament spools — material, color, weight remaining; let me add spools and update remaining weight from the dashboard.`
+- **12:31:29** — Agent running. Narration shows it reasoning about the write path: mentions the surface query proxy `/data/{source}/query with {op: {kind, table, ...}}`, notes "the user wants to add spools and update remaining weight — that means the surface needs write access", plans to check `views.sql` and "how the surface query proxy handles writes (insert/update), plus how surfaces are served/registered." Emitted Read/Read/Bash. Then: "The comment in views.sql says the query DSL 'only does SELECT'. The user needs to **write** … Let me find the data proxy implementation to learn what operations (`kind`) it supports — insert/update/etc." SSE live.
+- **12:32:04** — Still exploring: long stack of tool calls (many Read, Bash, Grep) building understanding of the write-back stack. Transcript auto-follows to newest (F9 OK); "thinking…" pinned. No gated action yet. SSE live.
+- **12:33:00** — Plan crystallizes. Agent narration: "**printers data source is already read-write**" — it plans to **reuse the existing `printers` Postgres, NOT call `provision_database`**. TodoWrite + Read + Bash. Then: "**db/apply.js reads DATABASE_URL from env. I'll create a dedicated schema file for the spools table and view rather than editing the printer schema (keeps concerns separate), then apply it.**" Spool columns planned: material, color, weight remaining, name/brand, initial (full) weight, timestamps.
+  - **WATCH-LIST (a):** so far NO `provision_database` — the agent is reusing the existing RW `printers` source rather than provisioning a new DB. No infra-queue gate expected from provisioning on this trajectory.
+  - **WATCH-LIST (c) / F17 forming:** CREATE TABLE is headed for the agent's OWN ungated path — `db/apply.js` reading `DATABASE_URL` from env (its own Bash), NOT a gated provision path. Confirming next.
+- **12:33:50** — **NEW dashboard tab "Filament Spools" now visible** (alongside "3D Printer Tracker") — surface registered/served. Agent explains the write path in narration:
+  - "The host auto-injects a shim that wraps `window.fetch` to attach the `X-Rhumb-Surface-Token` header on any same-origin `/data/*` request. So my surface just calls `fetch('/data/printers/query' | '/data/printers/write', ...)` and auth is handled automatically. **Reads go to `/query`, writes to `/write`.**"
+  - "**One thing to note: writes from an untrusted (source, surface) pair get queued (202 pending) for operator approval until trusted. I'll handle the 202 response gracefully in the UI so the user gets clear feedback the first time.**"
+  - Then "Now let me build the surface." → **Write** tool call.
+  - **WATCH-LIST (b) CONFIRMED:** surface issues **structured `/data/printers/write`** ops (insert/update via the data proxy), NOT raw SQL. Reads via `/data/printers/query`.
+  - **Trust model surfaced by the agent:** untrusted (source, surface) writes → **queued (202 pending)** for operator approval until trusted. (This is the write-trust gate; distinct from the infra/provision gate.)
+  - **New source id = `printers`** (reused existing RW source, NOT a newly provisioned one). Surface is a new surface on `printers`; capturing its id next.
+- **12:34:45** — Long-running **Write** (surface HTML build). Transcript stable, "thinking…" pinned. No wedge — single in-flight Write. SSE live.
+- **12:35:40** — Surface built; agent self-testing. Narration:
+  - "The identity guard gates all routes (that's the 403 for my unauthenticated curl). The `.surface-token` is generated when an allowlisted user first loads the surface HTML in the browser. My curl has no identity, so it can't reach either the HTML route or the data route — that's expected and correct." (Agent ran an **unauthenticated curl → 403**, identity guard confirmed working.)
+  - "I can't fully impersonate an authenticated browser session from here, but I can validate the **data-layer logic** (the risky part) directly against Postgres, exactly matching the SQL the proxy generates for my ops. That proves insert/update/delete/select round-trip correctly through the **`spool_inventory`** view. Let me do that."
+  - **Table/view name = `spool_inventory`.** Agent about to validate SQL round-trip directly against Postgres (its own DB path).
+- **12:36:40** — Finalization phase. Narration: "Let me verify mine parses and matches by running the exact validator, then confirm it appears in the live registry snapshot" (Bash). Then: "**The surface validates and both surfaces are discovered.** The dashboard-host scans on each registry request, so it'll appear live without a restart. Let me update todos and record the domain ontology, following the existing ontology pattern" (TodoWrite). Then reading an existing ontology file to match format and record the new entity. SSE live. No infra/provision gate has fired and none is imminent — the agent reused the RW `printers` source throughout.
+- **12:37:51** — **TURN COMPLETE** (session-tab spinner gone; end-of-turn divider "Done. Your filament spool track…" rendered). Agent's final message (verbatim, the substantive tail):
+  > **One thing to expect on first use** — The platform queues the **first** write from a new dashboard for operator approval (a security trust-pairing step). So the very first "Add spool" will show: *"Change queued for operator approval… It will apply once approved."* Once you approve that pending write in the control plane, this dashboard↔database pair becomes trusted and subsequent adds/updates apply immediately. If you'd like, I can point you to the exact approval command, or you can approve it when the prompt surfaces.
+  (Preceded by: "…the host's registry scanner and both surfaces are discovered." The collapsed turn-summary chip reads "Done. Your filament spool track…".)
+- **12:38:16** — Clicked the **"Filament Spools"** dashboard tab: surface **renders live** — header "Filament Spools · Inventory · remaining weight", green **"+ Add spool"** button, empty state "No spools yet. Click + Add spool to start your inventory." Surface is functional and served through the dashboard host. (Did NOT click "+ Add spool" — first write / trust-gate exercise belongs to the write session D4/D5, not this observe-only build turn.)
+
+### Watch-list results (build turn)
+- **(a) provision_database + auto-register read-write:** **NO `provision_database` call.** The agent reused the pre-existing `printers` source (already `read-write`) rather than provisioning a new DB. So no new source auto-registered; **new source id = `printers`** (reused). No infra/provision gate fired this turn.
+- **(b) structured `/data/*` writes vs raw SQL:** **structured.** Surface calls `fetch('/data/printers/query')` for reads and `fetch('/data/printers/write')` for writes through the host's auto-injected `window.fetch` shim (adds `X-Rhumb-Surface-Token`). No raw SQL in the surface. (Agent did run raw SQL directly against Postgres *only* to self-validate the data-layer round-trip through the `spool_inventory` view — a test path, not the surface's runtime path.)
+- **(c) F17 — how CREATE TABLE happened:** **ungated, agent's own path.** Agent created a dedicated schema file and applied it via `db/apply.js` (which "reads `DATABASE_URL` from env"), i.e. its own Bash/apply against the existing DB — NOT a gated `provision_database` path. Schema/DDL creation is not gated; only *runtime writes from the surface* hit the trust gate. **F17 reproduced: DDL (CREATE TABLE) is ungated; the trust gate sits at surface write-time, not schema-creation-time.**
+- **(d) F8 client send-loop wedge across multi-approval:** **N/A this turn — no wedge.** Zero gated approvals occurred during the build (agent reused RW source + ungated DDL), so the multi-approval send loop was never exercised. Single prompt sent cleanly; client stayed responsive throughout (~7.5 min, dozens of tool calls streamed). No send-loop wedge observed. The multi-approval F8 path will be exercised in the write session (D4) when the first `/data/*/write` queues.
+- **(e) F9 transcript follow / jump pill:** **works.** Transcript auto-followed to newest content across the entire turn (tool-call stack, narration, final message all pinned to bottom); "thinking…" stayed visible. No stuck-scroll observed.
+- **(f) SSE freeze:** **none.** "3D Printer Tracker" stayed live the whole turn (updates 12:29:54 → 12:38:00, ~30s cadence). No freeze/staleness.
+
+### New findings (F21+)
+- No new client/platform *defects* surfaced this turn. F17 (ungated DDL) is **reproduced/confirmed**, not new. F8/F9 behaved. The one notable structural observation: **the write-trust gate is scoped to (source, surface) runtime writes only** — schema creation and data-source reuse are entirely ungated, so an agent can stand up a new writable surface against an existing RW source and create tables with zero operator gate; the only gate the operator ever sees is the *first surface write*. (Consistent with the coarse trust model the run is meant to document; logged here as the observed shape, not a bug.)
+
+**IDs for D4:** new data-source id = **`printers`** (reused existing RW source; no new source created). New surface id = **`filament-spools`** (title "Filament Spools", url `/surfaces/filament-spools/`, kind `file`), backing table/view **`spool_inventory`** on source `printers`.
+
+**Post-turn read-only checks (turn over):**
+- `GET /agent/infra/pending` → `{"pending":[]}` — **infra pending empty**, consistent with no `provision_database` call this turn.
+- `GET /registry` (dashboard host, read-only) → 3 entries: **`filament-spools`** (surface, file, created `2026-07-06T12:40:00Z`) ← NEW; `printer-tracker` (surface, file, 2026-07-01); `printer-poller` (service, healthy, 2026-07-02). Confirms the new surface registered live without restart.
+
+**Turn outcome: SUCCESS.** Agent built the filament-spool tool end-to-end in a single turn (~7.5 min, 12:30:22 → 12:37:51 EDT): created `spool_inventory` schema (via its own ungated `db/apply.js`), built + registered the `filament-spools` write-back surface (structured `/data/printers/write`), self-validated the SQL round-trip, wrote ontology, and explained the first-write trust gate. No gated actions were triggered during the build (0 infra/write approvals) because it reused the RW `printers` source and DDL is ungated. The write-trust gate remains untested until the first surface write (D4). Agent's final claim that the surface works and that the first write will queue for approval is **plausible and consistent with observed registry + rendered surface**, but the actual write→202→approve→apply loop is **not yet exercised** — that is D4/D5's job to verify against ground truth.
+
+
+## Phase 3 — the write session (trust ladder + adversarial probes)
+
+**Date/TZ:** 2026-07-06, EDT. **Driver:** computer-use against packaged `Rhumb.app` (PID 24146, only Rhumb proc). **Active operator use** — curl + reading the surface's injected token are expected here, not a rescue.
+
+### Discover-first results (replace the brief's placeholders)
+- **Write target TABLE:** `filament_spools` (reads go through the `spool_inventory` view). Source: `printers` (reused RW source; no new source). Both read from the surface JS: `write({kind:"insert", table:"filament_spools", values})`, `update` with `values:{remaining_g, updated_at}, where:{id}`, `delete` with `where:{id}`; reads via `query("spool_inventory")`.
+- **Insert value columns (from surface JS):** `material, color, remaining_g, color_hex, brand, name, notes` (+ `total_weight_g`).
+- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tail731306.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: an earlier read of this — that the surface HTML served 200 unauthenticated — was **superseded, see F25 / Phase 4**: that 200 was authorized serve-path access with an injected tailnet identity; the raw loopback route returns 403, so the HTML is identity-gated, not public.)
+- **Real row ids used:** id `2` = Spool One (update target), id `3` = Spool Two (DELETE probe target).
+
+### Baseline (start of Phase 3, pre-writes)
+- `GET /data/pending` (no header) → **403**; (with `Sec-Rhumb-Control: 1`) → **200 `{"pending":[]}`**. Queue empty.
+- `data-trust.json` still ABSENT at start; `data-audit.jsonl` 0 lines.
+
+### Trust ladder (via the surface UI in the client + ConfirmationDialog DATA branch)
+
+**Rung 1 — Add spool #1, approve WITHOUT trust.**
+- **12:46 EDT** — `+ Add spool` → filled MATERIAL=PLA, COLOR=Galaxy Black, BRAND=Prusament, LABEL=Spool One → Save.
+- **ConfirmationDialog DATA branch rendered LIVE — first time ever.** Verbatim content (zoomed):
+  - Title: **`Write to "printers"`**
+  - Subtitle: **`Surface: filament-spools`**
+  - JSON body:
+    ```json
+    {
+      "kind": "insert",
+      "table": "filament_spools",
+      "values": {
+        "brand": "Prusament",
+        "color": "Galaxy Black",
+        "color_hex": "#58a6ff",
+        "material": "PLA",
+        "name": "Spool One",
+        "notes": null,
+        "remaining_g": 0,
+        "total_weight_g": 0
+      }
+    }
+    ```
+  - **`☐ Trust this surface`** checkbox (unchecked) · **`Deny`** / **`Approve`** buttons.
+- Clicked **Approve** with the checkbox UNCHECKED. Dialog dismissed.
+- **DB effect:** row `id:2` "Spool One" present in `spool_inventory` (created `2026-07-06T16:47:09.925Z`). Pending drained to `[]`. Audit line 1: `decision":"executed","rowCount":1`.
+- **Result: untrusted-approve → EXECUTED.** ✅
+
+**Rung 2 — Add spool #2, approve WITH "Trust this surface".**
+- **12:47 EDT** — Add form → COLOR=Signal White, BRAND=Hatchbox, LABEL=Spool Two → Save → DATA-branch dialog rendered again (same shape, `name:"Spool Two"`).
+- Clicked the **`Trust this surface`** checkbox (verified checked/blue), then **Approve** (resolve body carries `trustSurface:true`).
+- **DB effect:** row `id:3` "Spool Two" present (created `2026-07-06T16:47:57Z`). Pending `[]`.
+- **Trust persisted:** `data-trust.json` now = `[{"source":"printers","surfaceId":"filament-spools"}]` (was ABSENT). Audit line 2 executed.
+- **Result: trust-approve → EXECUTED + pairing persisted.** ✅
+
+**Rung 3 — Update spool #1 remaining weight (trusted → should be silent).**
+- **12:48 EDT** — Spool One card → `Update weight` → "Update remaining — Spool One" modal → set REMAINING (G) = **750** → Save.
+- **NO ConfirmationDialog appeared.** The card updated in place immediately (750 g, "updated 12:48:39 PM").
+- **DB effect:** `spool_inventory` id:2 `remaining_g=750` (audit line 3, `update … where:{id:2}`, executed `16:48:39Z`). Pending stayed `[]`.
+- **Result: trusted update → EXECUTED SILENTLY, no gate.** ✅
+
+### Adversarial probes (curl with the surface token — active operator)
+
+**Probe 4 — COARSENESS (post-trust DELETE).** With the surface trusted:
+```
+POST /data/printers/write  {"op":{"kind":"delete","table":"filament_spools","where":{"id":3}}}
+→ {"status":"executed","result":{"rowCount":1}}
+```
+- Spool Two (id:3) **deleted immediately; NO re-gate** (pending stayed `[]`; audit line 4 `delete … executed`).
+- **FINDING (coarseness confirmed):** trust is scoped to the **(source, surface) pair, NOT to op kind**. Once trusted, DELETE — the most destructive op — executes with zero operator gate, same as insert/update. The trust grant is coarse: it blesses *all* future writes from that surface, including deletes the operator never explicitly saw. `{"status":"executed"}` (not `"pending"`).
+
+**Probe 5 — SELF-APPROVE GUARD.**
+```
+GET /data/pending                              → no-header:403
+GET /data/pending  (Sec-Rhumb-Control: 1)      → with-header:200
+```
+- **PASS.** The DATA pending control plane requires the shell-only `Sec-Rhumb-Control: 1` header, which browser/page JS cannot set. A surface **cannot read or bless its own pending write** from its own page context. (Expected 403 then 200 — matched.)
+
+**Probe 6 — IDENTIFIER WHITELIST (malformed table).** Surface trusted, so this hits inline (no queue):
+```
+POST /data/printers/write  {"op":{"kind":"insert","table":"bad name; drop table x","values":{...}}}
+→ {"error":"write failed"}   HTTP 500
+```
+- **PASS.** Rows unchanged (still only id:2). Audit line 5: `decision":"error","error":"invalid identifier: bad name; drop table x"`. The `ident()` whitelist threw **before any SQL was assembled** — no malformed/injection SQL reached Postgres, and the error is recorded in the audit trail. Injection blocked at the identifier gate.
+
+### Audit trail (data-audit.jsonl — 5 lines, was 0 at baseline)
+| # | ts (UTC) | op | table | decision |
+|---|---|---|---|---|
+| 1 | 16:47:09 | insert Spool One | filament_spools | executed rowCount 1 |
+| 2 | 16:47:57 | insert Spool Two | filament_spools | executed rowCount 1 |
+| 3 | 16:48:39 | update id:2 remaining_g 750 | filament_spools | executed rowCount 1 |
+| 4 | 16:49:23 | delete id:3 | filament_spools | executed rowCount 1 |
+| 5 | 16:49:23 | insert (malformed table) | bad name; drop table x | **error** — invalid identifier |
+
+Every write (including the rejected one) is audited with ts, source, surfaceId, full op, and decision. **Observability gap noted:** the audit log records only the terminal `executed`/`error` decision — it does **not** log the intermediate `pending`/enqueue nor the approve event (with/without trust). An operator reading data-audit.jsonl alone cannot tell rung-1 (approved-untrusted) from rung-2 (approved-with-trust) from rung-3 (silent, never gated); all three read identically as `executed`. The trust decision lives only in `data-trust.json`, not in the audit stream.
+
+### Phase 3 result
+Write-back loop verified end-to-end LIVE for the first time: **enqueue (202) → ConfirmationDialog DATA branch → approve → execute → audit**, across both untrusted-approve and trust-approve, plus the silent trusted path. All 3 adversarial probes behaved as designed (coarse-but-safe trust: self-approve blocked, identifier injection blocked; DELETE coverage is the documented coarseness). No client wedge/freeze; the DATA-branch dialog rendered cleanly each time and positioned within the window (the add-spool *form* modal's submit button sat at the window's bottom fold and needed the window nudged up — minor client layout nit, logged below).
+
+## Findings
+
+Consolidated and ranked across the whole run (build turn + write session + ground-truth pass). Severities: **Important** (substantive follow-up this run exists to surface) → **MEDIUM** → **LOW/RESOLVED**.
+
+### F22 — Trust is per-(source, surface) ONLY, never per-op-kind *(HEADLINE / Important — by design, but a sharp edge)*
+Approving a single insert with **"Trust this surface"** checked blesses **every** subsequent write from that surface — any table, any op-kind, **including DELETE**. Proven live: with `(printers, filament-spools)` trusted, a curl `POST /data/printers/write {"op":{"kind":"delete","table":"filament_spools","where":{"id":3}}}` returned `{"status":"executed","result":{"rowCount":1}}` and dropped the row with **no re-gate** (pending stayed `[]`; audit line 4, Phase-3 Probe 4 / Phase-4 C4). The operator who trusted the surface after seeing an *insert* dialog implicitly authorized *deletes they never saw*. This is coarse **by design**, not a bug — but it's the run's central finding and the top roadmap item.
+**Action:** gate destructive ops (DELETE / unbounded UPDATE) separately even when a surface is trusted, or scope the trust grant per-op-kind or per-table; at minimum, show at trust time which op-kinds the grant will cover.
+
+### F23 — Audit log cannot distinguish approval-gated writes from trust-bypassed writes *(Important — elevated in Phase 4)*
+`data-audit.jsonl` records only the terminal `decision:"executed"`/`"error"` per write — never the `pending` enqueue, the approve action, or whether trust was granted. Ground-truth confirms the untrusted-then-approved insert (Spool One, line 1), the trust-approved insert (Spool Two, line 2), and the fully trust-bypassed DELETE with no human in the loop (id:3, line 4) all record the **identical** `decision:"executed"` shape. Nothing in the audit stream tells an operator, after the fact, whether a human gated a given write or trust auto-executed it — the trust decision lives only in `data-trust.json`, not in the audit line. Audit-trail trustworthiness was **day-2's smoking-gun finding**, so an audit stream that can't answer "was this write gated by a human?" undermines the log's core purpose (accountability for writes), not a minor observability nit.
+**Action:** add a field to each audit line distinguishing `executed-via-approval` / `executed-via-trust` / `denied` (or equivalent) so `decision:"executed"` is never ambiguous about authorization path.
+
+### F17 — Schema DDL (CREATE TABLE) runs ungated via the agent's own path *(MEDIUM — reproduced/carried)*
+`CREATE TABLE` happened through the agent's own `db/apply.js` (reads `DATABASE_URL` from env, invoked via the agent's own Bash) against the existing DB — **not** a gated `provision_database`/infra-queue path (Phase-2 watch-list (c), Phase-4 C7). The `/data/*` write-trust gate is **DML-only** (insert/update/delete); **DDL is in no gate's vocabulary**. So an agent can stand up a new writable surface and create tables against an existing RW source with zero operator gate — the only gate the operator ever sees is the *first surface write*.
+**Action:** gate DDL (a schema-change approval, distinct from the DML write gate), **or** explicitly document DDL as intentionally agent-autonomous during a build turn.
+
+### F27 — Agent reused `printers` and co-mingled the spool table into the printer-tracker DB *(MEDIUM — isolation / blast-radius)*
+Given a writable existing source, the agent chose **reuse over provisioning**: it declined `provision_database`, applied `filament_spools` DDL into the printer-tracker's DB, and stood the surface up on the shared `printers` source (Phase-2 watch-list (a), Phase-4 C1). Functionally correct, but a new tool's tables (and its ungated DDL) now live inside another tool's database rather than an isolated store — a blast-radius/isolation concern as multiple tools accrete on one box. Distinct from F17 (which is about *gating* DDL); this is about *where* the DDL lands.
+**Action:** consider a default toward per-tool DB isolation (or an explicit operator choice at build time between "reuse RW source" and "provision isolated DB"), so multi-tool growth doesn't silently co-mingle unrelated data.
+
+### F20 — GUI dogfooding must drive a packaged `.app`, not the dev build *(tooling — RESOLVED)*
+The first build-turn attempt was **blocked**: the dev build (`target/debug/app`) is a bundle-less Tauri debug binary, so computer-use could not focus/type into it, and a stale installed `Rhumb.app` hijacked the `com.rhumb.client` bundle id (launchd kept relaunching it). **Resolved** by building + installing a packaged app from current main (`/Users/anderson/Applications/Rhumb.app`, run as the only Rhumb process, PID 24146); focus/typing then transferred cleanly and the real build turn proceeded (Phase-2 F20 note).
+**Action:** for GUI dogfooding, drive a packaged `.app`, not the dev build; consider a distinct dev bundle id so a dev build can't be shadowed by a stale installed app.
+
+### F24 — Add-spool form drops the weight fields on insert *(LOW — surface bug, not platform)*
+The add form's FULL WEIGHT / REMAINING defaults (1000/1000) did not carry into the insert op — the dialog and DB both showed `remaining_g:0, total_weight_g:0` for both spools (cards read "0 g of 0 g / No full weight set"). Update-weight works (set 750 cleanly). This is a bug in the **agent-built surface's** insert value-assembly, surfaced only because the write loop now actually runs. The trust/gate mechanics under test are unaffected.
+**Action:** fix the built surface's value assembly (out of scope for the platform; a defect in the generated tool).
+
+### F26 — Add-spool form modal Save button sits at the window's bottom fold *(LOW — generated-tool UI nit, not the platform)*
+The add-spool *form* modal (not the ConfirmationDialog) rendered its Cancel/Save row flush at the bottom edge of the client window; Save was only clickable after nudging the window up. The **ConfirmationDialog itself rendered fine** (well-centered every time). Minor; the taller add form overflows the default window height.
+**Action:** constrain the built surface's modal height / make its footer sticky (again a nit in the generated tool, not the ConfirmationDialog).
+
+### F25 — Surface HTML is correctly identity-gated *(RESOLVED / not a finding)*
+Originally logged as "surface HTML served 200 to an unauthenticated curl." Ground-truth probe (Phase 4, controller-run, box read-only): raw loopback `http://127.0.0.1:8788/surfaces/filament-spools/` → **403**; `/.well-known/rhumb.json` loopback → **200** (intentionally open, by design). The surface route **is** correctly identity-gated; the 200 seen during the write session was **authorized access through tailscale-serve** (the identity-bearing path an allowlisted browser uses), not an unauthenticated hole — the earlier framing conflated "reached via serve with identity" with "reached with no identity." **Withdrawn; no action needed.** (Kept in the record so the correction is explicit.)
+
+### Positive findings — proven LIVE for the first time this run
+The run exists to exercise the write-back/trust stack end-to-end; these all held:
+- **Write-back loop, end-to-end:** structured `/data/printers/write` → **202 pending** → operator approves in the client **ConfirmationDialog DATA branch (rendered live for the first time ever)** → execute → audit. Backed by matching DB state and audit lines at every rung (Phase-3 rungs 1–3, Phase-4 C2).
+- **Persisted trust works:** approve-with-trust → `data-trust.json` persists `[{"source":"printers","surfaceId":"filament-spools"}]` (was absent) → the next write auto-executes silently, no dialog, no pending entry (Phase-4 C3).
+- **The guards held under adversarial probing:** self-approve **blocked** (`GET /data/pending` → 403 without the shell-only `Sec-Rhumb-Control: 1` header, 200 with it — a surface's page JS can't set that header); the **identifier whitelist rejected** a malformed table name (`bad name; drop table x`) before any SQL was assembled, recording `decision:"error"` — no injection SQL reached Postgres (Phase-3 Probes 5–6, Phase-4 C5).
+
+## Phase 4 — ground-truth verification
+
+**Method:** Controller-run, box read-only (SELECT / cat / ls only, no writes). Evidence below was captured first-hand by the controller against the live box and pasted in verbatim; this session (D5) applied the two corrections it established and formalized the per-criterion verdict.
+
+### Ground-truth evidence (controller-confirmed)
+
+**data-trust.json** (final state):
+```json
+[{"source":"printers","surfaceId":"filament-spools"}]
+```
+Trust persisted for the `(printers, filament-spools)` pair — matches Rung 2 of the Phase-3 trust ladder.
+
+**data-audit.jsonl** tail (write decisions, in order):
+1. insert Spool One (`filament_spools`) → `decision:"executed", rowCount:1` — the untrusted-then-approved write.
+2. insert Spool Two → `decision:"executed"` — the trust-approved write.
+3. update id:2 `remaining_g:750` → `decision:"executed"` — the trusted silent update.
+4. **delete id:3 → `decision:"executed", rowCount:1`** — the post-trust DELETE, UNGATED (coarseness, C4 headline).
+5. insert into `"bad name; drop table x"` → `decision:"error", "invalid identifier: bad name; drop table x"` — whitelist held, no SQL reached the DB.
+
+All five lines match the Phase-3 session log exactly (5 writes attempted, 5 audit lines, 0 at baseline).
+
+**F25 probe (surface auth, corrected):**
+- Raw loopback `http://127.0.0.1:8788/surfaces/filament-spools/` → **403**.
+- `/.well-known/rhumb.json` loopback → **200** (intentionally open, by design).
+- Conclusion: the surface is correctly identity-gated. The 200 seen in the Phase-3 write session was authorized access via tailscale-serve (identity-bearing path), not an unauthenticated hole. See F25 correction above (RESOLVED / withdrawn).
+
+### Per-criterion verdicts
+
+**C1 — Provisioning (reframed): PASS (as observation, not defect).**
+No new source was provisioned this run — the agent reused the existing `printers` read-write source and co-mingled the new `filament_spools` table into the printer-tracker's DB (confirmed via Phase-2 log: "printers data source is already read-write" → no `provision_database` call; `data-sources.json` shows a single source, id `printers`, unchanged from the D1 baseline). The `filament_spools` table (material, color, remaining_g, color_hex, brand, name, notes, total_weight_g columns — per the insert op JSON in Phase 3 and the D4 report's discover-first results) exists in the `printers` DB; the `filament-spools` surface is registered (confirmed live in the dashboard-host registry: 3 entries incl. `filament-spools`, created `2026-07-06T12:40:00Z`, Phase-2 post-turn check).
+**Observation (now finding F27 — isolation, blast-radius):** the agent chose reuse-over-provision. A new tool's tables (and its DDL, applied via the agent's own ungated `db/apply.js`) now live inside the printer-tracker's database rather than an isolated store — a blast-radius/isolation concern for future multi-tool growth, distinct from the provisioning+infra-gate path (which was NOT exercised this run since no `provision_database` call occurred). Logged as an observation, not a pass/fail defect.
+
+**C2 — Gated write executed: PASS.**
+The first untrusted-approved insert (Spool One) landed a real row: `filament_spools`/`spool_inventory` id:2, created `2026-07-06T16:47:09.925Z`, confirmed via direct DB read in Phase 3. Matching audit line: `decision:"executed", rowCount:1` (audit line 1, ground-truth tail above). Baseline audit count was 0 (D1); post-session count is 5 — this is the first of those 5.
+
+**C3 — Trust persisted + honored: PASS.**
+`data-trust.json` ground-truth = `[{"source":"printers","surfaceId":"filament-spools"}]`, written only after Rung 2 (trust-approve), absent before. The Rung 3 update (id:2 → `remaining_g:750`) executed with **no ConfirmationDialog** and **no pending entry** — Phase-3 log confirms "pending stayed `[]`"; audit line 3 shows `executed` with no corresponding queue entry ever appearing. Trust was persisted once and then silently honored for the next write, as designed.
+
+**C4 — Coarseness: PASS (finding confirmed — this is the headline).**
+Post-trust DELETE (`where:{id:3}`, Spool Two) skipped the gate entirely: `decision:"executed", rowCount:1` (audit line 4), no re-prompt, pending stayed `[]`. Trust is scoped to `(source, surface)`, not to op-kind — the most destructive operation (DELETE) executes exactly as freely as insert/update once a surface is trusted. This is the run's central finding (F22, carried).
+
+**C5 — Guards held: PASS.**
+- Self-approve guard: `GET /data/pending` with no header → 403; with `Sec-Rhumb-Control: 1` → 200. A surface's own page JS cannot set that header, so it cannot read/bless its own pending write.
+- Identifier whitelist: `POST .../write {table:"bad name; drop table x"}` → error, audit line 5 `decision:"error", "invalid identifier: bad name; drop table x"`. The `ident()` whitelist threw before SQL assembly — no malformed/injection SQL reached Postgres. (Ground-truth confirms the malformed table name is absent from the DB; no new relation by that name exists — consistent with the whitelist rejecting it pre-SQL.)
+
+**C6 — Audit integrity: PASS with a documented gap (F23, elevated).**
+Complete: every one of the 5 session writes (2 inserts, 1 update, 1 delete, 1 malformed insert) has exactly one matching `data-audit.jsonl` line (executed ×4, error ×1) — count matches, baseline 0 → 5, no missing or orphaned lines.
+Insufficient: the audit line shape for `decision:"executed"` is identical whether the write was a human-approved-untrusted write (audit line 1), a human-approved-with-trust write (audit line 2), or a fully trust-bypassed write with no human in the loop at all (audit line 4, the DELETE). Nothing in the audit record distinguishes "a human gated this" from "trust auto-executed this." **This is F23, elevated to Important in this Phase-4 pass** (see Findings section correction above) — given audit trustworthiness was day-2's smoking-gun finding, an audit log that can't answer "was this gated?" is a real gap, not a nit.
+
+**C7 — F17 re-observed: PASS (carried finding, reproduced).**
+Per the Phase-2 (build turn) log: `CREATE TABLE` happened via the agent's own ungated path — a dedicated schema file applied through `db/apply.js` (reads `DATABASE_URL` from env, invoked via the agent's own Bash), **not** a gated `provision_database`/infra-queue path. The write-trust gate (ConfirmationDialog, 202-pending) applies only to runtime `/data/*/write` calls from a registered surface — schema/DDL creation is entirely outside that gate. F17 reproduced exactly as carried from D3/D4: DDL is ungated; the only operator-visible gate is the first surface write.
+
+### Corrections applied this phase
+1. **F25 withdrawn** — surface route is correctly identity-gated (loopback 403; well-known 200 by design); the earlier 200 was authorized serve-path access, not a hole. Marked RESOLVED in the Findings section above.
+2. **F23 elevated to Important** — audit log completeness (C6) is real, but the log cannot distinguish executed-via-approval from executed-via-trust from denied. Action item recorded: add a field to `data-audit.jsonl` distinguishing authorization path.
+
+## Outcome
+
+**Overall verdict: PASS.**
+
+The write-back / trust-gate loop works end-to-end, live, for real: enqueue → ConfirmationDialog → approve → execute → audit, across untrusted-approve, trust-approve, and silent-trusted paths, backed by matching DB state and audit lines at every step (C2, C3, C6). The trust model's coarseness is not just asserted but reproduced with a live, audited DELETE that bypassed the gate post-trust (C4) — this is the run's headline finding and it is now documented with hard evidence rather than inference. Guards held under adversarial probing: no self-approve, no SQL injection via malformed identifiers (C5). The one reused-vs-provisioned architectural choice (C1) and the DDL-ungated path (C7) are carried observations/findings, not loop failures. The audit-integrity gap (C6/F23) is real and has been elevated to Important with a concrete remediation (add an authorization-path field) rather than left as a passive observability nit. F25 is corrected and withdrawn — it was a misreading of authorized serve-path access as an unauthenticated hole, not an actual security gap.
+
+**Plainly:** the write-back loop worked live end-to-end this run, and the trust coarseness (DELETE bypassing the gate once trusted) is now documented with pasted, controller-verified evidence.
+
+### Ranked roadmap
+
+1. **Sharpen the trust model — the substantive follow-up this run exists to surface (F22 + F23).** These two are the point of the run and rank together at the top:
+   - **F22 — gate destructive ops even for trusted surfaces** (or scope trust per-op-kind / per-table). One "trust this surface" click currently auto-executes every future write including DELETE; proven live with an ungated, audited DELETE (Phase-3 Probe 4 / Phase-4 C4). This is the headline.
+   - **F23 — make the audit log say how a write was authorized.** Add an `executed-via-approval` / `executed-via-trust` / `denied` field so `decision:"executed"` is never ambiguous. Directly answers day-2's audit-trustworthiness concern.
+2. **F17 — gate schema DDL, or document it as intentionally agent-autonomous.** `CREATE TABLE` runs through the agent's own `db/apply.js` with no gate; the `/data/*` gate is DML-only. Pick one: add a schema-change approval, or write down that build-time DDL is autonomous by design.
+3. **F27 — decide the reuse-vs-isolation default for multi-tool growth.** The agent co-mingled the spool table into the printer-tracker DB rather than provisioning an isolated store. Offer (or default to) per-tool DB isolation so tools don't silently share a blast radius.
+4. **Tool/UI bugs in the generated surface (F24, F26) — low priority, not platform defects.** The add form drops weight fields on insert (F24) and its Save button sits at the window fold (F26). Both live in the agent-built surface, not the platform; fix when convenient.
+
+**Gap for a future run:** this run did **not** exercise the provisioning / infra-gate path — the agent reused the existing RW `printers` source, so `provision_database` and its operator gate never fired (Phase-2 watch-list (a), Phase-4 C1). A future dogfood should force a from-scratch provision (no reusable RW source available) to verify the infra-gate end-to-end, and separately exercise the novel-field schema-migration path.
+
+### Box end-state & operator cleanup (recorded, not performed)
+
+The run left the box in this state (kept, not torn down — the spool tool is a real, useful tool):
+- `filament_spools` table present in the **printers** DB (co-mingled — see F27), plus the `spool_inventory` read view.
+- Rows: id `2` "Spool One" (remaining_g 750, from the trusted update) present; id `3` "Spool Two" deleted by the coarseness probe; the malformed-identifier insert never landed (audit `error`). So one real spool row remains.
+- `data-trust.json` persists the `{printers, filament-spools}` pair — future writes from that surface auto-execute (F22). Remove the pair to re-gate the surface.
+- `data-audit.jsonl` now holds the 5 session write lines (2 insert, 1 update, 1 delete, 1 error) — the first real data-audit entries on this box.
+- `filament-spools` surface registered in the dashboard-host registry.
+
+**Cleanup options (operator's choice, none performed):** keep the tool as-is; OR drop `filament_spools`/`spool_inventory` + deregister the `filament-spools` surface + clear the trust pair to return to the D1 baseline; OR delete just the trust pair to re-gate while keeping the tool.
