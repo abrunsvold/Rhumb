@@ -76,6 +76,110 @@ Timezone: EDT. Driver: computer-use (Task D3 recorder, packaged-app retry).
 
 
 ## Phase 3 — the write session (trust ladder + adversarial probes)
+
+**Date/TZ:** 2026-07-06, EDT. **Driver:** computer-use against packaged `Rhumb.app` (PID 24146, only Rhumb proc). **Active operator use** — curl + reading the surface's injected token are expected here, not a rescue.
+
+### Discover-first results (replace the brief's placeholders)
+- **Write target TABLE:** `filament_spools` (reads go through the `spool_inventory` view). Source: `printers` (reused RW source; no new source). Both read from the surface JS: `write({kind:"insert", table:"filament_spools", values})`, `update` with `values:{remaining_g, updated_at}, where:{id}`, `delete` with `where:{id}`; reads via `query("spool_inventory")`.
+- **Insert value columns (from surface JS):** `material, color, remaining_g, color_hex, brand, name, notes` (+ `total_weight_g`).
+- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tail731306.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: the surface HTML route served 200 to an unauthenticated curl this run — the identity guard did not 403 the HTML; the token is embedded in that public HTML.)
+- **Real row ids used:** id `2` = Spool One (update target), id `3` = Spool Two (DELETE probe target).
+
+### Baseline (start of Phase 3, pre-writes)
+- `GET /data/pending` (no header) → **403**; (with `Sec-Rhumb-Control: 1`) → **200 `{"pending":[]}`**. Queue empty.
+- `data-trust.json` still ABSENT at start; `data-audit.jsonl` 0 lines.
+
+### Trust ladder (via the surface UI in the client + ConfirmationDialog DATA branch)
+
+**Rung 1 — Add spool #1, approve WITHOUT trust.**
+- **12:46 EDT** — `+ Add spool` → filled MATERIAL=PLA, COLOR=Galaxy Black, BRAND=Prusament, LABEL=Spool One → Save.
+- **ConfirmationDialog DATA branch rendered LIVE — first time ever.** Verbatim content (zoomed):
+  - Title: **`Write to "printers"`**
+  - Subtitle: **`Surface: filament-spools`**
+  - JSON body:
+    ```json
+    {
+      "kind": "insert",
+      "table": "filament_spools",
+      "values": {
+        "brand": "Prusament",
+        "color": "Galaxy Black",
+        "color_hex": "#58a6ff",
+        "material": "PLA",
+        "name": "Spool One",
+        "notes": null,
+        "remaining_g": 0,
+        "total_weight_g": 0
+      }
+    }
+    ```
+  - **`☐ Trust this surface`** checkbox (unchecked) · **`Deny`** / **`Approve`** buttons.
+- Clicked **Approve** with the checkbox UNCHECKED. Dialog dismissed.
+- **DB effect:** row `id:2` "Spool One" present in `spool_inventory` (created `2026-07-06T16:47:09.925Z`). Pending drained to `[]`. Audit line 1: `decision":"executed","rowCount":1`.
+- **Result: untrusted-approve → EXECUTED.** ✅
+
+**Rung 2 — Add spool #2, approve WITH "Trust this surface".**
+- **12:47 EDT** — Add form → COLOR=Signal White, BRAND=Hatchbox, LABEL=Spool Two → Save → DATA-branch dialog rendered again (same shape, `name:"Spool Two"`).
+- Clicked the **`Trust this surface`** checkbox (verified checked/blue), then **Approve** (resolve body carries `trustSurface:true`).
+- **DB effect:** row `id:3` "Spool Two" present (created `2026-07-06T16:47:57Z`). Pending `[]`.
+- **Trust persisted:** `data-trust.json` now = `[{"source":"printers","surfaceId":"filament-spools"}]` (was ABSENT). Audit line 2 executed.
+- **Result: trust-approve → EXECUTED + pairing persisted.** ✅
+
+**Rung 3 — Update spool #1 remaining weight (trusted → should be silent).**
+- **12:48 EDT** — Spool One card → `Update weight` → "Update remaining — Spool One" modal → set REMAINING (G) = **750** → Save.
+- **NO ConfirmationDialog appeared.** The card updated in place immediately (750 g, "updated 12:48:39 PM").
+- **DB effect:** `spool_inventory` id:2 `remaining_g=750` (audit line 3, `update … where:{id:2}`, executed `16:48:39Z`). Pending stayed `[]`.
+- **Result: trusted update → EXECUTED SILENTLY, no gate.** ✅
+
+### Adversarial probes (curl with the surface token — active operator)
+
+**Probe 4 — COARSENESS (post-trust DELETE).** With the surface trusted:
+```
+POST /data/printers/write  {"op":{"kind":"delete","table":"filament_spools","where":{"id":3}}}
+→ {"status":"executed","result":{"rowCount":1}}
+```
+- Spool Two (id:3) **deleted immediately; NO re-gate** (pending stayed `[]`; audit line 4 `delete … executed`).
+- **FINDING (coarseness confirmed):** trust is scoped to the **(source, surface) pair, NOT to op kind**. Once trusted, DELETE — the most destructive op — executes with zero operator gate, same as insert/update. The trust grant is coarse: it blesses *all* future writes from that surface, including deletes the operator never explicitly saw. `{"status":"executed"}` (not `"pending"`).
+
+**Probe 5 — SELF-APPROVE GUARD.**
+```
+GET /data/pending                              → no-header:403
+GET /data/pending  (Sec-Rhumb-Control: 1)      → with-header:200
+```
+- **PASS.** The DATA pending control plane requires the shell-only `Sec-Rhumb-Control: 1` header, which browser/page JS cannot set. A surface **cannot read or bless its own pending write** from its own page context. (Expected 403 then 200 — matched.)
+
+**Probe 6 — IDENTIFIER WHITELIST (malformed table).** Surface trusted, so this hits inline (no queue):
+```
+POST /data/printers/write  {"op":{"kind":"insert","table":"bad name; drop table x","values":{...}}}
+→ {"error":"write failed"}   HTTP 500
+```
+- **PASS.** Rows unchanged (still only id:2). Audit line 5: `decision":"error","error":"invalid identifier: bad name; drop table x"`. The `ident()` whitelist threw **before any SQL was assembled** — no malformed/injection SQL reached Postgres, and the error is recorded in the audit trail. Injection blocked at the identifier gate.
+
+### Audit trail (data-audit.jsonl — 5 lines, was 0 at baseline)
+| # | ts (UTC) | op | table | decision |
+|---|---|---|---|---|
+| 1 | 16:47:09 | insert Spool One | filament_spools | executed rowCount 1 |
+| 2 | 16:47:57 | insert Spool Two | filament_spools | executed rowCount 1 |
+| 3 | 16:48:39 | update id:2 remaining_g 750 | filament_spools | executed rowCount 1 |
+| 4 | 16:49:23 | delete id:3 | filament_spools | executed rowCount 1 |
+| 5 | 16:49:23 | insert (malformed table) | bad name; drop table x | **error** — invalid identifier |
+
+Every write (including the rejected one) is audited with ts, source, surfaceId, full op, and decision. **Observability gap noted:** the audit log records only the terminal `executed`/`error` decision — it does **not** log the intermediate `pending`/enqueue nor the approve event (with/without trust). An operator reading data-audit.jsonl alone cannot tell rung-1 (approved-untrusted) from rung-2 (approved-with-trust) from rung-3 (silent, never gated); all three read identically as `executed`. The trust decision lives only in `data-trust.json`, not in the audit stream.
+
+### Phase 3 result
+Write-back loop verified end-to-end LIVE for the first time: **enqueue (202) → ConfirmationDialog DATA branch → approve → execute → audit**, across both untrusted-approve and trust-approve, plus the silent trusted path. All 3 adversarial probes behaved as designed (coarse-but-safe trust: self-approve blocked, identifier injection blocked; DELETE coverage is the documented coarseness). No client wedge/freeze; the DATA-branch dialog rendered cleanly each time and positioned within the window (the add-spool *form* modal's submit button sat at the window's bottom fold and needed the window nudged up — minor client layout nit, logged below).
+
 ## Findings
+
+New findings from the write session (F22+):
+
+- **F22 — Trust is per-(source,surface), not per-op-kind (coarseness, by design but sharp-edged).** Approving a single insert with "Trust this surface" checked blesses ALL subsequent writes from that surface — including DELETE (Probe 4 executed a delete with no gate). The operator who trusts a surface after seeing an *insert* dialog has implicitly authorized *deletes* they never saw. This is the documented coarse trust model; logged as the confirmed live shape. Mitigation ideas for later: show op-kinds covered at trust time, or gate destructive ops (delete/truncate) separately even for trusted surfaces.
+- **F23 — Audit log omits the gate/trust decision.** `data-audit.jsonl` records only the terminal `executed`/`error` per write; it does not record the `pending` enqueue, the approve action, or whether trust was granted. Untrusted-approve, trust-approve, and silent-trusted writes are indistinguishable in the audit stream (all `executed`). Trust state is only in `data-trust.json`. An operator auditing "what was gated vs. auto-applied" cannot reconstruct it from the audit log alone.
+- **F24 — Add-spool form drops the weight fields (surface bug, not platform).** The add form's FULL WEIGHT / REMAINING defaults (1000/1000) did not carry into the insert op — the dialog and DB both showed `remaining_g:0, total_weight_g:0` for both spools (hence cards read "0 g of 0 g / No full weight set"). Update-weight works (set 750 fine). This is a bug in the built surface's insert value assembly, surfaced only because the write loop now actually runs. (The trust/gate mechanics under test are unaffected.)
+- **F25 — Surface HTML served 200 to an unauthenticated curl.** This run, `GET /surfaces/filament-spools/` returned the full HTML (with the embedded surface token) without any identity header — contrast the build turn where an unauthenticated curl 403'd. Worth confirming whether the surface-HTML identity guard is consistently enforced; the injected token is only as private as that HTML route. (The DATA control plane `/data/pending` correctly stayed 403 without the shell header — Probe 5.)
+- **F26 (client layout nit) — add-spool form modal submit button sits at the window's bottom fold.** The add-spool *form* modal (not the ConfirmationDialog) rendered its Cancel/Save row flush at the bottom edge of the client window; the Save button was only clickable after nudging the window up. The ConfirmationDialog itself was well-centered. Minor; the taller add form overflows the default window height.
+
+Confirmed-working (not defects): ConfirmationDialog DATA branch (first live render, correct source+surface+op JSON+trust checkbox); untrusted-approve → execute; trust-approve → execute + persist; trusted → silent execute; self-approve guard (403/200); identifier whitelist (injection blocked, audited as error); full write audit trail.
+
 ## Phase 4 — ground-truth verification
 ## Outcome
