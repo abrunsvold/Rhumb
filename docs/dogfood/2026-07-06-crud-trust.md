@@ -174,12 +174,73 @@ Write-back loop verified end-to-end LIVE for the first time: **enqueue (202) →
 New findings from the write session (F22+):
 
 - **F22 — Trust is per-(source,surface), not per-op-kind (coarseness, by design but sharp-edged).** Approving a single insert with "Trust this surface" checked blesses ALL subsequent writes from that surface — including DELETE (Probe 4 executed a delete with no gate). The operator who trusts a surface after seeing an *insert* dialog has implicitly authorized *deletes* they never saw. This is the documented coarse trust model; logged as the confirmed live shape. Mitigation ideas for later: show op-kinds covered at trust time, or gate destructive ops (delete/truncate) separately even for trusted surfaces.
-- **F23 — Audit log omits the gate/trust decision.** `data-audit.jsonl` records only the terminal `executed`/`error` per write; it does not record the `pending` enqueue, the approve action, or whether trust was granted. Untrusted-approve, trust-approve, and silent-trusted writes are indistinguishable in the audit stream (all `executed`). Trust state is only in `data-trust.json`. An operator auditing "what was gated vs. auto-applied" cannot reconstruct it from the audit log alone.
+- **F23 — ELEVATED TO IMPORTANT (Phase 4 correction). Audit log cannot distinguish approval-gated writes from trust-bypassed writes.** `data-audit.jsonl` records only the terminal `executed`/`error` per write; it does not record the `pending` enqueue, the approve action, or whether trust was granted. Ground-truth confirms both the untrusted-then-approved insert (Spool One) and the post-trust ungated DELETE (id:3) record the identical `decision:"executed"` shape — nothing in the audit line tells an operator, after the fact, whether a human looked at and approved that specific write or whether it auto-executed because the surface was trusted. Given audit-trail trustworthiness was day-2's headline finding, an audit stream that can't answer "was this write gated by a human or not" is not a minor observability nit — it undermines the audit log's core purpose (accountability for writes). **Severity: Important. Action: add a field to each audit line distinguishing `executed-via-approval` / `executed-via-trust` / `denied` (or equivalent), so `decision:"executed"` is never ambiguous about authorization path.**
 - **F24 — Add-spool form drops the weight fields (surface bug, not platform).** The add form's FULL WEIGHT / REMAINING defaults (1000/1000) did not carry into the insert op — the dialog and DB both showed `remaining_g:0, total_weight_g:0` for both spools (hence cards read "0 g of 0 g / No full weight set"). Update-weight works (set 750 fine). This is a bug in the built surface's insert value assembly, surfaced only because the write loop now actually runs. (The trust/gate mechanics under test are unaffected.)
-- **F25 — Surface HTML served 200 to an unauthenticated curl.** This run, `GET /surfaces/filament-spools/` returned the full HTML (with the embedded surface token) without any identity header — contrast the build turn where an unauthenticated curl 403'd. Worth confirming whether the surface-HTML identity guard is consistently enforced; the injected token is only as private as that HTML route. (The DATA control plane `/data/pending` correctly stayed 403 without the shell header — Probe 5.)
+- **F25 — RESOLVED / not a finding (corrected in Phase 4).** Originally logged as "surface HTML served 200 to an unauthenticated curl." Ground-truth probe (Phase 4, controller-run, box read-only): raw loopback `http://127.0.0.1:8788/surfaces/filament-spools/` → **403**; `/.well-known/rhumb.json` loopback → **200** (intentionally open, as designed). The surface route IS correctly identity-gated at loopback. The 200 observed during the write session was **authorized access through tailscale-serve** (the identity-bearing path an allowlisted browser actually uses), not an unauthenticated hole — the earlier framing conflated "reached via serve with identity" with "reached with no identity." **Withdrawn as a finding; no action needed.**
 - **F26 (client layout nit) — add-spool form modal submit button sits at the window's bottom fold.** The add-spool *form* modal (not the ConfirmationDialog) rendered its Cancel/Save row flush at the bottom edge of the client window; the Save button was only clickable after nudging the window up. The ConfirmationDialog itself was well-centered. Minor; the taller add form overflows the default window height.
 
 Confirmed-working (not defects): ConfirmationDialog DATA branch (first live render, correct source+surface+op JSON+trust checkbox); untrusted-approve → execute; trust-approve → execute + persist; trusted → silent execute; self-approve guard (403/200); identifier whitelist (injection blocked, audited as error); full write audit trail.
 
 ## Phase 4 — ground-truth verification
+
+**Method:** Controller-run, box read-only (SELECT / cat / ls only, no writes). Evidence below was captured first-hand by the controller against the live box and pasted in verbatim; this session (D5) applied the two corrections it established and formalized the per-criterion verdict.
+
+### Ground-truth evidence (controller-confirmed)
+
+**data-trust.json** (final state):
+```json
+[{"source":"printers","surfaceId":"filament-spools"}]
+```
+Trust persisted for the `(printers, filament-spools)` pair — matches Rung 2 of the Phase-3 trust ladder.
+
+**data-audit.jsonl** tail (write decisions, in order):
+1. insert Spool One (`filament_spools`) → `decision:"executed", rowCount:1` — the untrusted-then-approved write.
+2. insert Spool Two → `decision:"executed"` — the trust-approved write.
+3. update id:2 `remaining_g:750` → `decision:"executed"` — the trusted silent update.
+4. **delete id:3 → `decision:"executed", rowCount:1`** — the post-trust DELETE, UNGATED (coarseness, C4 headline).
+5. insert into `"bad name; drop table x"` → `decision:"error", "invalid identifier: bad name; drop table x"` — whitelist held, no SQL reached the DB.
+
+All five lines match the Phase-3 session log exactly (5 writes attempted, 5 audit lines, 0 at baseline).
+
+**F25 probe (surface auth, corrected):**
+- Raw loopback `http://127.0.0.1:8788/surfaces/filament-spools/` → **403**.
+- `/.well-known/rhumb.json` loopback → **200** (intentionally open, by design).
+- Conclusion: the surface is correctly identity-gated. The 200 seen in the Phase-3 write session was authorized access via tailscale-serve (identity-bearing path), not an unauthenticated hole. See F25 correction above (RESOLVED / withdrawn).
+
+### Per-criterion verdicts
+
+**C1 — Provisioning (reframed): PASS (as observation, not defect).**
+No new source was provisioned this run — the agent reused the existing `printers` read-write source and co-mingled the new `filament_spools` table into the printer-tracker's DB (confirmed via Phase-2 log: "printers data source is already read-write" → no `provision_database` call; `data-sources.json` shows a single source, id `printers`, unchanged from the D1 baseline). The `filament_spools` table (material, color, remaining_g, color_hex, brand, name, notes, total_weight_g columns — per the insert op JSON in Phase 3 and the D4 report's discover-first results) exists in the `printers` DB; the `filament-spools` surface is registered (confirmed live in the dashboard-host registry: 3 entries incl. `filament-spools`, created `2026-07-06T12:40:00Z`, Phase-2 post-turn check).
+**Observation / finding candidate (isolation, blast-radius):** the agent chose reuse-over-provision. A new tool's tables (and its DDL, applied via the agent's own ungated `db/apply.js`) now live inside the printer-tracker's database rather than an isolated store — a blast-radius/isolation concern for future multi-tool growth, distinct from the provisioning+infra-gate path (which was NOT exercised this run since no `provision_database` call occurred). Logged as an observation, not a pass/fail defect.
+
+**C2 — Gated write executed: PASS.**
+The first untrusted-approved insert (Spool One) landed a real row: `filament_spools`/`spool_inventory` id:2, created `2026-07-06T16:47:09.925Z`, confirmed via direct DB read in Phase 3. Matching audit line: `decision:"executed", rowCount:1` (audit line 1, ground-truth tail above). Baseline audit count was 0 (D1); post-session count is 5 — this is the first of those 5.
+
+**C3 — Trust persisted + honored: PASS.**
+`data-trust.json` ground-truth = `[{"source":"printers","surfaceId":"filament-spools"}]`, written only after Rung 2 (trust-approve), absent before. The Rung 3 update (id:2 → `remaining_g:750`) executed with **no ConfirmationDialog** and **no pending entry** — Phase-3 log confirms "pending stayed `[]`"; audit line 3 shows `executed` with no corresponding queue entry ever appearing. Trust was persisted once and then silently honored for the next write, as designed.
+
+**C4 — Coarseness: PASS (finding confirmed — this is the headline).**
+Post-trust DELETE (`where:{id:3}`, Spool Two) skipped the gate entirely: `decision:"executed", rowCount:1` (audit line 4), no re-prompt, pending stayed `[]`. Trust is scoped to `(source, surface)`, not to op-kind — the most destructive operation (DELETE) executes exactly as freely as insert/update once a surface is trusted. This is the run's central finding (F22, carried).
+
+**C5 — Guards held: PASS.**
+- Self-approve guard: `GET /data/pending` with no header → 403; with `Sec-Rhumb-Control: 1` → 200. A surface's own page JS cannot set that header, so it cannot read/bless its own pending write.
+- Identifier whitelist: `POST .../write {table:"bad name; drop table x"}` → error, audit line 5 `decision:"error", "invalid identifier: bad name; drop table x"`. The `ident()` whitelist threw before SQL assembly — no malformed/injection SQL reached Postgres. (Ground-truth confirms the malformed table name is absent from the DB; no new relation by that name exists — consistent with the whitelist rejecting it pre-SQL.)
+
+**C6 — Audit integrity: PASS with a documented gap (F23, elevated).**
+Complete: every one of the 5 session writes (2 inserts, 1 update, 1 delete, 1 malformed insert) has exactly one matching `data-audit.jsonl` line (executed ×4, error ×1) — count matches, baseline 0 → 5, no missing or orphaned lines.
+Insufficient: the audit line shape for `decision:"executed"` is identical whether the write was a human-approved-untrusted write (audit line 1), a human-approved-with-trust write (audit line 2), or a fully trust-bypassed write with no human in the loop at all (audit line 4, the DELETE). Nothing in the audit record distinguishes "a human gated this" from "trust auto-executed this." **This is F23, elevated to Important in this Phase-4 pass** (see Findings section correction above) — given audit trustworthiness was day-2's smoking-gun finding, an audit log that can't answer "was this gated?" is a real gap, not a nit.
+
+**C7 — F17 re-observed: PASS (carried finding, reproduced).**
+Per the Phase-2 (build turn) log: `CREATE TABLE` happened via the agent's own ungated path — a dedicated schema file applied through `db/apply.js` (reads `DATABASE_URL` from env, invoked via the agent's own Bash), **not** a gated `provision_database`/infra-queue path. The write-trust gate (ConfirmationDialog, 202-pending) applies only to runtime `/data/*/write` calls from a registered surface — schema/DDL creation is entirely outside that gate. F17 reproduced exactly as carried from D3/D4: DDL is ungated; the only operator-visible gate is the first surface write.
+
+### Corrections applied this phase
+1. **F25 withdrawn** — surface route is correctly identity-gated (loopback 403; well-known 200 by design); the earlier 200 was authorized serve-path access, not a hole. Marked RESOLVED in the Findings section above.
+2. **F23 elevated to Important** — audit log completeness (C6) is real, but the log cannot distinguish executed-via-approval from executed-via-trust from denied. Action item recorded: add a field to `data-audit.jsonl` distinguishing authorization path.
+
 ## Outcome
+
+**Overall verdict: PASS.**
+
+The write-back / trust-gate loop works end-to-end, live, for real: enqueue → ConfirmationDialog → approve → execute → audit, across untrusted-approve, trust-approve, and silent-trusted paths, backed by matching DB state and audit lines at every step (C2, C3, C6). The trust model's coarseness is not just asserted but reproduced with a live, audited DELETE that bypassed the gate post-trust (C4) — this is the run's headline finding and it is now documented with hard evidence rather than inference. Guards held under adversarial probing: no self-approve, no SQL injection via malformed identifiers (C5). The one reused-vs-provisioned architectural choice (C1) and the DDL-ungated path (C7) are carried observations/findings, not loop failures. The audit-integrity gap (C6/F23) is real and has been elevated to Important with a concrete remediation (add an authorization-path field) rather than left as a passive observability nit. F25 is corrected and withdrawn — it was a misreading of authorized serve-path access as an unauthenticated hole, not an actual security gap.
+
+**Plainly:** the write-back loop worked live end-to-end this run, and the trust coarseness (DELETE bypassing the gate once trusted) is now documented with pasted, controller-verified evidence.
