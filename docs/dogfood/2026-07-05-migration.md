@@ -121,4 +121,110 @@ Provisional findings from Phase 2 (severity is the flight-recorder's read; confi
 - **Client behavior: clean.** No F8 send/approve wedge, no F9 jump-pill need, no F7 dead AskUserQuestion, no SSE freeze. Live telemetry stayed green throughout including across the redeploy.
 
 ## Phase 3 — ground-truth verification
+
+_Operator: M5 ground-truth pass via direct SSH to `root@micropx-pve.tail731306.ts.net` (trusted box), read-only only (SELECT/information_schema, cat, ls, systemctl status, journalctl, pct list/config/exec read-only). No mutations. All commands and raw output below are pasted verbatim (creds redacted)._
+
+### C1 — CLEAN CUTOVER (headline, F11/F18) — **PASS**
+
+`pct list` (full, unfiltered):
+
+```
+VMID       Status     Lock         Name
+101        running                 molding-harvester
+102        running                 rhumbr-test
+103        stopped                 erpnext
+105        running                 rhumb-printer-poller
+```
+
+**Exactly one** `rhumb-printer-poller` container exists: **105**. Baseline **106 is absent** from `pct list` — not stopped, not present at all, no orphan.
+
+`services.json` registry:
+```json
+{
+  "id": "printer-poller", "containerId": 105, "host": "192.168.1.34", "port": 8080,
+  "status": "healthy", "deployId": "20260706020334-f4ecfe",
+  "updatedAt": "2026-07-06T02:04:16.033Z"
+}
+```
+
+Three-way provenance (all match):
+- Registry `deployId`: `20260706020334-f4ecfe`
+- Container `.rhumb-deploy.json` (`pct exec 105 -- cat /opt/rhumb/printer-poller/.rhumb-deploy.json`): `{"deployId":"20260706020334-f4ecfe","deployedAt":"2026-07-06T02:04:09.546Z"}`
+- Unit env (`pct exec 105 -- systemctl cat rhumb-printer-poller | grep DEPLOY_ID`): `Environment=RHUMB_DEPLOY_ID=20260706020334-f4ecfe`
+
+`systemctl show -p NRestarts rhumb-printer-poller` → **`NRestarts=0`** (not a crash loop; day-2 was ~500). `systemctl status` shows `Active: active (running) since 2026-07-06 02:04:10 UTC`, PID stable, log lines `printer-poller starting… health server on :8080`, no restart churn. Container IP (`192.168.1.34`, confirmed via `pct exec 105 -- ip -4 addr show eth0`) matches the registry `host` field exactly.
+
+**F18 resolved:** the agent's self-reported "105" was correct and is **not** a stale/recycled reference to the pre-existing ontology drift — it is the genuine new blue-green target, cryptographically tied to the new deployId on all three legs (registry/container-file/unit-env). CTID 106 was retired cleanly (blue-green cut over, old container torn down, not left orphaned/crash-looping). This is the opposite of the day-2 shape: day-2 left a second, unregistered container running; here there is exactly one, and it is the one the registry points at.
+
+### C2 — migration landed — **PASS**
+
+Schema query (read-only Node script using the poller's own `pg` client library, no mutation, run against `information_schema.columns`) shows on `jobs`-family tables:
+- `print_jobs`: new `max_nozzle_temp` (double precision), `max_bed_temp` (double precision) — added to the original 12 columns, nothing removed/changed.
+- `recent_jobs`: same two new columns added, nothing else changed.
+- `printer_status`: new `active_max_nozzle_temp`, `active_max_bed_temp` (double precision).
+
+Live code check (`pct exec 105 -- grep -iE "max|GREATEST|Math.max" /opt/rhumb/printer-poller/index.js`) confirms running-max logic is deployed on container 105, e.g.:
+```
+max_nozzle_temp = GREATEST(COALESCE($8, max_nozzle_temp), COALESCE(max_nozzle_temp, $8)),
+max_bed_temp = GREATEST(COALESCE($9, max_bed_temp), COALESCE(max_bed_temp, $9)),
+```
+present in both the insert-on-open and update-on-close code paths — matches the M4 transcript's described `GREATEST()` peak-tracking pattern, and it's running on the *live* container, not just checked into source.
+
+### C3 — data preserved — **PASS**
+
+All 6 baseline tables present, none truncated:
+
+| table | baseline rows | now | delta |
+|---|---|---|---|
+| `print_jobs` | 0 | 0 | unchanged |
+| `printer_status` | 2 | 2 | unchanged |
+| `printers` | 2 | 2 | unchanged |
+| `recent_jobs` | 0 | 0 | unchanged |
+| `recent_telemetry` | 960 | 960 | unchanged |
+| `telemetry_samples` | 47248 | **47494** | **+246, climbing** |
+
+`telemetry_samples` ≥ baseline and actively growing (poller has been sampling since the 02:04 UTC redeploy) — confirms continuous operation post-cutover, not a fresh/empty replacement DB.
+
+### C4 — F16 auto-sync — **PASS (drift corrected)**
+
+Pre-turn baseline (Phase 1): `service-printer-poller.md` → `host: 192.168.1.238`, relationship `runs-on [[container-105]]` — **already stale** before this turn (ground truth was 106/192.168.1.83 at the time).
+
+Post-turn read:
+```yaml
+host: 192.168.1.34
+port: 8080
+status: healthy
+updated: 2026-07-06T02:04:17.589Z
+```
+`runs-on [[container-105]]`
+
+The node now points at **192.168.1.34** — the actual live container's IP (confirmed identical to `pct exec 105 -- ip addr` and to `services.json.host`) — and `updated` timestamp (`02:04:17.589Z`) lands 8 seconds after the deploy's `.rhumb-deploy.json` timestamp (`02:04:09.546Z`), i.e. it moved as part of this redeploy's `onMutate` auto-sync, not a manual edit. The relationship label `container-105` was already correct by coincidence (pre-existing stale node happened to name the same CTID the real cutover landed on), but the **host/IP field — the part that was actually wrong — got corrected automatically**. F16 fired and fixed the drift; nothing manual was run.
+
+### C5 — F7/F8/F9 (restated from M4 log, no new box work) — **PASS (all three)**
+
+- **F7 (dead AskUserQuestion):** N/A/PASS — agent never emitted one; proceeded autonomously start to finish (M4 log, no timestamp needed — absence confirmed across full transcript).
+- **F8 (send/approve wedge):** PASS — Send registered first-click at 21:57:16; Approve registered first-click and dismissed instantly at 22:03:37. No dropped clicks anywhere in the ~8 min turn.
+- **F9 (transcript follow/jump pill):** PASS — transcript auto-followed the live edge across dozens of tool calls, 21:57:56→22:05:13; pill never needed (minor cosmetic nuance at the very final message noted in M4, not a defect).
+
+### C6 — surface — **PASS**
+
+From this Mac, over the tailnet (real identity, not loopback):
+```
+$ curl -s -o /dev/null -w '%{http_code}\n' https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/
+200
+$ curl -s https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/ | grep -ci 'nozzle\|bed\|temp'
+30
+```
+Box loopback (`ssh … curl 127.0.0.1:8788/surfaces/printer-tracker/`) → `403` — this is the tailnet-identity gate from Phase 1 baseline, not breakage (baseline was also 403 on loopback; consistent, expected).
+
+Body inspection confirms the surface renders: each printer card shows a `peak {temp}°C` line under nozzle and bed readings (`peakLine(p.active_max_nozzle_temp)`, `peakLine(p.active_max_bed_temp)`), and the Recent Jobs table has dedicated `Peak Nozzle` / `Peak Bed` columns (`<th>Peak Nozzle</th><th>Peak Bed</th>`) — the new feature is live and visually present on the dashboard, not just in the DB.
+
+### Overall verdict: **PASS**
+
+All 6 criteria pass with pasted, cross-checked evidence. **C1 (headline) is clean**: exactly one poller container (105), registry/container-file/unit-env deployId all agree, NRestarts=0, old container 106 fully absent (not orphaned, not crash-looping) — the redeploy cut over correctly. F18 is resolved: "105" was the genuine new target, not a misreport and not the day-2 stale ontology reference (that was IP-only drift, now corrected). C4 shows F16's auto-sync actively fixed the pre-existing ontology staleness during this turn, without any manual `ontology_sync` call. C2/C3 confirm the feature is real (schema + live code + rendered surface) and no data was lost or truncated. C5 reconfirms clean client behavior from M4. C6 confirms the surface is reachable and shows the new peak-temp feature end to end.
+
+**Plumbing-at-idle caveat:** printers were idle (Standby, no active job) throughout Phase 2/3, so `active_max_nozzle_temp`/`active_max_bed_temp` on the currently-live `printer_status` rows may read `NULL`/0 until a real print job runs — this is expected idle-state behavior, not a defect, and does not affect any PASS verdict above (schema, code, and historical `telemetry_samples` growth are all independently confirmed).
+
+**Day-2 BLOCKER status: STAYED FIXED.** The day-2 failure shape (redeploy claims success but leaves an orphaned/unregistered second container alive) did **not** reproduce. `pct list` shows exactly one poller container, and it is the one the registry, the container's own deploy manifest, and the running unit's environment all agree on. The fix stack (F11/F12/F16 territory) holds under this real-world validation turn.
+
 ## Outcome
