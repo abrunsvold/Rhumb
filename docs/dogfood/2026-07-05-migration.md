@@ -40,11 +40,9 @@ host: 192.168.1.238
 port: 8080
 status: healthy
 ```
-```
 Relationships:
 - runs-on [[container-105]]
 - created-by [[agent]]
-```
 
 **Drift already present before any migration turn:** the ontology service node references `container-105` / host `192.168.1.238`, while `services.json` (ground truth) has the poller on **container 106** / host `192.168.1.83`. `ontology/system/container-105.md` exists; there is no `container-106.md` node. This is a pre-existing staleness, not something Phase 2 will introduce — it's the exact shape of drift F16 is meant to catch, so it's the diff baseline: after the coming redeploy turn, verification should check whether the ontology gets corrected to reference 106, or whether it remains stuck on the now-doubly-stale 105.
 
@@ -113,12 +111,26 @@ _All timestamps EDT (America/New_York). Operator: M4 flight-recorder via Tauri c
 
 ## Findings
 
-Provisional findings from Phase 2 (severity is the flight-recorder's read; confirm/reclassify in M5):
+F-numbering continues from F16 (Phase 0/1). Severities are the finalized post-verification read (M5 ground truth reconciled the provisional M4 flags).
 
-- **F17 — DB schema/views migration bypasses the client approval gate (informational / low).** The `ALTER TABLE … ADD COLUMN` + view-recreate migration ran via the agent's own `apply.js` over plain Bash and never surfaced a pending-approval modal in the client. Only the `redeploy_service` call was operator-gated. On this turn the migration was non-destructive (IF NOT EXISTS), so no data-loss exposure — but a *destructive* schema change would likewise not be operator-gated under the current tool routing. Policy question for M5: should DB apply route through the infra gate the way redeploy does?
-- **F18 — agent reports poller "healthy on container 105" but baseline was 106 (needs ground-truth; sev TBD).** The redeploy self-report names container **105**; M2 baseline had the poller on **106** @ 192.168.1.83, and the ontology node (F16) is already stale on 105. Three possibilities (agent misreport / new blue-green target id / real cutover to 105) can't be told apart from the client. If the live poller is genuinely on a *different* container than baseline with 106 left behind, that would be a redeploy-cutover regression of the exact day-2 shape — so this is the #1 item for M5 to resolve. Flagged, not concluded.
-- **No F-number: primary fix VALIDATED (from client vantage).** `redeploy_service` was called correctly on the existing id, the modal gated it, approval executed cleanly, the agent reported a healthy blue-green cutover, and the pending queue drained to empty with no orphan warning. The day-2 BLOCKER symptom (half-completed redeploy + orphaned container + stuck queue) did **not** reproduce in the client-observable surface. Ground-truth container/DB/telemetry confirmation is M5's job.
-- **Client behavior: clean.** No F8 send/approve wedge, no F9 jump-pill need, no F7 dead AskUserQuestion, no SSE freeze. Live telemetry stayed green throughout including across the redeploy.
+### F17 — DB schema/DDL migration bypasses the client approval gate *(low / process)*
+The `ALTER TABLE … ADD COLUMN IF NOT EXISTS` + view-recreate migration ran through the build agent's **own Bash + a throwaway `apply.js`** — it never surfaced a pending-approval modal in the client. Infra actions (`spawn_service` / `redeploy_service` / `destroy`) **are** gated; DDL/data-definition changes are **not**. On this turn the migration was non-destructive (`IF NOT EXISTS`, additive columns), so there was no data-loss exposure — but a *destructive* schema change (`DROP COLUMN`, `TRUNCATE`, an incompatible type change) would likewise run agent-autonomous under the current tool routing.
+**Action:** decide the policy explicitly — either route schema/DDL apply through the same infra approval gate as redeploy/spawn, **or** document that DDL is intentionally agent-autonomous (and, if so, why the risk is acceptable). Directly relevant to the upcoming write-back / CRUD trust-gate dogfood, where the gating question moves from infra to data.
+
+### F18 — agent reported poller on container 105 vs. baseline 106 *(RESOLVED — not a defect)*
+The redeploy self-report named container **105**, while the M2 baseline had the poller on **106** @ `192.168.1.83`, and the pre-existing ontology drift also named 105 — three ways for "105" to be wrong. Ground truth (C1) resolved it: **105 is the genuine new blue-green target.** Its rootfs was born at `02:03:35 UTC`, one second *after* the deployId (`02:03:34 UTC`), so it was freshly provisioned *during this redeploy* — not silently adopted. CTID **105 is a recycled id** (Proxmox reused a freed low CTID; 106 and earlier containers had been destroyed), but the container now occupying it is brand new, proven by rootfs birth-time (independent of the deployId match on registry/container-file/unit-env). Baseline 106 is fully absent from `pct list` — retired cleanly, not orphaned. This is the **opposite** of the day-2 shape.
+**Action:** none required (resolved). Kept on the record because the "wrong container id" alarm is exactly the day-2 tell — the creation-time evidence is what distinguishes a recycled-id cutover from an orphan-adoption regression, and future runs should reach for the same rootfs-birth check.
+
+### F19 — F14 "loud discovery" does not render live in the GUI process *(MEDIUM / client)*
+PR #28's F14 fix makes discovery failures loud by surfacing a per-peer diagnostic report instead of a blank list — **verified in unit tests, but it did NOT render live.** In the packaged/dev Tauri GUI, clicking **Rescan** produced the **bare legacy empty message**, not the diagnostic report (reproduced). Localized to `discover_hosts()` returning empty *inside the Tauri process* — most likely `find_tailscale_bin` failing to resolve the `tailscale` binary under the GUI's restricted `PATH`, so the discovery command bails before the diagnostic-render path the unit test exercises. The tested render is correct; the gap is **upstream**, in the Rust discovery command as it runs in the GUI process. Manual connect works throughout (the reliable path is preserved), so this is a qualification on the F14 claim, not a regression — but "make the failure loud" is **not achieved live**.
+**Action:** fix `discover_hosts()` to work in the GUI process — resolve the `tailscale` binary robustly under the GUI's `PATH` (absolute-path / `find_tailscale_bin` hardening) — **or** surface the empty-report diagnostic even on the `find_tailscale_bin = None` path so the loud report renders regardless of binary resolution. Either lands the F14 intent live.
+
+### Positive findings — what the fixes proved
+- **F11 redeploy — clean cutover proven live (the headline).** `redeploy_service` (not `spawn_service`) was called on the existing id, gated, approved, and cut over to a single healthy container with `NRestarts=0` and 106 fully gone. Three-leg deployId provenance + rootfs birth-time confirm it. The day-2 orphaned-container BLOCKER **did not reproduce**.
+- **F16 auto-sync — corrected real drift automatically.** The ontology `service-printer-poller` node was stale on `host: 192.168.1.238` before the turn; the `onMutate` hook fired on redeploy success and auto-corrected it to the live `192.168.1.34` — with **zero** `ontology_sync` calls anywhere in the transcript. F16 caught and fixed exactly the drift shape it was built for.
+- **F8 / F9 held live.** No send/approve wedge (both first-click), transcript auto-followed the live edge across dozens of tool calls, jump-pill never needed.
+- **F7 — N/A.** The agent never emitted an `AskUserQuestion`; it proceeded autonomously explore→implement→migrate→redeploy, so the dead-bounce path wasn't triggered.
+- **On-ramp friction way down.** Fix-stack deploy took ~2 min vs. day-2's ~13 min — still a manual multi-step redeploy, so **F15 (deploy.sh on-ramp) stands** as the remaining on-ramp item.
 
 ## Phase 3 — ground-truth verification
 
@@ -246,4 +258,23 @@ All 6 criteria pass with pasted, cross-checked evidence. **C1 (headline) is clea
 
 **Day-2 BLOCKER status: STAYED FIXED.** The day-2 failure shape (redeploy claims success but leaves an orphaned/unregistered second container alive) did **not** reproduce. `pct list` shows exactly one poller container, and it is the one the registry, the container's own deploy manifest, and the running unit's environment all agree on. The fix stack (F11/F12/F16 territory) holds under this real-world validation turn.
 
-## Outcome
+## Outcome — PASS (day-2 BLOCKER stayed fixed, proven live)
+
+**The run PASSED all 6 criteria.** One gated turn added per-job max nozzle/bed temps, forcing a live `ALTER` + poller redeploy through `redeploy_service` — and the day-2 orphaned-container BLOCKER **stayed fixed, proven with creation-time evidence** (container 105's rootfs born one second after the deployId; baseline 106 gone from `pct list`, not orphaned). The full loop composed: build → migrate → redeploy → auto-sync ontology → render on the surface, hands-off after a single approval. Zero orphans, `NRestarts=0`, no data loss (`telemetry_samples` climbing, +246), pending queue drained empty.
+
+### Merge verdict (per-PR — the point of this run)
+
+- **PR #25 (F11/F12 redeploy) — VALIDATED LIVE, MERGE.** The redeploy path did exactly what it was built to do against a real change: `redeploy_service` cut over cleanly to a single healthy container, old container retired, no orphan, no crash-loop. This is the headline fix and it held under ground-truth scrutiny (three-leg deployId + independent rootfs birth-time). Ready to merge.
+- **PR #26 (platform sweep, incl. F16) — VALIDATED LIVE, MERGE.** F16 ontology auto-sync corrected pre-existing real drift (`192.168.1.238` → `192.168.1.34`) automatically via `onMutate`, with no manual sync call in the transcript. The sweep did its job against a live mutation. Ready to merge.
+- **PR #28 (client batch) — PARTIAL: MERGE WITH F19 AS A KNOWN FOLLOW-UP.** F8/F9 held live (no send/approve wedge, transcript followed) — those are validated. **But F14's "loud discovery" does not render live (F19):** the diagnostic report is unit-tested but the GUI process still shows the bare legacy empty message, because `discover_hosts()` returns empty under the GUI's restricted `PATH`. This is a caveat, not a regression — manual connect (the reliable path) works throughout.
+  - **Recommendation:** land #28 **with F19 tracked as an explicit known-issue follow-up.** Its validated parts (F8/F9) are real wins and manual connect is unaffected, so there's no reason to hold the batch — but the PR's F14 claim must be **qualified in the merge notes** ("loud-discovery render verified in unit tests; not yet working in the GUI process — see F19") so the caveat isn't lost. If a reviewer wants the F14 claim clean before it lands, fix F19 first (it's a bounded `find_tailscale_bin` / `PATH` fix); otherwise merge now and fast-follow F19.
+
+### Ranked roadmap (from this run)
+
+1. **F19 (MEDIUM, client)** — make F14 loud-discovery actually render in the GUI process (`discover_hosts()` PATH / `tailscale`-bin resolution, or surface the empty-report diagnostic on the `find_tailscale_bin = None` path). Gates the "clean" #28 F14 claim.
+2. **F17 (low, process)** — decide and document the DDL gating policy: route schema/DDL apply through the infra approval gate, or explicitly document DDL as agent-autonomous. Feeds directly into the next dogfood (write-back / CRUD trust gate).
+3. **F15 (standing, on-ramp)** — the `deploy.sh` on-ramp: fix-stack deploy is down to ~2 min but still a manual multi-step redeploy. Turn it into one documented/scripted step.
+4. **F18 — resolved, no action.** Retained as a methodology note: the rootfs-birth-time check is the reliable way to tell a recycled-id cutover from an orphan-adoption regression; reuse it in future redeploy validations.
+
+### Operator cleanup note (record only — do NOT perform)
+The pre-run backup and any prior orphaned containers from earlier runs are deletable after acceptance. This turn left **no** orphan: `pct list` shows exactly one poller container (105) and it is the registered, running, freshly-created target — baseline 106 was torn down cleanly by the blue-green cutover, so there is nothing to `pct stop`/`destroy` from this run.
