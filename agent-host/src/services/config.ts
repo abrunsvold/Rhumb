@@ -25,5 +25,6 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv): ServiceConfig | undef
     // Fresh LXCs otherwise inherit a PVE-injected resolver that can be unusable
     // (e.g. Tailscale MagicDNS with no tailscaled in the container), hanging apt.
     nameserver: env.RHUMB_LXC_NAMESERVER?.trim() || "1.1.1.1",
+    healthGateMs: Number.parseInt(env.RHUMB_HEALTH_GATE_MS ?? "", 10) || 90_000,
   };
 }

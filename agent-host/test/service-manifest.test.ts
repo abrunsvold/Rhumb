@@ -50,6 +50,23 @@ describe("validateManifest", () => {
     expect(m).not.toHaveProperty("runtime");
     expect(m).not.toHaveProperty("dataSources");
   });
+
+  it("accepts healthPath starting with /", () => {
+    const m = validateManifest({ id: "a", name: "a", start: "run", port: 3000, healthPath: "/health" });
+    expect(m.healthPath).toBe("/health");
+  });
+
+  it("omits healthPath when absent", () => {
+    const m = validateManifest({ id: "a", name: "a", start: "run", port: 3000 });
+    expect(m.healthPath).toBeUndefined();
+  });
+
+  it("rejects healthPath not starting with / or non-string", () => {
+    expect(() => validateManifest({ id: "a", name: "a", start: "run", port: 3000, healthPath: "health" }))
+      .toThrow('manifest.healthPath must be a string starting with "/"');
+    expect(() => validateManifest({ id: "a", name: "a", start: "run", port: 3000, healthPath: 7 }))
+      .toThrow('manifest.healthPath must be a string starting with "/"');
+  });
 });
 
 describe("readManifest", () => {

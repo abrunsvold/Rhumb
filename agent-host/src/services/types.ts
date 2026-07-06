@@ -8,6 +8,7 @@ export interface ServiceConfig {
   servicesPath: string;             // <workspace>/services.json
   workspace: string;                // <workspace> (service dirs live at <workspace>/services/<id>)
   nameserver: string;               // RHUMB_LXC_NAMESERVER; PVE's injected resolver can be unusable in-container
+  healthGateMs: number;             // RHUMB_HEALTH_GATE_MS; deadline for the post-deploy health gate
 }
 
 export interface LxcSpec {
@@ -44,6 +45,7 @@ export interface ServiceManifest {
   name: string;
   start: string;
   port: number;
+  healthPath?: string;                     // HTTP path for health checks (e.g., /health)
   runtime?: "node" | "python" | "none";   // runtime to install in the container before start
   dataSources?: string[];                  // ids of data sources whose connection string is injected as env
   resources?: { cores?: number; memory?: number };
@@ -52,7 +54,8 @@ export interface ServiceManifest {
 export interface ServiceDeployer {
   // extraEnv: additional Environment= entries for the systemd unit (e.g. injected
   // data-source connection strings). Resolved by the caller so the deployer stays pure.
-  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest, extraEnv?: Record<string, string>): Promise<void>;
+  // deployId: provenance stamp — written into the unit env and /opt/rhumb/<id>/.rhumb-deploy.json.
+  deploy(target: SshTarget, localDir: string, manifest: ServiceManifest, extraEnv: Record<string, string> | undefined, deployId: string): Promise<void>;
 }
 
 export interface ServiceEntry {
@@ -64,6 +67,6 @@ export interface ServiceEntry {
   basePath: string;                 // /services/<id>
   status: "healthy" | "unhealthy" | "starting";
   createdAt: string;
+  deployId?: string;                // provenance stamp; absent on pre-F12 entries
+  updatedAt?: string;               // set on redeploy cutover
 }
-
-export type GatedServiceTool = "spawn_service" | "stop_service" | "start_service" | "destroy_service";
