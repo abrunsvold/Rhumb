@@ -154,7 +154,17 @@ Three-way provenance (all match):
 
 `systemctl show -p NRestarts rhumb-printer-poller` → **`NRestarts=0`** (not a crash loop; day-2 was ~500). `systemctl status` shows `Active: active (running) since 2026-07-06 02:04:10 UTC`, PID stable, log lines `printer-poller starting… health server on :8080`, no restart churn. Container IP (`192.168.1.34`, confirmed via `pct exec 105 -- ip -4 addr show eth0`) matches the registry `host` field exactly.
 
-**F18 resolved:** the agent's self-reported "105" was correct and is **not** a stale/recycled reference to the pre-existing ontology drift — it is the genuine new blue-green target, cryptographically tied to the new deployId on all three legs (registry/container-file/unit-env). CTID 106 was retired cleanly (blue-green cut over, old container torn down, not left orphaned/crash-looping). This is the opposite of the day-2 shape: day-2 left a second, unregistered container running; here there is exactly one, and it is the one the registry points at.
+**Creation-time proof — container 105 is genuinely NEW, not adopted (refutes the day-2 orphan-adoption shape):**
+
+```
+# /etc/pve/lxc/105.conf mtime: 2026-07-05 22:03:36 EDT (= 02:03:36 UTC)
+# pct exec 105 -- stat /etc  → rootfs birth (%w): 2026-07-06 02:03:35 UTC
+# registry/container/unit deployId: 20260706020334-f4ecfe  (= 02:03:34 UTC)
+```
+
+Container 105's rootfs was **born at 02:03:35 UTC — one second after the deployId (02:03:34 UTC)** — so it was freshly provisioned *during this redeploy*, not silently adopted from a pre-existing container. CTID **105 is a recycled id** (Proxmox reused a freed low CTID after 106 and earlier containers were destroyed), but the container now occupying that id is brand new, proven by its rootfs birth-time landing inside this turn's window. This refutes the day-2 "silently-adopted orphan" hypothesis with independent **creation-time** evidence — orthogonal to the deployId match (birth-time comes from the filesystem, deployId from three config legs), so C1 no longer rests on the deployId string alone.
+
+**F18 resolved:** the agent's self-reported "105" was correct and is **not** a stale/recycled reference to the pre-existing ontology drift — it is the genuine new blue-green target, freshly created within the turn window and cryptographically tied to the new deployId on all three legs (registry/container-file/unit-env). CTID 106 was retired cleanly (blue-green cut over, old container torn down, not left orphaned/crash-looping). This is the opposite of the day-2 shape: day-2 left a second, unregistered container running; here there is exactly one, it was created *during* this redeploy, and it is the one the registry points at.
 
 ### C2 — migration landed — **PASS**
 
@@ -198,7 +208,16 @@ updated: 2026-07-06T02:04:17.589Z
 ```
 `runs-on [[container-105]]`
 
-The node now points at **192.168.1.34** — the actual live container's IP (confirmed identical to `pct exec 105 -- ip addr` and to `services.json.host`) — and `updated` timestamp (`02:04:17.589Z`) lands 8 seconds after the deploy's `.rhumb-deploy.json` timestamp (`02:04:09.546Z`), i.e. it moved as part of this redeploy's `onMutate` auto-sync, not a manual edit. The relationship label `container-105` was already correct by coincidence (pre-existing stale node happened to name the same CTID the real cutover landed on), but the **host/IP field — the part that was actually wrong — got corrected automatically**. F16 fired and fixed the drift; nothing manual was run.
+The node now points at **192.168.1.34** — the actual live container's IP (confirmed identical to `pct exec 105 -- ip addr` and to `services.json.host`) — and `updated` timestamp (`02:04:17.589Z`) lands 8 seconds after the deploy's `.rhumb-deploy.json` timestamp (`02:04:09.546Z`).
+
+**Proof the correction was AUTOMATIC (onMutate), not a manual `ontology_sync` call during the turn:**
+- A grep of the full Phase-2 turn log + M4 report for `ontology_sync` / `sync_ontology` returns **ZERO matches**. The agent's only infra tool call was the gated `redeploy_service`; its only other box action was the DB apply via Bash (F17). **No ontology-sync tool call appears anywhere in the transcript.**
+- The `onMutate` hook was confirmed **deployed** in `dist/infra/server.js` at M1 (runsheet Step 5: `onMutate` count = 1) — it fires `ontologyOps.sync()` on `redeploy_service` success.
+- Combining the two: with no manual sync call in the transcript *and* the onMutate hook present and firing on the redeploy, the correction came from the **automatic onMutate path**. The 8-second-after-deploy `updated` timestamp corroborates this rather than being the sole basis — the claim now rests on "no sync call in the transcript + onMutate deployed," not timestamp proximity alone.
+
+The relationship label `container-105` was already correct only by coincidence — the pre-existing stale node happened to name the same CTID that the recycled-id cutover landed on (see C1: 105 is a recycled id occupied by a brand-new container, proven by rootfs birth-time). The **host/IP field — the part that was actually wrong (`192.168.1.238`) — got corrected automatically to `192.168.1.34`**. F16 fired and fixed the drift; nothing manual was run.
+
+**On C1↔C4 circularity:** the earlier draft risked circularity (C1 and C4 each implicitly assuming 105 was "new"). C1 now stands on independent **creation-time** evidence (rootfs birth 02:03:35 UTC), so C4's "coincidental container-105 label" note is grounded, not assumed: the stale node's CTID happened to match the recycled id, while the IP was the real drift that onMutate auto-corrected.
 
 ### C5 — F7/F8/F9 (restated from M4 log, no new box work) — **PASS (all three)**
 
