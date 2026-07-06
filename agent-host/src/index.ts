@@ -6,6 +6,7 @@ import { join as joinPath, resolve as resolvePath } from "node:path";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { loadConfig, type Config } from "./config.js";
+import { RHUMB_PROMPT_APPEND } from "./prompt.js";
 import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
@@ -32,8 +33,36 @@ import type { Express } from "express";
 
 export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   const sessionExtraOptions: Record<string, unknown> = {};
+  sessionExtraOptions.disallowedTools = ["AskUserQuestion"];
+  sessionExtraOptions.systemPrompt = { type: "preset", preset: "claude_code", append: RHUMB_PROMPT_APPEND };
   const infra = loadInfraConfig(process.env);
   let infraPending: PendingActions | undefined;
+
+  const onto = loadOntologyConfig(process.env);
+  const readJson = <T>(p: string, fallback: T): T => {
+    try { return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as T) : fallback; } catch { return fallback; }
+  };
+  const readJsonl = <T>(p: string): T[] => {
+    try {
+      if (!existsSync(p)) return [];
+      return readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
+    } catch { return []; }
+  };
+  const ontologyOps = createOntologyOps({
+    systemDir: onto.systemDir,
+    domainDir: onto.domainDir,
+    now: () => new Date().toISOString(),
+    sync: () =>
+      syncSystem({
+        config: { systemDir: onto.systemDir },
+        now: () => new Date().toISOString(),
+        readDataSources: () => readJson<Array<{ id: string; type: string; mode: string }>>(onto.dataSourcesPath, []),
+        readServices: () => readJson<Array<{ id: string; name: string; containerId: number; host: string; port: number; status: string }>>(onto.servicesPath, []),
+        readSurfaceIds: () => (existsSync(onto.surfacesDir) ? readdirSync(onto.surfacesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : []),
+        readDataAudit: () => readJsonl<{ surfaceId: string | null; source: string; op: { kind: string } }>(onto.dataAuditPath),
+        readInfraAudit: () => readJsonl<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>(onto.infraAuditPath),
+      }),
+  });
 
   if (infra.proxmox && infra.pgAdmin) {
     const now = () => new Date().toISOString();
@@ -62,6 +91,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       password: () => randomUUID().replace(/-/g, ""),
       adminConnectionString: infra.pgAdmin.connectionString,
       serviceOps,
+      onMutate: () => { try { ontologyOps.sync(); } catch { /* never fail the infra op */ } },
     });
     sessionExtraOptions.mcpServers = { infra: server };
     sessionExtraOptions.allowedTools = [...READ_TOOL_NAMES];
@@ -69,31 +99,6 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     infraPending = pending;
   }
 
-  const onto = loadOntologyConfig(process.env);
-  const readJson = <T>(p: string, fallback: T): T => {
-    try { return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as T) : fallback; } catch { return fallback; }
-  };
-  const readJsonl = <T>(p: string): T[] => {
-    try {
-      if (!existsSync(p)) return [];
-      return readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
-    } catch { return []; }
-  };
-  const ontologyOps = createOntologyOps({
-    systemDir: onto.systemDir,
-    domainDir: onto.domainDir,
-    now: () => new Date().toISOString(),
-    sync: () =>
-      syncSystem({
-        config: { systemDir: onto.systemDir },
-        now: () => new Date().toISOString(),
-        readDataSources: () => readJson<Array<{ id: string; type: string; mode: string }>>(onto.dataSourcesPath, []),
-        readServices: () => readJson<Array<{ id: string; name: string; containerId: number; host: string; port: number; status: string }>>(onto.servicesPath, []),
-        readSurfaceIds: () => (existsSync(onto.surfacesDir) ? readdirSync(onto.surfacesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : []),
-        readDataAudit: () => readJsonl<{ surfaceId: string | null; source: string; op: { kind: string } }>(onto.dataAuditPath),
-        readInfraAudit: () => readJsonl<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>(onto.infraAuditPath),
-      }),
-  });
   const ontologyServer = createOntologyServer(ontologyOps);
   sessionExtraOptions.mcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}), ontology: ontologyServer };
   sessionExtraOptions.allowedTools = [ ...((sessionExtraOptions.allowedTools as string[]) ?? []), ...ONTOLOGY_TOOL_NAMES ];

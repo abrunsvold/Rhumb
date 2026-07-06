@@ -120,3 +120,97 @@ describe("makeCanUseTool", () => {
     expect(res).toContain("105");
   });
 });
+
+describe("onMutate (ontology auto-sync)", () => {
+  it("fires once after a successful mutation and its own throw never fails the tool", async () => {
+    let fired = 0;
+    const serviceOps = { ...fakeServiceOps, stop: async () => {} };
+    const ok1 = await callTool("stop_service", { id: "sales" }, { serviceOps, onMutate: () => { fired++; } });
+    expect(ok1).toContain("stopped");
+    expect(fired).toBe(1);
+    const ok2 = await callTool("stop_service", { id: "sales" }, { serviceOps, onMutate: () => { throw new Error("sync exploded"); } });
+    expect(ok2).toContain("stopped"); // tool result unaffected by onMutate failure
+  });
+
+  it("does not fire when the underlying op fails", async () => {
+    let fired = 0;
+    const serviceOps = { ...fakeServiceOps, stop: async () => { throw new Error("nope"); } };
+    const res = await callTool("stop_service", { id: "sales" }, { serviceOps, onMutate: () => { fired++; } });
+    expect(res).toContain("nope");
+    expect(fired).toBe(0);
+  });
+
+  it("does not fire for read-only tools", async () => {
+    let fired = 0;
+    const serviceOps = { ...fakeServiceOps, list: () => [] };
+    await callTool("list_services", {}, { serviceOps, onMutate: () => { fired++; } });
+    expect(fired).toBe(0);
+  });
+
+  it("fires for each of the 8 mutating VM/service/db tools on success", async () => {
+    const calls: string[] = [];
+    const onMutate = () => { calls.push("fired"); };
+
+    const proxmox = {
+      listVms: async () => [],
+      status: async () => ({}),
+      create: async () => ({ id: 1 }),
+      start: async () => {},
+      stop: async () => {},
+      resize: async () => {},
+      destroy: async () => {},
+    } as unknown as InfraDeps["proxmox"];
+
+    await callTool("create_vm", { name: "x" }, { proxmox, onMutate });
+    await callTool("destroy_vm", { id: 1 }, { proxmox, onMutate });
+
+    const serviceOps: ServiceOps = {
+      ...fakeServiceOps,
+      spawn: async (id: string) => ({ id, name: id, containerId: 1, host: "h", port: 1, basePath: `/services/${id}`, status: "healthy", createdAt: "T", deployId: "D", updatedAt: "T" }),
+      redeploy: async (id: string) => ({ entry: { id, name: id, containerId: 1, host: "h", port: 1, basePath: `/services/${id}`, status: "healthy", createdAt: "T", deployId: "D", updatedAt: "T" }, warning: undefined }),
+      stop: async () => {},
+      start: async () => {},
+      destroy: async () => {},
+    };
+    await callTool("spawn_service", { id: "s1" }, { serviceOps, onMutate });
+    await callTool("redeploy_service", { id: "s1" }, { serviceOps, onMutate });
+    await callTool("stop_service", { id: "s1" }, { serviceOps, onMutate });
+    await callTool("start_service", { id: "s1" }, { serviceOps, onMutate });
+    await callTool("destroy_service", { id: "s1" }, { serviceOps, onMutate });
+
+    // provision_database goes through provisionDatabase() which calls deps.admin;
+    // stub the admin executor minimally so it succeeds.
+    const admin = { exec: async () => {} } as unknown as InfraDeps["admin"];
+    await callTool(
+      "provision_database",
+      { name: "db1" },
+      {
+        admin,
+        dataSourcesPath: join(dir, "data-sources.json"),
+        password: () => "pw",
+        adminConnectionString: "postgres://admin",
+        onMutate,
+      },
+    );
+
+    expect(calls.length).toBe(8);
+  });
+
+  it("does not fire for start_vm/stop_vm/resize_vm", async () => {
+    let fired = 0;
+    const proxmox = {
+      listVms: async () => [],
+      status: async () => ({}),
+      create: async () => ({ id: 1 }),
+      start: async () => {},
+      stop: async () => {},
+      resize: async () => {},
+      destroy: async () => {},
+    } as unknown as InfraDeps["proxmox"];
+    const onMutate = () => { fired++; };
+    await callTool("start_vm", { id: 1 }, { proxmox, onMutate });
+    await callTool("stop_vm", { id: 1 }, { proxmox, onMutate });
+    await callTool("resize_vm", { id: 1 }, { proxmox, onMutate });
+    expect(fired).toBe(0);
+  });
+});
