@@ -132,11 +132,11 @@ export function createInfraServer(deps: InfraDeps) {
       }),
       tool(
         "enroll_fleet_node",
-        "Enroll a C_Fusion node into the fleet: mint a one-time Tailscale pre-auth key, record the node in the ontology, and return the exact setup-device.sh enrollment command. The key is displayed once and never persisted.",
+        "Enroll a C_Fusion node into the fleet: mint a one-time Tailscale pre-auth key, record the node in the ontology, and return the exact setup-device.sh enrollment command. The key is displayed once and never written to RHUMBR's audit log or ontology. If no tags are given, the key defaults to [\"tag:cfusion\"] — the tailnet ACL must declare a tagOwners entry for tag:cfusion covering the API key's owner, or minting will fail.",
         { nodeId: z.string(), tags: z.array(z.string()).optional() },
         async (a) => {
           try {
-            if (!deps.tailscale) return fail("tailscale is not configured (set TS_API_KEY and TS_TAILNET)");
+            if (!deps.tailscale) return fail("tailscale is not configured (set RHUMB_TS_API_KEY and RHUMB_TS_TAILNET)");
             if (!deps.ontology) return fail("ontology is not configured");
             const r = await enrollFleetNode(
               { tailscale: deps.tailscale, ontology: deps.ontology, auditPath: deps.auditPath, now: deps.now },

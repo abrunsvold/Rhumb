@@ -57,6 +57,21 @@ describe("sanitizedEnv", () => {
     expect(result.PATH).toBe("/usr/bin:/bin");
   });
 
+  it("strips RHUMB_TS_API_KEY and RHUMB_TS_TAILNET from the child env", () => {
+    // Regression for the gate-bypass finding: these config vars must use the
+    // RHUMB_ prefix so sanitizedEnv strips them from the spawned agent's
+    // ungated Bash — otherwise the agent could mint its own tailnet
+    // pre-auth keys directly, bypassing the enroll_fleet_node approval gate.
+    const input: NodeJS.ProcessEnv = {
+      CLAUDE_CODE_OAUTH_TOKEN: "tok",
+      RHUMB_TS_API_KEY: "tskey-api-secret",
+      RHUMB_TS_TAILNET: "example.ts.net",
+    };
+    const result = sanitizedEnv(input);
+    expect(result.RHUMB_TS_API_KEY).toBeUndefined();
+    expect(result.RHUMB_TS_TAILNET).toBeUndefined();
+  });
+
   it("does not mutate the input object", () => {
     const input: NodeJS.ProcessEnv = {
       ANTHROPIC_API_KEY: "sk-ant-test",

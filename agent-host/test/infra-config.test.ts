@@ -30,6 +30,20 @@ describe("loadInfraConfig", () => {
     expect(cfg.proxmox).toEqual({ baseUrl: "https://pve:8006", tokenId: "rhumb@pve!t1", tokenSecret: "secret", node: "pve" });
     expect(cfg.pgAdmin).toEqual({ connectionString: "postgres://admin:pw@pg:5432/postgres" });
   });
+
+  it("reads tailscale settings from RHUMB_TS_API_KEY / RHUMB_TS_TAILNET when present", () => {
+    const cfg = loadInfraConfig({
+      RHUMB_WORKSPACE: "/srv/ws",
+      RHUMB_TS_API_KEY: "tskey-api-secret",
+      RHUMB_TS_TAILNET: "example.ts.net",
+    });
+    expect(cfg.tailscale).toEqual({ apiKey: "tskey-api-secret", tailnet: "example.ts.net" });
+  });
+
+  it("leaves tailscale config undefined when only one of the pair is set", () => {
+    const cfg = loadInfraConfig({ RHUMB_WORKSPACE: "/srv/ws", RHUMB_TS_API_KEY: "tskey-api-secret" });
+    expect(cfg.tailscale).toBeUndefined();
+  });
 });
 
 describe("appendInfraAudit", () => {
