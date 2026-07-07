@@ -31,9 +31,9 @@ function fakeDeps() {
 }
 
 describe("buildEnrollCommand", () => {
-  it("is the exact setup-device.sh invocation", () => {
-    expect(buildEnrollCommand("node-01", "tskey-auth-X")).toBe(
-      "TS_AUTH_KEY='tskey-auth-X' FLEET_NODE_ID='node-01' FLEET_CENTRAL_HOST=<central-broker-host> ./scripts/setup-device.sh <device-ip>",
+  it("is the exact setup-device.sh invocation, referencing $TS_AUTH_KEY rather than a literal key", () => {
+    expect(buildEnrollCommand("node-01")).toBe(
+      "TS_AUTH_KEY=\"$TS_AUTH_KEY\" FLEET_NODE_ID='node-01' FLEET_CENTRAL_HOST=<central-broker-host> ./scripts/setup-device.sh <device-ip>",
     );
   });
 });
@@ -45,7 +45,9 @@ describe("enrollFleetNode", () => {
     expect(r.nodeId).toBe("node-01");
     expect(r.authKey).toBe("tskey-auth-SECRET");
     expect(r.enrollCommand).toContain("./scripts/setup-device.sh");
-    expect(r.enrollCommand).toContain("TS_AUTH_KEY='tskey-auth-SECRET'");
+    expect(r.enrollCommand).toContain('TS_AUTH_KEY="$TS_AUTH_KEY"');
+    expect(r.enrollCommand).not.toContain("tskey-auth-SECRET");
+    expect(r.enrollCommand).toContain("FLEET_NODE_ID='node-01'");
     // key minted for this node, tags passed through
     expect(calls).toEqual([{ description: "cfusion-node-01", tags: ["tag:cfusion"] }]);
     // ontology entity recorded
