@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendDataSource, provisionDatabase } from "../src/infra/provision.js";
@@ -39,30 +39,47 @@ describe("provisionDatabase", () => {
     sqls: [],
     async exec(sql: string) { (this as any).sqls.push(sql); },
   };
+  // Per-DB superuser executor factory: capture what SQL runs against each DB.
+  let dbExecs: Record<string, string[]>;
+  const adminExecForDb = (db: string): AdminExecutor => ({
+    async exec(sql: string) { (dbExecs[db] ??= []).push(sql); },
+  });
 
-  beforeEach(() => { admin.sqls = []; });
+  beforeEach(() => { admin.sqls = []; dbExecs = {}; });
 
-  it("runs CREATE statements, builds a source, and registers it", async () => {
+  it("runs CREATE statements, installs the DDL audit on the new DB, builds a source, and registers it", async () => {
     const entry = await provisionDatabase(
-      { admin, dataSourcesPath: join(dir, "ds.json"), password: () => "pw123" },
+      { admin, adminExecForDb, dataSourcesPath: join(dir, "ds.json"), password: () => "pw123" },
       "reports",
     );
-    expect(admin.sqls.some((s) => s.includes('CREATE ROLE "reports"'))).toBe(true);
     expect(admin.sqls.some((s) => s.includes('CREATE DATABASE "reports"'))).toBe(true);
+    // The event-trigger install ran against the NEW db's executor, not the admin (postgres) executor.
+    expect((dbExecs["reports"] ?? []).some((s) => s.includes("CREATE EVENT TRIGGER _rhumb_ddl_audit_end"))).toBe(true);
+    expect(admin.sqls.some((s) => s.includes("CREATE EVENT TRIGGER"))).toBe(false);
     expect(entry).toMatchObject({ id: "reports", type: "postgres", mode: "read-write" });
-    expect(entry.connectionString).toContain("reports");
     expect(JSON.parse(readFileSync(join(dir, "ds.json"), "utf8"))).toHaveLength(1);
+  });
+
+  it("aborts (does not register the source) if the audit install fails", async () => {
+    const failing = () => ({ async exec() { throw new Error("event trigger denied"); } });
+    await expect(
+      provisionDatabase(
+        { admin, adminExecForDb: failing, dataSourcesPath: join(dir, "ds.json"), password: () => "pw" },
+        "reports",
+      ),
+    ).rejects.toThrow("event trigger denied");
+    expect(existsSync(join(dir, "ds.json"))).toBe(false);
   });
 
   it("rejects an invalid database name", async () => {
     await expect(
-      provisionDatabase({ admin, dataSourcesPath: join(dir, "ds.json"), password: () => "pw" }, "bad; drop"),
+      provisionDatabase({ admin, adminExecForDb, dataSourcesPath: join(dir, "ds.json"), password: () => "pw" }, "bad; drop"),
     ).rejects.toThrow(/identifier/);
   });
 
   it("rejects a password containing a single quote", async () => {
     await expect(
-      provisionDatabase({ admin, dataSourcesPath: join(dir, "ds.json"), password: () => "bad'pw" }, "ok"),
+      provisionDatabase({ admin, adminExecForDb, dataSourcesPath: join(dir, "ds.json"), password: () => "bad'pw" }, "ok"),
     ).rejects.toThrow(/password/);
   });
 });

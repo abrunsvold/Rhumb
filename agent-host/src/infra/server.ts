@@ -48,6 +48,7 @@ export interface InfraDeps {
   now: () => string;
   password: () => string;
   adminConnectionString?: string;
+  adminExecForDb: (dbName: string) => AdminExecutor;
   serviceOps?: ServiceOps;
   onMutate?: () => void;
 }
@@ -86,7 +87,7 @@ export function createInfraServer(deps: InfraDeps) {
       tool("provision_database", "Create a Postgres database and register it as a data source", { name: z.string() }, async (a) => {
         try {
           const entry = await provisionDatabase(
-            { admin: deps.admin, dataSourcesPath: deps.dataSourcesPath, password: deps.password, adminConnectionString: deps.adminConnectionString },
+            { admin: deps.admin, adminExecForDb: deps.adminExecForDb, dataSourcesPath: deps.dataSourcesPath, password: deps.password, adminConnectionString: deps.adminConnectionString },
             a.name,
           );
           mutated();

@@ -28,6 +28,7 @@ async function callTool(name: string, args: Record<string, unknown>, deps: Parti
     auditPath: "",
     now: () => "T",
     password: () => "x",
+    adminExecForDb: () => ({ async exec() {} }),
     ...deps,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -212,5 +213,19 @@ describe("onMutate (ontology auto-sync)", () => {
     await callTool("stop_vm", { id: 1 }, { proxmox, onMutate });
     await callTool("resize_vm", { id: 1 }, { proxmox, onMutate });
     expect(fired).toBe(0);
+  });
+});
+
+describe("provision_database wires the DDL audit", () => {
+  it("installs the event triggers against the new database's executor", async () => {
+    const dbExecs: Record<string, string[]> = {};
+    const out = await callTool("provision_database", { name: "reports" }, {
+      admin: { async exec() {} },
+      adminExecForDb: (db: string) => ({ async exec(sql: string) { (dbExecs[db] ??= []).push(sql); } }),
+      dataSourcesPath: join(dir, "ds.json"),
+      password: () => "pw123",
+    });
+    expect(out).toContain("provisioned database");
+    expect((dbExecs["reports"] ?? []).some((s) => s.includes("CREATE EVENT TRIGGER _rhumb_ddl_audit_end"))).toBe(true);
   });
 });
