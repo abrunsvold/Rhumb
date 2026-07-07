@@ -20,6 +20,7 @@ export interface ProxmoxClient {
 
 export interface AdminExecutor {
   exec(sql: string): Promise<void>;
+  close?(): Promise<void>;
 }
 
 export interface DataSourceEntry {

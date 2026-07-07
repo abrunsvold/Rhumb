@@ -41,11 +41,13 @@ describe("provisionDatabase", () => {
   };
   // Per-DB superuser executor factory: capture what SQL runs against each DB.
   let dbExecs: Record<string, string[]>;
+  let closedDbs: string[];
   const adminExecForDb = (db: string): AdminExecutor => ({
     async exec(sql: string) { (dbExecs[db] ??= []).push(sql); },
+    async close() { closedDbs.push(db); },
   });
 
-  beforeEach(() => { admin.sqls = []; dbExecs = {}; });
+  beforeEach(() => { admin.sqls = []; dbExecs = {}; closedDbs = []; });
 
   it("runs CREATE statements, installs the DDL audit on the new DB, builds a source, and registers it", async () => {
     const entry = await provisionDatabase(
@@ -58,10 +60,16 @@ describe("provisionDatabase", () => {
     expect(admin.sqls.some((s) => s.includes("CREATE EVENT TRIGGER"))).toBe(false);
     expect(entry).toMatchObject({ id: "reports", type: "postgres", mode: "read-write" });
     expect(JSON.parse(readFileSync(join(dir, "ds.json"), "utf8"))).toHaveLength(1);
+    // The per-DB executor's pool must be closed after a successful install.
+    expect(closedDbs).toEqual(["reports"]);
   });
 
-  it("aborts (does not register the source) if the audit install fails", async () => {
-    const failing = () => ({ async exec() { throw new Error("event trigger denied"); } });
+  it("aborts (does not register the source) if the audit install fails, but still closes the per-DB executor", async () => {
+    const failingClosed: string[] = [];
+    const failing = () => ({
+      async exec() { throw new Error("event trigger denied"); },
+      async close() { failingClosed.push("reports"); },
+    });
     await expect(
       provisionDatabase(
         { admin, adminExecForDb: failing, dataSourcesPath: join(dir, "ds.json"), password: () => "pw" },
@@ -69,6 +77,8 @@ describe("provisionDatabase", () => {
       ),
     ).rejects.toThrow("event trigger denied");
     expect(existsSync(join(dir, "ds.json"))).toBe(false);
+    // Even though the install threw, the finally block must still close the pool.
+    expect(failingClosed).toEqual(["reports"]);
   });
 
   it("rejects an invalid database name", async () => {

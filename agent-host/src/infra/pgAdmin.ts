@@ -7,6 +7,9 @@ export function createAdminExecutor(connectionString: string): AdminExecutor {
     async exec(sql: string) {
       await pool.query(sql);
     },
+    async close() {
+      await pool.end();
+    },
   };
 }
 

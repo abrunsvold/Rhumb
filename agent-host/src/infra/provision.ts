@@ -42,8 +42,14 @@ export async function provisionDatabase(
 
   // Install the DDL-audit backstop into the new database as superuser (event
   // triggers are per-database). A failure here aborts provisioning before the
-  // source is registered.
-  await ensureDdlAudit(deps.adminExecForDb(name));
+  // source is registered. The per-DB executor opens its own pool, so it must
+  // be closed whether the install succeeds or throws.
+  const dbExec = deps.adminExecForDb(name);
+  try {
+    await ensureDdlAudit(dbExec);
+  } finally {
+    await dbExec.close?.();
+  }
 
   // Build the new connection string from the admin host/port (default localhost:5432).
   let host = "localhost", port = "5432";
