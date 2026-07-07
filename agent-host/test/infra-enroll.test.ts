@@ -70,17 +70,35 @@ describe("enrollFleetNode", () => {
     expect(existsSync(deps.auditPath)).toBe(false);
   });
 
-  it("records nothing when the key mint fails", async () => {
+  it("still records the ontology node when the key mint fails (upsert happens first and is idempotent on retry)", async () => {
     const { deps, upserts } = fakeDeps();
     deps.tailscale = { createAuthKey: async () => { throw new Error("api down"); } };
     await expect(enrollFleetNode(deps, { nodeId: "node-01" })).rejects.toThrow(/api down/);
-    expect(upserts).toHaveLength(0);
+    // Reordered to validate -> ontology.upsert -> mint -> audit: an upsert
+    // failure can no longer strand a minted-but-unrecorded tailnet key,
+    // because minting always happens after the (idempotent) upsert.
+    expect(upserts).toHaveLength(1);
     expect(existsSync(deps.auditPath)).toBe(false);
   });
 
-  it("omits the tags prop when no tags are given", async () => {
-    const { deps, upserts } = fakeDeps();
-    await enrollFleetNode(deps, { nodeId: "node-02" });
-    expect((upserts[0].props as Record<string, string>).tags).toBeUndefined();
+  it("defaults to tag:cfusion when no tags are given", async () => {
+    const { deps, calls, upserts } = fakeDeps();
+    const r = await enrollFleetNode(deps, { nodeId: "node-02" });
+    expect(calls).toEqual([{ description: "cfusion-node-02", tags: ["tag:cfusion"] }]);
+    expect((upserts[0].props as Record<string, string>).tags).toBe("tag:cfusion");
+    expect(r.authKey).toBe("tskey-auth-SECRET");
+  });
+
+  it("passes an explicit tags list through unchanged", async () => {
+    const { deps, calls, upserts } = fakeDeps();
+    await enrollFleetNode(deps, { nodeId: "node-03", tags: ["tag:foo", "tag:bar"] });
+    expect(calls).toEqual([{ description: "cfusion-node-03", tags: ["tag:foo", "tag:bar"] }]);
+    expect((upserts[0].props as Record<string, string>).tags).toBe("tag:foo,tag:bar");
+  });
+
+  it("defaults to tag:cfusion when an empty tags array is given", async () => {
+    const { deps, calls } = fakeDeps();
+    await enrollFleetNode(deps, { nodeId: "node-04", tags: [] });
+    expect(calls).toEqual([{ description: "cfusion-node-04", tags: ["tag:cfusion"] }]);
   });
 });
