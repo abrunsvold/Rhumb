@@ -73,75 +73,33 @@ Two sides, joined over Tailscale:
 
 ## Quickstart
 
-You'll need [Node.js](https://nodejs.org), a Claude subscription, and (for the intended setup) a Proxmox host and a Tailscale tailnet. You can also run everything on a single machine to try it out.
-
-### 1. Get a Claude token
+**Prerequisites:** a Linux box with systemd on your [Tailscale](https://tailscale.com) tailnet, [Node.js](https://nodejs.org) 20+, and a Claude subscription. The intended home is a Proxmox host or container, but any Linux box gives you the core experience.
 
 ```sh
-claude setup-token        # produces a long-lived CLAUDE_CODE_OAUTH_TOKEN
+git clone https://github.com/abrunsvold/Rhumb && cd Rhumb
+claude setup-token      # on any machine — you'll paste the token into the installer
+sudo scripts/install.sh
 ```
 
-### 2. Put both hosts behind `tailscale serve`
+The installer checks prerequisites (telling you exactly what to fix if one is missing), auto-detects your tailnet login for the access allowlist, prompts for the Claude token, builds both hosts, mounts them behind `tailscale serve`, and installs systemd units (`rhumb-agent`, `rhumb-dashboard`) so everything starts on boot and restarts on crash. When it finishes it prints your Rhumb URL.
 
-On the box, run the setup script once. It mounts both hosts behind a single
-tailnet HTTPS origin and prints the tailnet login(s) to allowlist:
+All configuration lives in one file, `/etc/rhumb/rhumb.env`, with the optional settings (Postgres provisioning, spawned-service LXC knobs, ontology paths) documented inline as commented-out lines. The installer is idempotent: after `git pull`, re-run it to rebuild and restart — your configuration is preserved.
 
-```sh
-scripts/setup-serve.sh
-```
+> **First run:** if `tailscale serve` has never been used on your tailnet, the installer pauses and prints a `login.tailscale.com` link — a tailnet admin must click it once to enable Serve (and HTTPS certificates, if prompted) before setup can continue.
 
-> **First run:** if `tailscale serve` has never been used on your tailnet, the
-> script pauses and prints a `login.tailscale.com` link — a tailnet admin must
-> click it once to enable Serve (and HTTPS certificates, if prompted) before
-> setup can continue.
+Running on macOS, without systemd, or want to see every step? **[docs/setup-manual.md](docs/setup-manual.md)** has the step-by-step path, plus local development without a tailnet and a troubleshooting guide.
 
-### 3. Set the allowlist and run the agent host
+### Connect the client
 
-`RHUMB_ALLOWED_USERS` is a comma-separated list of tailnet logins (e.g.
-`alice@github`) permitted to reach the hosts. Set it on **both** hosts — they
-refuse to start without it:
+The [`client/`](client/) is a Tauri v2 desktop app. Build and run it with the Tauri CLI:
 
 ```sh
-cd agent-host
+cd client
 npm install
-npm run build
-CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start
+npm run tauri dev       # or `npm run tauri build` for an installable app bundle
 ```
 
-Defaults: port `8787`, model `claude-opus-4-8`, workspace `./workspace`, permission mode `acceptEdits`. The host binds loopback only — `tailscale serve` is what makes it reachable from the tailnet. See [`agent-host/README.md`](agent-host/README.md) for all environment variables and the security model behind permission modes.
-
-### 4. Run the dashboard host
-
-Point it at the **same workspace** as the agent host, with the same allowlist:
-
-```sh
-cd dashboard-host
-npm install
-npm run build
-RHUMB_WORKSPACE=../agent-host/workspace RHUMB_ALLOWED_USERS=you@github npm start
-```
-
-Defaults: port `8788`, loopback bind. See [`dashboard-host/README.md`](dashboard-host/README.md).
-
-### 5. Connect the client
-
-The [`client/`](client/) is a Tauri v2 desktop app. Build and run it with the Tauri CLI (`npm install` then `npm run tauri dev` from `client/`). On first launch it discovers boxes running `tailscale serve` with Rhumb's `/.well-known/rhumb.json` manifest and lists them in a picker — click one to connect. If discovery finds nothing (e.g. the `tailscale` CLI isn't available on your laptop), you can enter the box's single HTTPS origin manually instead.
-
-### Local development without a tailnet
-
-Set `RHUMB_INSECURE_DEV=1` on both hosts to skip identity checks and the
-loopback-only bind entirely — useful for running everything on one machine
-without Tailscale. **Never set this on a box reachable by anyone else**: it
-disables the Tailscale identity allowlist and all of the request
-authentication described in [`SECURITY.md`](SECURITY.md).
-
-Note that the desktop client can't connect to bare two-port `RHUMB_INSECURE_DEV`
-hosts as-is: it speaks to a single HTTPS origin (`/` for the dashboard host,
-`/agent` for the agent host), which normally comes from `tailscale serve`. For
-local development without a tailnet, either run `tailscale serve` locally or
-put a reverse proxy in front that maps `/` → `:8788` and `/agent` → `:8787`.
-`RHUMB_INSECURE_DEV` hosts on their own (without that single-origin front end)
-are meant to be exercised directly via `curl`/`supertest`, not the desktop client.
+On first launch it discovers boxes running `tailscale serve` with Rhumb's `/.well-known/rhumb.json` manifest and lists them in a picker — click one to connect. If discovery finds nothing (e.g. the `tailscale` CLI isn't available on your laptop), enter the box's HTTPS origin manually instead.
 
 ---
 
@@ -182,7 +140,7 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 **Near-term priorities** — where the work points now that all seven subsystems ship:
 
 - **Harden for less-trusted networks.** Rhumb currently assumes a private tailnet. Tighten the agent-host permission model and workspace path handling so a mistake costs less — the hosts now authenticate against a Tailscale identity allowlist, but the model still assumes a single trusted operator.
-- **Smooth the on-ramp.** Setup is still homelab-grade. Better first-run docs, clearer defaults, and fewer manual steps between `clone` and a running tool.
+- **Smooth the on-ramp.** `scripts/install.sh` now takes a box from clone to supervised, tailnet-served hosts in one guided run. Next: prebuilt desktop-client releases so connecting doesn't require a Rust toolchain.
 - **Dogfood real tools.** Build and run actual internal tools on Rhumb and let what breaks drive the roadmap — rather than adding subsystems for their own sake.
 - **Stability over surface area.** With the seven subsystems in place, the emphasis shifts from new capabilities to making the existing ones reliable and well-tested.
 
