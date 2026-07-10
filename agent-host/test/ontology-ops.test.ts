@@ -60,3 +60,31 @@ describe("ontology ops", () => {
     expect(() => o.upsert({ id: "customer-2", title: "ok", props: { x: "a\nb" } })).toThrow(/newline/);
   });
 });
+
+describe("ontology ops read side", () => {
+  it("list() returns system and domain nodes merged", () => {
+    const o = ops();
+    writeNode(join(dir, "system"), { type: "service", id: "service-x", title: "X", managed: "system", props: {}, relationships: [] });
+    o.upsert({ id: "customer-1", title: "Acme" });
+    expect(o.list().map((n) => n.id).sort()).toEqual(["customer-1", "service-x"]);
+  });
+
+  it("status() starts empty, records a successful sync, and records a failure", () => {
+    const systemDir = join(dir, "system");
+    const domainDir = join(dir, "domain");
+    let fail = false;
+    const o = createOntologyOps({
+      systemDir, domainDir, now: () => "T1",
+      sync: () => { if (fail) throw new Error("boom"); return { added: 0, updated: 0, removed: 0 }; },
+    });
+    expect(o.status()).toEqual({ syncedAt: null, syncError: null });
+    o.sync();
+    expect(o.status()).toEqual({ syncedAt: "T1", syncError: null });
+    fail = true;
+    expect(() => o.sync()).toThrow("boom");
+    expect(o.status()).toEqual({ syncedAt: "T1", syncError: "boom" });
+    fail = false;
+    o.sync();
+    expect(o.status().syncError).toBeNull();
+  });
+});
