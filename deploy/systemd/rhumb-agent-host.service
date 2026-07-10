@@ -1,0 +1,36 @@
+[Unit]
+Description=Rhumb agent host (Claude Code session API + infra capability)
+Documentation=https://github.com/abrunsvold/Rhumb
+# The host binds loopback and is published by `tailscale serve`; make sure the
+# network and tailscaled are up before we start.
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as the operator's real user, NOT a nologin system account: the agent host
+# reads Claude Code session transcripts from ~/.claude/projects and runs the
+# Claude Code subprocess under this user's login state. Set both lines to the
+# login you run Rhumb as on the box.
+User=rhumb
+Group=rhumb
+
+# Path to your checkout's agent-host package (after `npm install && npm run build`).
+WorkingDirectory=/opt/rhumb/agent-host
+
+# All credentials (CLAUDE_CODE_OAUTH_TOKEN, RHUMB_ALLOWED_USERS, RHUMB_PROXMOX_*,
+# RHUMB_PG_ADMIN, ...) come from this root-owned, mode-600 file. See .env.example
+# at the repo root for the full list.
+EnvironmentFile=/etc/rhumb/agent-host.env
+
+ExecStart=/usr/bin/env node dist/index.js
+Restart=on-failure
+RestartSec=3
+
+# Modest hardening only: this process intentionally runs an agent that edits a
+# workspace, SSHes into containers, and calls the Proxmox API — aggressive
+# sandboxing (ProtectSystem/ProtectHome) would break its legitimate job.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

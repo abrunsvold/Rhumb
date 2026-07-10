@@ -127,6 +127,14 @@ Defaults: port `8788`, loopback bind. See [`dashboard-host/README.md`](dashboard
 
 The [`client/`](client/) is a Tauri v2 desktop app. Build and run it with the Tauri CLI (`npm install` then `npm run tauri dev` from `client/`). On first launch it discovers boxes running `tailscale serve` with Rhumb's `/.well-known/rhumb.json` manifest and lists them in a picker — click one to connect. If discovery finds nothing (e.g. the `tailscale` CLI isn't available on your laptop), you can enter the box's single HTTPS origin manually instead.
 
+### 6. Keep the hosts running (systemd)
+
+Steps 3–4 leave both hosts as foreground processes that die with your shell —
+fine for a first run, but the durability story (surfaces at stable URLs,
+across reboots) needs a supervisor. [`deploy/systemd/`](deploy/systemd/) ships
+unit files for both hosts (restart-on-failure, credentials in root-owned
+`/etc/rhumb/*.env` files) and a README with the install steps.
+
 ### Local development without a tailnet
 
 Set `RHUMB_INSECURE_DEV=1` on both hosts to skip identity checks and the

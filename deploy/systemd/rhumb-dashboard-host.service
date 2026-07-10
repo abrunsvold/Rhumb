@@ -1,0 +1,33 @@
+[Unit]
+Description=Rhumb dashboard host (serves surfaces, registry, data endpoint)
+Documentation=https://github.com/abrunsvold/Rhumb
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Must be able to read the workspace the agent host writes (surfaces,
+# data-sources.json, services.json) — simplest is the same user as the agent
+# host's unit. Set both lines to match.
+User=rhumb
+Group=rhumb
+
+# Path to your checkout's dashboard-host package (after `npm install && npm run build`).
+WorkingDirectory=/opt/rhumb/dashboard-host
+
+# RHUMB_WORKSPACE (same folder as the agent host!), RHUMB_ALLOWED_USERS, etc.
+# Root-owned, mode 600 — data-source registration can place DB connection
+# strings in reach of this process.
+EnvironmentFile=/etc/rhumb/dashboard-host.env
+
+ExecStart=/usr/bin/env node dist/index.js
+Restart=on-failure
+RestartSec=3
+
+# This host only reads the workspace, talks to Postgres, and proxies spawned
+# services — it tolerates more sandboxing than the agent host.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
