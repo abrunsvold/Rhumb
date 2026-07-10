@@ -253,7 +253,71 @@ render_unit "$REPO_DIR/scripts/systemd/rhumb-agent.service.tmpl" "$UNIT_DIR/rhum
 render_unit "$REPO_DIR/scripts/systemd/rhumb-dashboard.service.tmpl" "$UNIT_DIR/rhumb-dashboard.service"
 
 # ---- privileged install ----
-
 if [ "$DRY_RUN" = 1 ]; then
   info "Dry run complete — staged artifacts in $STAGE_DIR"
+  exit 0
+fi
+
+# workspace (shared by both hosts; owned by the service user)
+info "Ensuring workspace at $RHUMB_WORKSPACE"
+mkdir -p "$RHUMB_WORKSPACE"
+chown "$RUN_USER" "$RHUMB_WORKSPACE"
+
+# builds — as the invoking user (direct root logins, e.g. Proxmox LXC consoles
+# without sudo installed, have RUN_USER=root and take the first branch)
+build_pkg() {
+  info "Building $1"
+  if [ "$(id -un)" = "$RUN_USER" ]; then
+    bash -c "cd '$REPO_DIR/$1' && npm ci && npm run build" \
+      || die "build failed in $1 — fix the error above and re-run the installer"
+  else
+    sudo -u "$RUN_USER" -H bash -c "cd '$REPO_DIR/$1' && npm ci && npm run build" \
+      || die "build failed in $1 — fix the error above and re-run the installer"
+  fi
+}
+build_pkg agent-host
+build_pkg dashboard-host
+
+# tailscale serve — reuse the standalone script (idempotent mounts)
+info "Mounting hosts behind tailscale serve"
+RHUMB_PORT="$RHUMB_PORT" RHUMB_DASHBOARD_PORT="$RHUMB_DASHBOARD_PORT" \
+  "$REPO_DIR/scripts/setup-serve.sh"
+
+# enable + start units
+info "Enabling systemd units"
+systemctl daemon-reload
+systemctl enable --now rhumb-agent.service rhumb-dashboard.service
+systemctl restart rhumb-agent.service rhumb-dashboard.service
+
+# verify
+sleep 2
+install_ok=1
+for unit in rhumb-agent rhumb-dashboard; do
+  if systemctl is-active --quiet "$unit"; then
+    info "$unit: active"
+  else
+    install_ok=0
+    warn "$unit is not running — inspect: journalctl -u $unit -n 50"
+  fi
+done
+for port in "$RHUMB_PORT" "$RHUMB_DASHBOARD_PORT"; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port/" || true)"
+  if [ "$code" = "000" ]; then
+    install_ok=0
+    warn "nothing answering on 127.0.0.1:$port"
+  fi
+done
+
+echo
+info "Rhumb is installed"
+if [ -n "$TS_DNSNAME" ]; then
+  echo "  URL:        https://$TS_DNSNAME   (dashboard at /, agent at /agent)"
+fi
+echo "  Allowlist:  $RHUMB_ALLOWED_USERS"
+echo "  Config:     $ENV_FILE"
+echo "  Workspace:  $RHUMB_WORKSPACE"
+echo "  Logs:       journalctl -u rhumb-agent -f   |   journalctl -u rhumb-dashboard -f"
+echo "  Update:     git pull && sudo scripts/install.sh   (your config is preserved)"
+if [ "$install_ok" = 0 ]; then
+  die "install finished with failures — see warnings above, fix, and re-run (safe to repeat)"
 fi
