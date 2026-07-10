@@ -3,6 +3,7 @@ export interface InfraConfig {
   dataSourcesPath: string;
   proxmox?: { baseUrl: string; tokenId: string; tokenSecret: string; node: string };
   pgAdmin?: { connectionString: string };
+  tailscale?: { apiKey: string; tailnet: string };
 }
 
 export interface Vm { id: number; name: string; status: string }
@@ -32,7 +33,8 @@ export interface DataSourceEntry {
 
 export type GatedTool =
   | "create_vm" | "start_vm" | "stop_vm" | "resize_vm" | "destroy_vm" | "provision_database"
-  | "spawn_service" | "stop_service" | "start_service" | "destroy_service" | "redeploy_service";
+  | "spawn_service" | "stop_service" | "start_service" | "destroy_service" | "redeploy_service"
+  | "enroll_fleet_node";
 
 export interface PendingAction {
   pendingId: string;

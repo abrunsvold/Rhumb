@@ -3,12 +3,15 @@ import { z } from "zod";
 import { appendInfraAudit } from "./audit.js";
 import { provisionDatabase } from "./provision.js";
 import { PendingActions } from "./pending.js";
+import { enrollFleetNode, type OntologyUpsert } from "./enroll.js";
 import type { ProxmoxClient, AdminExecutor, GatedTool } from "./types.js";
+import type { TailscaleClient } from "./tailscale.js";
 import type { ServiceOps } from "../services/ops.js";
 
 export const GATED_TOOLS: readonly GatedTool[] = [
   "create_vm", "start_vm", "stop_vm", "resize_vm", "destroy_vm", "provision_database",
   "spawn_service", "redeploy_service", "stop_service", "start_service", "destroy_service",
+  "enroll_fleet_node",
 ];
 export const READ_TOOL_NAMES: readonly string[] = [
   "mcp__infra__list_vms", "mcp__infra__vm_status", "mcp__infra__list_services", "mcp__infra__service_status",
@@ -50,6 +53,8 @@ export interface InfraDeps {
   adminConnectionString?: string;
   adminExecForDb: (dbName: string) => AdminExecutor;
   serviceOps?: ServiceOps;
+  tailscale?: TailscaleClient;
+  ontology?: OntologyUpsert;
   onMutate?: () => void;
 }
 
@@ -125,6 +130,23 @@ export function createInfraServer(deps: InfraDeps) {
       tool("destroy_service", "Stop, destroy, and deregister a service", { id: z.string() }, async (a) => {
         try { if (!deps.serviceOps) return fail("services are not configured"); await deps.serviceOps.destroy(a.id); mutated(); return ok(`destroyed ${a.id}`); } catch (e) { return fail(String(e)); }
       }),
+      tool(
+        "enroll_fleet_node",
+        "Enroll a C_Fusion node into the fleet: mint a one-time Tailscale pre-auth key, record the node in the ontology, and return the exact setup-device.sh enrollment command. The key is displayed once and never written to RHUMBR's audit log or ontology. If no tags are given, the key defaults to [\"tag:cfusion\"] — the tailnet ACL must declare a tagOwners entry for tag:cfusion covering the API key's owner, or minting will fail.",
+        { nodeId: z.string(), tags: z.array(z.string()).optional() },
+        async (a) => {
+          try {
+            if (!deps.tailscale) return fail("tailscale is not configured (set RHUMB_TS_API_KEY and RHUMB_TS_TAILNET)");
+            if (!deps.ontology) return fail("ontology is not configured");
+            const r = await enrollFleetNode(
+              { tailscale: deps.tailscale, ontology: deps.ontology, auditPath: deps.auditPath, now: deps.now },
+              { nodeId: a.nodeId, tags: a.tags },
+            );
+            mutated();
+            return ok(JSON.stringify(r));
+          } catch (e) { return fail(String(e)); }
+        },
+      ),
     ],
   });
 }

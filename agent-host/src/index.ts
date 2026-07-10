@@ -17,6 +17,7 @@ import { createAdminExecutor, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
 import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
 import { createInfraRouter } from "./infra/router.js";
+import { createTailscaleClient } from "./infra/tailscale.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
 import { createSshExec } from "./services/ssh.js";
@@ -93,6 +94,8 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       adminConnectionString: pgAdmin.connectionString,
       adminExecForDb: (db: string) => createAdminExecutor(connStringForDb(pgAdmin.connectionString, db)),
       serviceOps,
+      tailscale: infra.tailscale ? createTailscaleClient(infra.tailscale) : undefined,
+      ontology: ontologyOps,
       onMutate: () => { try { ontologyOps.sync(); } catch { /* never fail the infra op */ } },
     });
     sessionExtraOptions.mcpServers = { infra: server };

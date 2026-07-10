@@ -86,10 +86,41 @@ describe("makeCanUseTool", () => {
     expect(JSON.parse(readFileSync(auditPath, "utf8").trim()).decision).toBe("error");
   });
 
-  it("GATED_TOOLS includes VM and service destructive/provisioning tools", () => {
+  it("GATED_TOOLS includes VM, service, and fleet destructive/provisioning tools", () => {
     expect([...GATED_TOOLS].sort()).toEqual(
-      ["create_vm", "destroy_service", "destroy_vm", "provision_database", "redeploy_service", "resize_vm", "spawn_service", "start_service", "start_vm", "stop_service", "stop_vm"].sort(),
+      ["create_vm", "destroy_service", "destroy_vm", "enroll_fleet_node", "provision_database", "redeploy_service", "resize_vm", "spawn_service", "start_service", "start_vm", "stop_service", "stop_vm"].sort(),
     );
+  });
+
+  it("gates enroll_fleet_node through the pending queue", async () => {
+    const pending = new PendingActions({ now: () => "T", id: () => "a1" });
+    const canUse = makeCanUseTool({ pending, auditPath: join(dir, "a.jsonl"), now: () => "T" });
+    const promise = canUse("mcp__infra__enroll_fleet_node", { nodeId: "node-01" }, {} as never);
+    expect(pending.list().map((p) => p.tool)).toEqual(["enroll_fleet_node"]);
+    pending.resolve("a1", "approve");
+    expect((await promise).behavior).toBe("allow");
+  });
+
+  it("enroll_fleet_node mints a key, upserts the ontology node, and returns the enroll command", async () => {
+    const upserts: Array<Record<string, unknown>> = [];
+    const res = await callTool(
+      "enroll_fleet_node",
+      { nodeId: "node-01" },
+      {
+        auditPath: join(dir, "a.jsonl"),
+        tailscale: { createAuthKey: async () => ({ key: "tskey-auth-K" }) },
+        ontology: { upsert: (n) => { upserts.push(n as Record<string, unknown>); return n; } },
+      },
+    );
+    const out = JSON.parse(res);
+    expect(out.authKey).toBe("tskey-auth-K");
+    expect(out.enrollCommand).toContain("setup-device.sh");
+    expect(upserts[0]).toMatchObject({ id: "cfusion-node-01" });
+  });
+
+  it("enroll_fleet_node fails cleanly when tailscale is not configured", async () => {
+    const res = await callTool("enroll_fleet_node", { nodeId: "node-01" }, {});
+    expect(res).toContain("tailscale is not configured");
   });
 
   it("gates spawn_service through the pending queue", async () => {

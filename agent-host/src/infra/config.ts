@@ -16,5 +16,8 @@ export function loadInfraConfig(env: NodeJS.ProcessEnv): InfraConfig {
     };
   }
   if (env.RHUMB_PG_ADMIN?.trim()) cfg.pgAdmin = { connectionString: env.RHUMB_PG_ADMIN.trim() };
+  if (env.RHUMB_TS_API_KEY?.trim() && env.RHUMB_TS_TAILNET?.trim()) {
+    cfg.tailscale = { apiKey: env.RHUMB_TS_API_KEY.trim(), tailnet: env.RHUMB_TS_TAILNET.trim() };
+  }
   return cfg;
 }
