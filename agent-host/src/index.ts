@@ -13,7 +13,7 @@ import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient } from "./infra/proxmox.js";
-import { createAdminExecutor } from "./infra/pgAdmin.js";
+import { createAdminExecutor, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
 import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
 import { createInfraRouter } from "./infra/router.js";
@@ -65,6 +65,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   });
 
   if (infra.proxmox && infra.pgAdmin) {
+    const pgAdmin = infra.pgAdmin;
     const now = () => new Date().toISOString();
     const pending = new PendingActions({ now, id: () => randomUUID() });
     const svcCfg = loadServiceConfig(process.env);
@@ -84,12 +85,13 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       : undefined;
     const server = createInfraServer({
       proxmox: createProxmoxClient(infra.proxmox),
-      admin: createAdminExecutor(infra.pgAdmin.connectionString),
+      admin: createAdminExecutor(pgAdmin.connectionString),
       dataSourcesPath: infra.dataSourcesPath,
       auditPath: infra.auditPath,
       now,
       password: () => randomUUID().replace(/-/g, ""),
-      adminConnectionString: infra.pgAdmin.connectionString,
+      adminConnectionString: pgAdmin.connectionString,
+      adminExecForDb: (db: string) => createAdminExecutor(connStringForDb(pgAdmin.connectionString, db)),
       serviceOps,
       onMutate: () => { try { ontologyOps.sync(); } catch { /* never fail the infra op */ } },
     });

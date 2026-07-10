@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { atomicWriteFileSync } from "../fsAtomic.js";
 import type { AdminExecutor, DataSourceEntry } from "./types.js";
+import { ensureDdlAudit } from "./ddlAudit.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -21,7 +22,13 @@ export function appendDataSource(path: string, entry: DataSourceEntry): DataSour
 }
 
 export async function provisionDatabase(
-  deps: { admin: AdminExecutor; dataSourcesPath: string; password: () => string; adminConnectionString?: string },
+  deps: {
+    admin: AdminExecutor;
+    adminExecForDb: (dbName: string) => AdminExecutor;
+    dataSourcesPath: string;
+    password: () => string;
+    adminConnectionString?: string;
+  },
   name: string,
 ): Promise<DataSourceEntry> {
   if (!IDENT.test(name)) throw new Error(`invalid identifier: ${name}`);
@@ -32,6 +39,17 @@ export async function provisionDatabase(
   await deps.admin.exec(`CREATE ROLE "${name}" LOGIN PASSWORD '${pw}'`);
   await deps.admin.exec(`CREATE DATABASE "${name}" OWNER "${name}"`);
   await deps.admin.exec(`GRANT ALL PRIVILEGES ON DATABASE "${name}" TO "${name}"`);
+
+  // Install the DDL-audit backstop into the new database as superuser (event
+  // triggers are per-database). A failure here aborts provisioning before the
+  // source is registered. The per-DB executor opens its own pool, so it must
+  // be closed whether the install succeeds or throws.
+  const dbExec = deps.adminExecForDb(name);
+  try {
+    await ensureDdlAudit(dbExec);
+  } finally {
+    await dbExec.close?.();
+  }
 
   // Build the new connection string from the admin host/port (default localhost:5432).
   let host = "localhost", port = "5432";
