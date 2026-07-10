@@ -219,6 +219,21 @@ EOF
 install -m 600 "$env_tmp" "$ENV_FILE"
 rm -f "$env_tmp"
 
+# ---------------------------------------------------------------- systemd units
+NODE_BIN="$(command -v node || echo /usr/bin/node)"
+
+# render_unit <template> <dest> — fill @RUN_USER@/@REPO_DIR@/@NODE_BIN@
+render_unit() {
+  sed -e "s|@RUN_USER@|$RUN_USER|g" \
+    -e "s|@REPO_DIR@|$REPO_DIR|g" \
+    -e "s|@NODE_BIN@|$NODE_BIN|g" \
+    "$1" >"$2"
+}
+
+info "Rendering systemd units into $UNIT_DIR"
+render_unit "$REPO_DIR/scripts/systemd/rhumb-agent.service.tmpl" "$UNIT_DIR/rhumb-agent.service"
+render_unit "$REPO_DIR/scripts/systemd/rhumb-dashboard.service.tmpl" "$UNIT_DIR/rhumb-dashboard.service"
+
 # ---- privileged install ----
 
 if [ "$DRY_RUN" = 1 ]; then

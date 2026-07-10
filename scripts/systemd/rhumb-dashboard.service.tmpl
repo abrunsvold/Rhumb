@@ -1,0 +1,16 @@
+[Unit]
+Description=Rhumb dashboard host (surfaces, registry, data endpoint)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RUN_USER@
+WorkingDirectory=@REPO_DIR@/dashboard-host
+EnvironmentFile=/etc/rhumb/rhumb.env
+ExecStart=@NODE_BIN@ dist/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

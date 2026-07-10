@@ -24,6 +24,17 @@ grep -q '^#RHUMB_PG_ADMIN='  "$STAGE/rhumb.env" || fail "optional settings block
 grep -qF -- '# --- optional settings (preserved on re-run; edit freely below) ---' "$STAGE/rhumb.env" \
   || fail "optional-settings marker missing"
 
+# --- systemd units rendered into the stage dir ---
+test -f "$STAGE/rhumb-agent.service"     || fail "agent unit not staged"
+test -f "$STAGE/rhumb-dashboard.service" || fail "dashboard unit not staged"
+grep -q '^EnvironmentFile=/etc/rhumb/rhumb.env$' "$STAGE/rhumb-agent.service" || fail "agent unit EnvironmentFile"
+grep -q '^EnvironmentFile=/etc/rhumb/rhumb.env$' "$STAGE/rhumb-dashboard.service" || fail "dashboard unit EnvironmentFile"
+grep -q "^User=$(id -un)\$" "$STAGE/rhumb-agent.service" || fail "agent unit User not invoking user"
+grep -q '/agent-host$'     "$STAGE/rhumb-agent.service"     || fail "agent unit WorkingDirectory"
+grep -q '/dashboard-host$' "$STAGE/rhumb-dashboard.service" || fail "dashboard unit WorkingDirectory"
+grep -Eq '^ExecStart=.+/node dist/index\.js$' "$STAGE/rhumb-agent.service" || fail "agent unit ExecStart"
+grep -q '@' "$STAGE/rhumb-agent.service" && fail "unrendered @token@ left in agent unit"
+
 # --- required values enforced ---
 if CLAUDE_CODE_OAUTH_TOKEN= RHUMB_ALLOWED_USERS=bob@github \
    scripts/install.sh --dry-run --yes --stage-dir "$(mktemp -d)" >/dev/null 2>&1; then
