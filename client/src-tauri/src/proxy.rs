@@ -460,6 +460,18 @@ pub async fn list_sessions(app: tauri::AppHandle, agent_base: String) -> Result<
 }
 
 #[tauri::command]
+pub async fn get_ontology(app: tauri::AppHandle, agent_base: String) -> Result<Value, String> {
+    let (url, bearer) = agent_target(&app, &agent_base, "/ontology")?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.get(&url), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_transcript(
     app: tauri::AppHandle,
     agent_base: String,
