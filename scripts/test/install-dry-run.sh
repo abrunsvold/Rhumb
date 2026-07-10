@@ -61,4 +61,10 @@ scripts/install.sh --dry-run --yes --stage-dir "$STAGE" >/dev/null 2>&1
 test -f "$STAGE/rhumb.env.bak" || fail "markerless config not backed up"
 grep -q '^RHUMB_PORT=7777$' "$STAGE/rhumb.env" || fail "markerless core value not carried over"
 
+# --- optional block must have no inline comments after assignments (systemd
+# EnvironmentFile treats inline # as part of the value) ---
+if grep -E '^#?RHUMB_[A-Z_]+=.*[[:space:]]#' "$STAGE/rhumb.env"; then
+  fail "inline comment after env assignment (systemd EnvironmentFile footgun)"
+fi
+
 echo "PASS install-dry-run"

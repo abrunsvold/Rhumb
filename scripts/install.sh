@@ -86,6 +86,8 @@ command -v systemctl >/dev/null 2>&1 \
   || fail_or_warn "systemd not found — this installer targets systemd Linux; see docs/setup-manual.md for the manual path"
 command -v claude >/dev/null 2>&1 \
   || warn "claude CLI not found on this box — fine: run 'claude setup-token' on any machine and paste the token below"
+command -v python3 >/dev/null 2>&1 \
+  || fail_or_warn "python3 not found — needed to parse tailscale status (apt install python3)"
 
 # ---------------------------------------------------------------- detection
 TS_LOGIN=""
@@ -204,12 +206,15 @@ EOF
 # (and installs the per-database DDL audit on provision).
 #RHUMB_PG_ADMIN=postgres://postgres:secret@127.0.0.1:5432/postgres
 
-# Registry/audit file overrides (defaults live under the workspace).
-#RHUMB_DATA_SOURCES=   # data-sources.json — registered data sources
-#RHUMB_DATA_TRUST=     # data-trust.json — per-surface write-back trust grants
-#RHUMB_DATA_AUDIT=     # data-audit.jsonl — data write audit trail
-#RHUMB_INFRA_AUDIT=    # infra-audit.jsonl — infra action audit trail
-#RHUMB_SERVICES=       # services.json — spawned-service registry
+# Registry/audit file overrides (defaults live under the workspace):
+# data-sources.json (registered data sources), data-trust.json (per-surface
+# write-back trust grants), data-audit.jsonl (data write audit trail),
+# infra-audit.jsonl (infra action audit trail), services.json (spawned-service registry).
+#RHUMB_DATA_SOURCES=
+#RHUMB_DATA_TRUST=
+#RHUMB_DATA_AUDIT=
+#RHUMB_INFRA_AUDIT=
+#RHUMB_SERVICES=
 
 # Ontology vault directory (default <workspace>/ontology).
 #RHUMB_ONTOLOGY=
