@@ -68,9 +68,20 @@ Defaults: port `8788`, loopback bind. See
 Nothing above survives a reboot. On systemd Linux, `sudo scripts/install.sh`
 sets up `rhumb-agent.service` and `rhumb-dashboard.service` for you (it is safe
 to run after a manual setup — your env values can be re-entered at the prompts,
-and from then on configuration lives in `/etc/rhumb/rhumb.env`). On other
-platforms, use your process supervisor of choice pointed at `npm start` in each
-package with the environment variables above.
+and from then on configuration lives in `/etc/rhumb/rhumb.env`). The units are
+rendered from the templates in [`scripts/systemd/`](../scripts/systemd/); read
+those if you'd rather install the units by hand. On other platforms, use your
+process supervisor of choice pointed at `npm start` in each package with the
+environment variables above.
+
+`tailscale serve` state persists on its own, so once the units are enabled the
+whole path — tailnet, serve, hosts, surfaces — comes back after a reboot with
+no login and no manual step. Check on them with:
+
+```sh
+systemctl status rhumb-agent rhumb-dashboard
+journalctl -u rhumb-agent -f
+```
 
 ## Local development without a tailnet
 
