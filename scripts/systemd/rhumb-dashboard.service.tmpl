@@ -1,0 +1,25 @@
+[Unit]
+Description=Rhumb dashboard host (surfaces, registry, data endpoint)
+Documentation=https://github.com/abrunsvold/Rhumb
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Same user as the agent host, filled in by scripts/install.sh: this host reads
+# the workspace the agent host writes (surfaces, data-sources.json, services.json).
+User=@RUN_USER@
+WorkingDirectory=@REPO_DIR@/dashboard-host
+# Root-owned, mode 600 — data-source registration puts DB connection strings
+# within reach of this process.
+EnvironmentFile=/etc/rhumb/rhumb.env
+ExecStart=@NODE_BIN@ dist/index.js
+Restart=on-failure
+RestartSec=3
+# This host only reads the workspace, talks to Postgres, and proxies spawned
+# services, so it tolerates sandboxing the agent host cannot.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
