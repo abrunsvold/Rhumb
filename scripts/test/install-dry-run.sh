@@ -24,6 +24,16 @@ grep -q '^#RHUMB_PG_ADMIN='  "$STAGE/rhumb.env" || fail "optional settings block
 grep -qF -- '# --- optional settings (preserved on re-run; edit freely below) ---' "$STAGE/rhumb.env" \
   || fail "optional-settings marker missing"
 
+# --- every operator-settable var the hosts read must be documented ---
+# (the four Proxmox vars gate the whole infrastructure capability; they are read
+# by destructuring in agent-host/src/infra/config.ts, so they are easy to miss)
+for v in RHUMB_PROXMOX_URL RHUMB_PROXMOX_TOKEN_ID RHUMB_PROXMOX_TOKEN_SECRET \
+         RHUMB_PROXMOX_NODE RHUMB_PROMPT_APPEND; do
+  grep -q "^#$v=" "$STAGE/rhumb.env" || fail "optional block does not document $v"
+done
+grep -q '^#NODE_TLS_REJECT_UNAUTHORIZED=' "$STAGE/rhumb.env" \
+  || fail "optional block does not document NODE_TLS_REJECT_UNAUTHORIZED"
+
 # --- systemd units rendered into the stage dir ---
 test -f "$STAGE/rhumb-agent.service"     || fail "agent unit not staged"
 test -f "$STAGE/rhumb-dashboard.service" || fail "dashboard unit not staged"
