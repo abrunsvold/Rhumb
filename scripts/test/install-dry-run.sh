@@ -41,4 +41,24 @@ if CLAUDE_CODE_OAUTH_TOKEN= RHUMB_ALLOWED_USERS=bob@github \
   fail "empty token should be rejected"
 fi
 
+# --- re-run preserves config: core values become defaults, optional section kept ---
+sed -e 's|^#RHUMB_LXC_BRIDGE=.*|RHUMB_LXC_BRIDGE=vmbr1|' \
+    -e 's|^RHUMB_PORT=8787$|RHUMB_PORT=9999|' \
+    "$STAGE/rhumb.env" >"$STAGE/rhumb.env.edited"
+mv "$STAGE/rhumb.env.edited" "$STAGE/rhumb.env"
+
+scripts/install.sh --dry-run --yes --stage-dir "$STAGE" >/dev/null
+
+grep -q '^CLAUDE_CODE_OAUTH_TOKEN=tok-test-123$' "$STAGE/rhumb.env" || fail "token not preserved on re-run"
+grep -q '^RHUMB_ALLOWED_USERS=alice@github$' "$STAGE/rhumb.env" || fail "allowlist not preserved on re-run"
+grep -q '^RHUMB_PORT=9999$' "$STAGE/rhumb.env" || fail "edited core value not used as re-run default"
+grep -q '^RHUMB_LXC_BRIDGE=vmbr1$' "$STAGE/rhumb.env" || fail "uncommented optional var not preserved"
+grep -q '^#RHUMB_LXC_STORAGE=' "$STAGE/rhumb.env" || fail "rest of optional block not preserved"
+
+# --- markerless (hand-written) file: backed up, values still used ---
+printf 'RHUMB_PORT=7777\nCLAUDE_CODE_OAUTH_TOKEN=tok-hand\nRHUMB_ALLOWED_USERS=carol@github\n' >"$STAGE/rhumb.env"
+scripts/install.sh --dry-run --yes --stage-dir "$STAGE" >/dev/null 2>&1
+test -f "$STAGE/rhumb.env.bak" || fail "markerless config not backed up"
+grep -q '^RHUMB_PORT=7777$' "$STAGE/rhumb.env" || fail "markerless core value not carried over"
+
 echo "PASS install-dry-run"

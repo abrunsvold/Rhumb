@@ -115,6 +115,24 @@ CUR_DASH_PORT=""
 CUR_MODEL=""
 CUR_MODE=""
 
+if [ -f "$ENV_FILE" ]; then
+  info "Existing config at $ENV_FILE — current values become the defaults"
+  env_get() { sed -n "s|^$1=||p" "$ENV_FILE" | tail -n1; }
+  CUR_TOKEN="$(env_get CLAUDE_CODE_OAUTH_TOKEN)"
+  CUR_USERS="$(env_get RHUMB_ALLOWED_USERS)"
+  CUR_WORKSPACE="$(env_get RHUMB_WORKSPACE)"
+  CUR_PORT="$(env_get RHUMB_PORT)"
+  CUR_DASH_PORT="$(env_get RHUMB_DASHBOARD_PORT)"
+  CUR_MODEL="$(env_get RHUMB_MODEL)"
+  CUR_MODE="$(env_get RHUMB_PERMISSION_MODE)"
+  if grep -qxF "$MARKER" "$ENV_FILE"; then
+    OPTIONAL_SECTION="$(awk -v m="$MARKER" 'found; $0 == m { found = 1 }' "$ENV_FILE")"
+  else
+    cp "$ENV_FILE" "$ENV_FILE.bak"
+    warn "no optional-settings marker in existing $ENV_FILE — backed up to $ENV_FILE.bak; re-add any custom lines below the marker"
+  fi
+fi
+
 # ---------------------------------------------------------------- prompts
 # prompt <var-name> <label> <default> [secret]
 # --yes or non-tty: takes the default. Otherwise interactive; empty keeps default.
