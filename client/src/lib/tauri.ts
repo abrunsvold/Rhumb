@@ -100,10 +100,6 @@ export function openAgentStream(
   return () => void invoke("stop_agent_stream", { turnId });
 }
 
-export function getRegistry(dashboardBase: string): Promise<RegistrySnapshot> {
-  return invoke<RegistrySnapshot>("get_registry", { dashboardBase });
-}
-
 export function openRegistryStream(
   dashboardBase: string,
   onUpdate: (s: RegistrySnapshot) => void,

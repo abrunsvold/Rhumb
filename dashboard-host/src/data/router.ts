@@ -16,18 +16,6 @@ export interface DataRouterDeps {
   resolveToken: (token: string) => string | null;
 }
 
-export function surfaceIdFromReferer(req: Request): string | null {
-  const ref = req.get("referer") ?? "";
-  let pathname: string;
-  try {
-    pathname = new URL(ref).pathname;
-  } catch {
-    return null;
-  }
-  const m = pathname.match(/^\/surfaces\/([A-Za-z0-9._-]+)(?:\/|$)/);
-  return m ? m[1] : null;
-}
-
 export function createDataRouter(deps: DataRouterDeps): Router {
   const router = express.Router();
 

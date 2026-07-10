@@ -32,7 +32,7 @@ Retool makes *you* wire a UI to a data source you already have. Rhumb has the ag
 | **Homelab status board** — VMs / containers / services, up-down at a glance | reads infrastructure (`list_vms`) + live-data surface + the ontology as the map of your box |
 | **Runbook / docs wiki** — internal notes, procedures, wikilinks | file surfaces + the Obsidian-browsable vault; no backend needed |
 | **Household / lab inventory** — CRUD with confirmed writes | agent-provisioned Postgres + write-back through the confirmation gate + persisted trust |
-| **API ingest service** — pulls a feed on a schedule into a DB | container-isolated spawned service + provisioning, restart-on-crash |
+| **API ingest service** — pulls a feed on a schedule into a DB | container-isolated spawned service + provisioning, survives host reboot (systemd unit, `onboot` container) |
 | **Sensor / energy dashboard** — time-series from your box or Home Assistant | live-data endpoint + a charting surface |
 | **Side-project ticket board** — issues, statuses, assignees | provisioned DB + a CRUD surface, no Jira |
 | **"What's running on my box" graph** — browse the environment itself | the ontology *as the product* — query it, or open the graph in Obsidian |

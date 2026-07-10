@@ -266,19 +266,6 @@ pub fn stop_agent_stream(state: tauri::State<'_, StreamState>, turn_id: String) 
 }
 
 #[tauri::command]
-pub async fn get_registry(app: tauri::AppHandle, dashboard_base: String) -> Result<Value, String> {
-    let (url, bearer) = dashboard_target(&app, &dashboard_base, "/registry")?;
-    let client = reqwest::Client::new();
-    let req = shell_request(client.get(&url), &bearer);
-    req.send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn start_registry_stream(
     app: tauri::AppHandle,
     state: tauri::State<'_, StreamState>,
