@@ -104,6 +104,9 @@ export function OntologyPanel({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Filter…"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
         className="rounded border border-line bg-raised px-2 py-1 text-sm text-ink placeholder:text-muted"
       />
       {groups.map((g) => (
