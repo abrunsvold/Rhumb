@@ -2,7 +2,7 @@ export type RailSection = "sessions" | "surfaces" | "gear";
 
 const ITEMS: { id: RailSection; label: string; glyph: string }[] = [
   { id: "sessions", label: "Sessions", glyph: "💬" },
-  { id: "surfaces", label: "Surfaces", glyph: "▦" },
+  { id: "surfaces", label: "System map", glyph: "▦" },
 ];
 
 export function Rail({
