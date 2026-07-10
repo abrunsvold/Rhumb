@@ -27,3 +27,21 @@ export interface SessionMeta {
   preview: string;
   archived: boolean;
 }
+
+// Mirrors agent-host/src/ontology/types.ts (polyglot by contract, like AgentEvent).
+export interface OntologyNode {
+  type: string;
+  id: string;
+  title: string;
+  managed: "system" | "domain";
+  created?: string;
+  updated?: string;
+  props: Record<string, string>;
+  relationships: { edge: string; target: string }[];
+}
+
+export interface OntologySnapshot {
+  nodes: OntologyNode[];
+  syncedAt: string | null;
+  syncError: string | null;
+}
