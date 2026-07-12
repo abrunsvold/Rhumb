@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { OntologyConfig, OntologyNode, Relationship } from "./types.js";
+import type { NodeFacts } from "../infra/nodeFacts.js";
 import { writeNode, listNodes } from "./vault.js";
 
 export interface SyncDeps {
@@ -11,7 +12,12 @@ export interface SyncDeps {
   readSurfaceIds: () => string[];
   readDataAudit: () => Array<{ surfaceId: string | null; source: string; op: { kind: string } }>;
   readInfraAudit: () => Array<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>;
+  readNodeFacts: () => NodeFacts | null;
 }
+
+// Frontmatter keys must stay plain: pool ids like "local-lvm" become storage_local_lvm.
+const sanitizeKey = (s: string) => s.replace(/[^A-Za-z0-9_]/g, "_");
+const round1 = (n: number) => String(Math.round(n * 10) / 10);
 
 export function syncSystem(deps: SyncDeps): { added: number; updated: number; removed: number } {
   const ts = deps.now();
@@ -21,11 +27,27 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     nodes.set(n.id, { ...n, managed: "system", created: ts, updated: ts });
   };
 
+  // PVE node(s) first: the box roots the map. With exactly one node, container/vm
+  // placement is certain and they get runs-on edges; with several we don't guess.
+  const facts = deps.readNodeFacts();
+  const singleNodeId = facts?.nodes.length === 1 ? `node-${facts.nodes[0].name}` : null;
+  const runsOnNode: Relationship[] = singleNodeId ? [{ edge: "runs-on", target: singleNodeId }] : [];
+  for (const n of facts?.nodes ?? []) {
+    const props: Record<string, string> = { status: n.status, address: n.address, factsAsOf: facts!.fetchedAt };
+    if (n.pveVersion) props.pveVersion = n.pveVersion;
+    if (n.cpuModel) props.cpuModel = n.cpuModel;
+    if (typeof n.cores === "number") props.cores = String(n.cores);
+    if (typeof n.memBytes === "number") props.memoryGb = round1(n.memBytes / 2 ** 30);
+    if (typeof n.uptimeSec === "number") props.uptimeDays = round1(n.uptimeSec / 86400);
+    for (const s of n.storage) props[`storage_${sanitizeKey(s.id)}`] = `${s.usedPct}% used`;
+    put({ type: "node", id: `node-${n.name}`, title: n.name, props, relationships: [] });
+  }
+
   for (const s of deps.readDataSources()) {
     put({ type: "datasource", id: `datasource-${s.id}`, title: s.id, props: { sourceType: s.type, mode: s.mode }, relationships: [createdBy] });
   }
   for (const s of deps.readServices()) {
-    put({ type: "container", id: `container-${s.containerId}`, title: `CT ${s.containerId}`, props: {}, relationships: [createdBy] });
+    put({ type: "container", id: `container-${s.containerId}`, title: `CT ${s.containerId}`, props: {}, relationships: [...runsOnNode, createdBy] });
     put({
       type: "service", id: `service-${s.id}`, title: s.name,
       props: { host: s.host, port: String(s.port), status: s.status },
@@ -54,7 +76,7 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     const props: Record<string, string> = {};
     if (typeof a.input.cores === "number") props.cores = String(a.input.cores);
     if (typeof a.input.memory === "number") props.memory = String(a.input.memory);
-    put({ type: "vm", id: `vm-${name}`, title: name, props, relationships: [createdBy] });
+    put({ type: "vm", id: `vm-${name}`, title: name, props, relationships: [...runsOnNode, createdBy] });
   }
 
   const desired = [...nodes.values()];
