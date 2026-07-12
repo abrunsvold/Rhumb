@@ -1,13 +1,14 @@
 import type { ProxmoxClient, InfraConfig, Vm, VmStatus } from "./types.js";
 
-// Real Proxmox VE API client. Auth via API token header. Endpoint paths follow the
-// Proxmox VE API (qemu under /nodes/{node}/qemu). Live-verified against the operator's PVE.
-export function createProxmoxClient(cfg: NonNullable<InfraConfig["proxmox"]>): ProxmoxClient {
+export type PveCall = (method: string, path: string, body?: Record<string, unknown>) => Promise<unknown>;
+
+// Shared PVE request scaffolding — the VM client and the node-facts refresher
+// both speak through this rather than each re-implementing auth/encoding.
+export function createPveCall(cfg: NonNullable<InfraConfig["proxmox"]>): PveCall {
   const base = `${cfg.baseUrl.replace(/\/$/, "")}/api2/json`;
   const authHeader = `PVEAPIToken=${cfg.tokenId}=${cfg.tokenSecret}`;
-  const node = cfg.node;
 
-  async function call(method: string, path: string, body?: Record<string, unknown>): Promise<unknown> {
+  return async function call(method: string, path: string, body?: Record<string, unknown>): Promise<unknown> {
     // Encode the body as form-urlencoded (Proxmox expects this for POSTs), coercing
     // numeric fields to strings explicitly. Only send Content-Type when there is a body.
     const encoded = body
@@ -18,7 +19,14 @@ export function createProxmoxClient(cfg: NonNullable<InfraConfig["proxmox"]>): P
     const res = await fetch(`${base}${path}`, { method, headers, body: encoded });
     if (!res.ok) throw new Error(`proxmox ${method} ${path}: ${res.status} ${await res.text()}`);
     return ((await res.json()) as { data: unknown }).data;
-  }
+  };
+}
+
+// Real Proxmox VE API client. Auth via API token header. Endpoint paths follow the
+// Proxmox VE API (qemu under /nodes/{node}/qemu). Live-verified against the operator's PVE.
+export function createProxmoxClient(cfg: NonNullable<InfraConfig["proxmox"]>): ProxmoxClient {
+  const call = createPveCall(cfg);
+  const node = cfg.node;
 
   return {
     async listVms(): Promise<Vm[]> {
