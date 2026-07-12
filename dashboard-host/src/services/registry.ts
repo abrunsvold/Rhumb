@@ -6,7 +6,6 @@ export interface ServiceEntry {
   containerId: number;
   host: string;
   port: number;
-  basePath: string;
   status: string;
   createdAt: string;
 }

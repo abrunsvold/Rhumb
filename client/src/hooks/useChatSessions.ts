@@ -17,7 +17,6 @@ export interface ChatSessionsApi {
   close(key: string): void;
   focus(key: string): void;
   send(key: string, text: string, files: StagedFile[]): Promise<boolean>;
-  setTabTitle(key: string, title: string): void;
 }
 
 const RETRY_DELAYS = [2000, 5000, 15000];
@@ -141,10 +140,6 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     setStore((s) => focusTab(s, key));
   }
 
-  function setTabTitle(key: string, title: string) {
-    setStore((s) => setTitle(s, key, title));
-  }
-
   async function send(key: string, text: string, files: StagedFile[]): Promise<boolean> {
     const promptText = text;
     let prompt = text;
@@ -207,5 +202,5 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     return true;
   }
 
-  return { store, openSession, newDraft, close, focus, send, setTabTitle };
+  return { store, openSession, newDraft, close, focus, send };
 }

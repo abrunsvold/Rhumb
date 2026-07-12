@@ -99,7 +99,6 @@ pub fn run() {
             proxy::send_message,
             proxy::start_agent_stream,
             proxy::stop_agent_stream,
-            proxy::get_registry,
             proxy::start_registry_stream,
             proxy::stop_registry_stream,
             proxy::start_pending_stream,
