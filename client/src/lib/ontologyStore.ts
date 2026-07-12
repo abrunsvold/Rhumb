@@ -2,6 +2,7 @@ import type { OntologyNode } from "./types";
 
 // Fixed sidebar order — the ontology's type scheme IS the nav taxonomy.
 const SECTIONS: { type: string; label: string }[] = [
+  { type: "node", label: "Nodes" },
   { type: "dashboard", label: "Dashboards" },
   { type: "service", label: "Services" },
   { type: "container", label: "Containers" },

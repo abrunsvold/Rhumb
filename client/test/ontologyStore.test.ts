@@ -8,6 +8,14 @@ const n = (over: Partial<OntologyNode>): OntologyNode => ({
 });
 
 describe("groupNodes", () => {
+  it("puts the Nodes section first — the box roots the map", () => {
+    const groups = groupNodes([
+      n({ type: "dashboard", id: "dashboard-d1", title: "d1" }),
+      n({ type: "node", id: "node-MicroPX", title: "MicroPX" }),
+    ]);
+    expect(groups.map((g) => g.label)).toEqual(["Nodes", "Dashboards"]);
+  });
+
   it("groups by type in fixed order and omits empty sections", () => {
     const groups = groupNodes([
       n({ type: "datasource", id: "datasource-a", title: "a" }),
