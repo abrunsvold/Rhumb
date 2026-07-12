@@ -12,7 +12,8 @@ import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
 import { loadInfraConfig } from "./infra/config.js";
-import { createProxmoxClient } from "./infra/proxmox.js";
+import { createProxmoxClient, createPveCall } from "./infra/proxmox.js";
+import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.js";
 import { createAdminExecutor, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
 import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
@@ -49,6 +50,16 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       return readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
     } catch { return []; }
   };
+  // Node facts need only the Proxmox half of the infra config (no pg-admin).
+  const refreshNodeFacts = infra.proxmox
+    ? createNodeFactsRefresher({
+        call: createPveCall(infra.proxmox),
+        address: infra.proxmox.baseUrl,
+        path: onto.nodeFactsPath,
+        now: () => new Date().toISOString(),
+      })
+    : undefined;
+
   const ontologyOps = createOntologyOps({
     systemDir: onto.systemDir,
     domainDir: onto.domainDir,
@@ -62,6 +73,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         readSurfaceIds: () => (existsSync(onto.surfacesDir) ? readdirSync(onto.surfacesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : []),
         readDataAudit: () => readJsonl<{ surfaceId: string | null; source: string; op: { kind: string } }>(onto.dataAuditPath),
         readInfraAudit: () => readJsonl<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>(onto.infraAuditPath),
+        readNodeFacts: () => readNodeFactsFile(onto.nodeFactsPath),
       }),
   });
 
@@ -94,7 +106,12 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       adminConnectionString: pgAdmin.connectionString,
       adminExecForDb: (db: string) => createAdminExecutor(connStringForDb(pgAdmin.connectionString, db)),
       serviceOps,
-      onMutate: () => { try { ontologyOps.sync(); } catch { /* never fail the infra op */ } },
+      onMutate: () => {
+        // Facts refresh is fire-and-forget (next sync reads whatever landed);
+        // the sync itself stays synchronous and must never fail the infra op.
+        void refreshNodeFacts?.().catch(() => {});
+        try { ontologyOps.sync(); } catch { /* never fail the infra op */ }
+      },
     });
     sessionExtraOptions.mcpServers = { infra: server };
     sessionExtraOptions.allowedTools = [...READ_TOOL_NAMES];
@@ -133,7 +150,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
   }
-  app.use("/ontology", createOntologyRouter({ ops: ontologyOps }));
+  app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshNodeFacts }));
 
   return app;
 }

@@ -20,4 +20,5 @@ export interface OntologyConfig {
   surfacesDir: string;                // <workspace>/surfaces
   dataAuditPath: string;
   infraAuditPath: string;
+  nodeFactsPath: string;
 }

@@ -25,6 +25,34 @@ describe("GET /ontology", () => {
     expect(res.body).toEqual({ nodes: [node], syncedAt: "T1", syncError: null });
   });
 
+  it("awaits the facts refresh before syncing", async () => {
+    const order: string[] = [];
+    const ops = {
+      sync: () => { order.push("sync"); return { added: 0, updated: 0, removed: 0 }; },
+      list: () => [node], status: () => ({ syncedAt: "T1", syncError: null }),
+      query: () => null, upsert: () => node, link: () => node,
+    } as unknown as OntologyOps;
+    const refresh = async () => { order.push("refresh"); };
+    const a = express();
+    a.use("/ontology", createOntologyRouter({ ops, refresh }));
+    const res = await request(a).get("/ontology");
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["refresh", "sync"]);
+  });
+
+  it("still answers 200 when the facts refresh rejects", async () => {
+    const ops = {
+      sync: () => ({ added: 0, updated: 0, removed: 0 }),
+      list: () => [node], status: () => ({ syncedAt: "T1", syncError: null }),
+      query: () => null, upsert: () => node, link: () => node,
+    } as unknown as OntologyOps;
+    const a = express();
+    a.use("/ontology", createOntologyRouter({ ops, refresh: async () => { throw new Error("pve down"); } }));
+    const res = await request(a).get("/ontology");
+    expect(res.status).toBe(200);
+    expect(res.body.nodes).toHaveLength(1);
+  });
+
   it("degrades to last-good nodes when sync throws", async () => {
     const ops = {
       sync: () => { throw new Error("projector broke"); },
