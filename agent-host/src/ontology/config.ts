@@ -13,5 +13,6 @@ export function loadOntologyConfig(env: NodeJS.ProcessEnv): OntologyConfig {
     dataAuditPath: env.RHUMB_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
     infraAuditPath: env.RHUMB_INFRA_AUDIT?.trim() || `${workspace}/infra-audit.jsonl`,
     nodeFactsPath: `${workspace}/node-facts.json`,
+    ddlFactsPath: `${workspace}/ddl-facts.json`,
   };
 }
