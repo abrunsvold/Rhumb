@@ -9,6 +9,16 @@ let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "rhumb-proj-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
+const microFacts = {
+  fetchedAt: "TF",
+  nodes: [{
+    name: "MicroPX", status: "online", uptimeSec: 172800, cores: 8, memBytes: 16 * 2 ** 30,
+    pveVersion: "pve-manager/9.0-3", cpuModel: "Intel N100",
+    address: "https://192.168.1.100:8006",
+    storage: [{ id: "local-lvm", usedPct: 41 }],
+  }],
+};
+
 function deps(over: Partial<Parameters<typeof syncSystem>[0]> = {}) {
   return {
     config: { systemDir: dir },
@@ -18,6 +28,7 @@ function deps(over: Partial<Parameters<typeof syncSystem>[0]> = {}) {
     readSurfaceIds: () => ["report"],
     readDataAudit: () => [{ surfaceId: "report", source: "ops", op: { kind: "select" } }],
     readInfraAudit: () => [{ ts: "T", tool: "mcp__infra__create_vm", input: { name: "build" }, decision: "approved" }],
+    readNodeFacts: () => null,
     ...over,
   };
 }
@@ -35,6 +46,33 @@ describe("syncSystem", () => {
     // no connection string leaked
     expect(JSON.stringify(byId["datasource-ops"])).not.toContain("connectionString");
     expect(byId["datasource-ops"].props).toMatchObject({ mode: "read-write" });
+  });
+
+  it("projects a PVE node with props and roots containers and vms on it", () => {
+    syncSystem(deps({ readNodeFacts: () => microFacts }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["node-MicroPX"]).toBeTruthy();
+    expect(byId["node-MicroPX"].props).toMatchObject({
+      status: "online", factsAsOf: "TF", pveVersion: "pve-manager/9.0-3", cpuModel: "Intel N100",
+      cores: "8", memoryGb: "16", uptimeDays: "2", address: "https://192.168.1.100:8006",
+      storage_local_lvm: "41% used",
+    });
+    expect(byId["container-105"].relationships).toContainEqual({ edge: "runs-on", target: "node-MicroPX" });
+    expect(byId["vm-build"].relationships).toContainEqual({ edge: "runs-on", target: "node-MicroPX" });
+  });
+
+  it("skips runs-on edges when more than one node exists (placement unknown)", () => {
+    const twoNodes = { fetchedAt: "TF", nodes: [microFacts.nodes[0], { ...microFacts.nodes[0], name: "Second" }] };
+    syncSystem(deps({ readNodeFacts: () => twoNodes }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["node-MicroPX"]).toBeTruthy();
+    expect(byId["node-Second"]).toBeTruthy();
+    expect(byId["container-105"].relationships.some((r) => r.edge === "runs-on" && r.target.startsWith("node-"))).toBe(false);
+  });
+
+  it("projects no node when facts are absent", () => {
+    syncSystem(deps());
+    expect(listNodes(dir).some((n) => n.type === "node")).toBe(false);
   });
 
   it("is idempotent and removes stale system nodes", () => {

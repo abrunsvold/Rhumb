@@ -62,6 +62,10 @@ describe("ontology ops", () => {
 });
 
 describe("ontology ops read side", () => {
+  it("rejects the reserved node- prefix on upsert", () => {
+    expect(() => ops().upsert({ id: "node-rogue", title: "x" })).toThrow(/reserved/);
+  });
+
   it("list() returns system and domain nodes merged", () => {
     const o = ops();
     writeNode(join(dir, "system"), { type: "service", id: "service-x", title: "X", managed: "system", props: {}, relationships: [] });

@@ -12,5 +12,6 @@ export function loadOntologyConfig(env: NodeJS.ProcessEnv): OntologyConfig {
     surfacesDir: `${workspace}/surfaces`,
     dataAuditPath: env.RHUMB_DATA_AUDIT?.trim() || `${workspace}/data-audit.jsonl`,
     infraAuditPath: env.RHUMB_INFRA_AUDIT?.trim() || `${workspace}/infra-audit.jsonl`,
+    nodeFactsPath: `${workspace}/node-facts.json`,
   };
 }
