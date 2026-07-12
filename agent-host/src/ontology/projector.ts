@@ -27,11 +27,17 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     nodes.set(n.id, { ...n, managed: "system", created: ts, updated: ts });
   };
 
-  // PVE node(s) first: the box roots the map. With exactly one node, container/vm
-  // placement is certain and they get runs-on edges; with several we don't guess.
+  // PVE node(s) first: the box roots the map. Placement comes from the cluster
+  // resource mapping when present; a single-node cluster needs no mapping; and
+  // on a multi-node cluster with no mapping we don't guess.
   const facts = deps.readNodeFacts();
+  const nodeNames = new Set((facts?.nodes ?? []).map((n) => n.name));
   const singleNodeId = facts?.nodes.length === 1 ? `node-${facts.nodes[0].name}` : null;
   const runsOnNode: Relationship[] = singleNodeId ? [{ edge: "runs-on", target: singleNodeId }] : [];
+  const placedOn = (name: string | undefined): Relationship[] =>
+    name && nodeNames.has(name) ? [{ edge: "runs-on", target: `node-${name}` }] : runsOnNode;
+  const containerRunsOn = (vmid: number) => placedOn(facts?.placements?.byVmid[String(vmid)]);
+  const vmRunsOn = (vmName: string) => placedOn(facts?.placements?.byName[vmName]);
   for (const n of facts?.nodes ?? []) {
     const props: Record<string, string> = { status: n.status, address: n.address, factsAsOf: facts!.fetchedAt };
     if (n.pveVersion) props.pveVersion = n.pveVersion;
@@ -47,7 +53,7 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     put({ type: "datasource", id: `datasource-${s.id}`, title: s.id, props: { sourceType: s.type, mode: s.mode }, relationships: [createdBy] });
   }
   for (const s of deps.readServices()) {
-    put({ type: "container", id: `container-${s.containerId}`, title: `CT ${s.containerId}`, props: {}, relationships: [...runsOnNode, createdBy] });
+    put({ type: "container", id: `container-${s.containerId}`, title: `CT ${s.containerId}`, props: {}, relationships: [...containerRunsOn(s.containerId), createdBy] });
     put({
       type: "service", id: `service-${s.id}`, title: s.name,
       props: { host: s.host, port: String(s.port), status: s.status },
@@ -76,7 +82,7 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     const props: Record<string, string> = {};
     if (typeof a.input.cores === "number") props.cores = String(a.input.cores);
     if (typeof a.input.memory === "number") props.memory = String(a.input.memory);
-    put({ type: "vm", id: `vm-${name}`, title: name, props, relationships: [...runsOnNode, createdBy] });
+    put({ type: "vm", id: `vm-${name}`, title: name, props, relationships: [...vmRunsOn(name), createdBy] });
   }
 
   const desired = [...nodes.values()];

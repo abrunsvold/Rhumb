@@ -17,6 +17,9 @@ export interface NodeFactEntry {
 export interface NodeFacts {
   fetchedAt: string;
   nodes: NodeFactEntry[];
+  // Guest→node placement from /cluster/resources: containers resolve by vmid,
+  // VMs (projected by name from the audit) by name. Absent when the call fails.
+  placements?: { byVmid: Record<string, string>; byName: Record<string, string> };
 }
 
 export function createNodeFactsRefresher(deps: {
@@ -54,6 +57,19 @@ export function createNodeFactsRefresher(deps: {
       nodes.push(entry);
     }
     const facts: NodeFacts = { fetchedAt: deps.now(), nodes };
+    try {
+      const resources = (await deps.call("GET", "/cluster/resources?type=vm")) as Array<{
+        vmid?: number; node?: string; name?: string;
+      }>;
+      const byVmid: Record<string, string> = {};
+      const byName: Record<string, string> = {};
+      for (const r of resources) {
+        if (typeof r.vmid !== "number" || typeof r.node !== "string") continue;
+        byVmid[String(r.vmid)] = r.node;
+        if (typeof r.name === "string" && r.name) byName[r.name] = r.node;
+      }
+      facts.placements = { byVmid, byName };
+    } catch { /* degrade: single-node fallback still applies */ }
     atomicWriteFileSync(deps.path, JSON.stringify(facts, null, 2));
     return facts;
   };

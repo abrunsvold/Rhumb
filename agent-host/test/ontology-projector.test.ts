@@ -61,13 +61,36 @@ describe("syncSystem", () => {
     expect(byId["vm-build"].relationships).toContainEqual({ edge: "runs-on", target: "node-MicroPX" });
   });
 
-  it("skips runs-on edges when more than one node exists (placement unknown)", () => {
+  it("skips runs-on edges when more than one node exists and placement is unknown", () => {
     const twoNodes = { fetchedAt: "TF", nodes: [microFacts.nodes[0], { ...microFacts.nodes[0], name: "Second" }] };
     syncSystem(deps({ readNodeFacts: () => twoNodes }));
     const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
     expect(byId["node-MicroPX"]).toBeTruthy();
     expect(byId["node-Second"]).toBeTruthy();
     expect(byId["container-105"].relationships.some((r) => r.edge === "runs-on" && r.target.startsWith("node-"))).toBe(false);
+  });
+
+  it("uses cluster placements on a multi-node cluster (containers by vmid, vms by name)", () => {
+    const twoNodes = {
+      fetchedAt: "TF",
+      nodes: [microFacts.nodes[0], { ...microFacts.nodes[0], name: "pnp" }],
+      placements: { byVmid: { "105": "MicroPX" }, byName: { build: "pnp" } },
+    };
+    syncSystem(deps({ readNodeFacts: () => twoNodes }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["container-105"].relationships).toContainEqual({ edge: "runs-on", target: "node-MicroPX" });
+    expect(byId["vm-build"].relationships).toContainEqual({ edge: "runs-on", target: "node-pnp" });
+  });
+
+  it("drops a placement that points at a node absent from the facts", () => {
+    const twoNodes = {
+      fetchedAt: "TF",
+      nodes: [microFacts.nodes[0], { ...microFacts.nodes[0], name: "pnp" }],
+      placements: { byVmid: { "105": "Ghost" }, byName: {} },
+    };
+    syncSystem(deps({ readNodeFacts: () => twoNodes }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["container-105"].relationships.some((r) => r.edge === "runs-on")).toBe(false);
   });
 
   it("projects no node when facts are absent", () => {
