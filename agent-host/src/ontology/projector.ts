@@ -2,6 +2,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { OntologyConfig, OntologyNode, Relationship } from "./types.js";
 import type { NodeFacts } from "../infra/nodeFacts.js";
+import type { DdlFacts } from "../infra/ddlFacts.js";
 import { writeNode, listNodes } from "./vault.js";
 
 export interface SyncDeps {
@@ -13,6 +14,7 @@ export interface SyncDeps {
   readDataAudit: () => Array<{ surfaceId: string | null; source: string; op: { kind: string } }>;
   readInfraAudit: () => Array<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>;
   readNodeFacts: () => NodeFacts | null;
+  readDdlFacts: () => DdlFacts | null;
 }
 
 // Frontmatter keys must stay plain: pool ids like "local-lvm" become storage_local_lvm.
@@ -49,8 +51,17 @@ export function syncSystem(deps: SyncDeps): { added: number; updated: number; re
     put({ type: "node", id: `node-${n.name}`, title: n.name, props, relationships: [] });
   }
 
+  const ddlFacts = deps.readDdlFacts();
   for (const s of deps.readDataSources()) {
-    put({ type: "datasource", id: `datasource-${s.id}`, title: s.id, props: { sourceType: s.type, mode: s.mode }, relationships: [createdBy] });
+    const props: Record<string, string> = { sourceType: s.type, mode: s.mode };
+    const ddl = ddlFacts?.sources[s.id];
+    if (ddl && !ddl.installed) props.ddlAudit = "not installed (pre-audit database)";
+    if (ddl?.installed) {
+      if (ddl.lastTag) props.lastDdl = `${ddl.lastTag} ${ddl.lastObject ?? "?"} by ${ddl.lastActor ?? "?"} @ ${ddl.lastTs ?? "?"}`;
+      props.ddl7d = String(ddl.count7d ?? 0);
+      props.ddlAsOf = ddlFacts!.fetchedAt;
+    }
+    put({ type: "datasource", id: `datasource-${s.id}`, title: s.id, props, relationships: [createdBy] });
   }
   for (const s of deps.readServices()) {
     put({ type: "container", id: `container-${s.containerId}`, title: `CT ${s.containerId}`, props: {}, relationships: [...containerRunsOn(s.containerId), createdBy] });

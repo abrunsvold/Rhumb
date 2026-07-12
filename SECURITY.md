@@ -60,6 +60,23 @@ surface content cannot present it; only the desktop client's Rust proxy does.
 This replaces the optional `RHUMB_CONTROL_TOKEN` as the shell/surface
 boundary (the token now applies only in `RHUMB_INSECURE_DEV=1` mode).
 
+### Schema changes (DDL)
+
+The `/data` write gate covers DML only. Schema changes (CREATE/ALTER/DROP)
+issued through the agent's own tools — e.g. a migration script run via Bash
+with an owner-role connection — execute **without an approval gate**. This is
+a deliberate posture, not an oversight: schema migrations are core to how the
+agent builds and evolves tools, and today the agent only runs during turns the
+operator started. Two compensating controls apply. Every provisioned database
+carries superuser-owned event triggers (`_rhumb.ddl_audit`) that record each
+DDL statement with its acting role; the owner role can neither read nor tamper
+with that record. And the record is surfaced: the System map's datasource
+entries show the most recent schema change and a 7-day count (databases
+provisioned before the audit feature display "not installed"). A hard DDL gate
+(owner roles without CREATE plus an operator-approved `apply_ddl` path) is
+planned together with unattended/scheduled agent sessions, where the
+operator-initiated-turns assumption no longer holds.
+
 ### Desktop client webview posture
 
 The macOS client no longer ships an App Transport Security exception for web

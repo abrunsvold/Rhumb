@@ -29,6 +29,7 @@ function deps(over: Partial<Parameters<typeof syncSystem>[0]> = {}) {
     readDataAudit: () => [{ surfaceId: "report", source: "ops", op: { kind: "select" } }],
     readInfraAudit: () => [{ ts: "T", tool: "mcp__infra__create_vm", input: { name: "build" }, decision: "approved" }],
     readNodeFacts: () => null,
+    readDdlFacts: () => null,
     ...over,
   };
 }
@@ -96,6 +97,49 @@ describe("syncSystem", () => {
   it("projects no node when facts are absent", () => {
     syncSystem(deps());
     expect(listNodes(dir).some((n) => n.type === "node")).toBe(false);
+  });
+
+  it("decorates datasource nodes with DDL history from the facts file", () => {
+    syncSystem(deps({
+      readDdlFacts: () => ({
+        fetchedAt: "TD",
+        sources: {
+          ops: {
+            installed: true, count7d: 3,
+            lastTs: "2026-07-06T01:00:00Z", lastTag: "CREATE TABLE",
+            lastObject: "public.spools", lastActor: "ops_owner",
+          },
+        },
+      }),
+    }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["datasource-ops"].props).toMatchObject({
+      lastDdl: "CREATE TABLE public.spools by ops_owner @ 2026-07-06T01:00:00Z",
+      ddl7d: "3",
+      ddlAsOf: "TD",
+    });
+  });
+
+  it("marks pre-audit databases and quiet installed ones distinctly", () => {
+    syncSystem(deps({
+      readDdlFacts: () => ({ fetchedAt: "TD", sources: { ops: { installed: false } } }),
+    }));
+    let byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["datasource-ops"].props.ddlAudit).toBe("not installed (pre-audit database)");
+    expect(byId["datasource-ops"].props.lastDdl).toBeUndefined();
+
+    syncSystem(deps({
+      readDdlFacts: () => ({ fetchedAt: "TD", sources: { ops: { installed: true, count7d: 0 } } }),
+    }));
+    byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["datasource-ops"].props).toMatchObject({ ddl7d: "0", ddlAsOf: "TD" });
+    expect(byId["datasource-ops"].props.lastDdl).toBeUndefined();
+  });
+
+  it("leaves datasources untouched when absent from the ddl facts", () => {
+    syncSystem(deps({ readDdlFacts: () => ({ fetchedAt: "TD", sources: {} }) }));
+    const byId = Object.fromEntries(listNodes(dir).map((n) => [n.id, n]));
+    expect(byId["datasource-ops"].props).toEqual({ sourceType: "postgres", mode: "read-write" });
   });
 
   it("is idempotent and removes stale system nodes", () => {

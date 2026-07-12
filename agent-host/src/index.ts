@@ -14,7 +14,8 @@ import { sanitizedEnv } from "./env.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient, createPveCall } from "./infra/proxmox.js";
 import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.js";
-import { createAdminExecutor, connStringForDb } from "./infra/pgAdmin.js";
+import { createDdlFactsRefresher, readDdlFactsFile } from "./infra/ddlFacts.js";
+import { createAdminExecutor, createAdminQuery, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
 import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
 import { createInfraRouter } from "./infra/router.js";
@@ -59,6 +60,20 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         now: () => new Date().toISOString(),
       })
     : undefined;
+  // DDL facts need only the pg-admin half: the audit table is superuser-owned.
+  const adminConn = infra.pgAdmin?.connectionString;
+  const refreshDdlFacts = adminConn
+    ? createDdlFactsRefresher({
+        readSources: () => readJson<Array<{ id: string; connectionString: string }>>(infra.dataSourcesPath, []),
+        queryDb: (db, sql) => createAdminQuery(connStringForDb(adminConn, db))(sql),
+        path: onto.ddlFactsPath,
+        now: () => new Date().toISOString(),
+      })
+    : undefined;
+  // One refresh hook for all external facts; each half degrades independently.
+  const refreshExternal = refreshNodeFacts || refreshDdlFacts
+    ? async () => { await Promise.allSettled([refreshNodeFacts?.(), refreshDdlFacts?.()]); }
+    : undefined;
 
   const ontologyOps = createOntologyOps({
     systemDir: onto.systemDir,
@@ -74,6 +89,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         readDataAudit: () => readJsonl<{ surfaceId: string | null; source: string; op: { kind: string } }>(onto.dataAuditPath),
         readInfraAudit: () => readJsonl<{ ts: string; tool: string; input: Record<string, unknown>; decision: string }>(onto.infraAuditPath),
         readNodeFacts: () => readNodeFactsFile(onto.nodeFactsPath),
+        readDdlFacts: () => readDdlFactsFile(onto.ddlFactsPath),
       }),
   });
 
@@ -109,7 +125,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       onMutate: () => {
         // Facts refresh is fire-and-forget (next sync reads whatever landed);
         // the sync itself stays synchronous and must never fail the infra op.
-        void refreshNodeFacts?.().catch(() => {});
+        void refreshExternal?.().catch(() => {});
         try { ontologyOps.sync(); } catch { /* never fail the infra op */ }
       },
     });
@@ -150,7 +166,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
   }
-  app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshNodeFacts }));
+  app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));
 
   return app;
 }

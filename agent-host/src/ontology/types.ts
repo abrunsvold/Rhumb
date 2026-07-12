@@ -21,4 +21,5 @@ export interface OntologyConfig {
   dataAuditPath: string;
   infraAuditPath: string;
   nodeFactsPath: string;
+  ddlFactsPath: string;
 }
