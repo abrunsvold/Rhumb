@@ -73,10 +73,21 @@ gain `runs-on` edges to their node.
 - No new components: nodes are non-dashboard rows, so the existing detail
   card renders props and relationships as-is.
 
+## Addendum (2026-07-12, post-live): multi-node placement
+
+The first live run revealed the operator's cluster has **two** nodes (MicroPX
++ pnp), so the single-node guard correctly withheld every `runs-on` edge —
+proving the don't-guess rule and simultaneously promoting placement mapping
+from deferred to required. Implemented in the same release: the refresher also
+fetches `/cluster/resources?type=vm` into `placements` (`byVmid` for
+containers, `byName` for audit-projected VMs); the projector prefers a
+placement whose node exists in the facts, falls back to the single-node rule,
+and still refuses to guess otherwise. A placement call failure degrades to
+exactly the pre-addendum behavior.
+
 ## Out of scope
 
 - Live metrics / usage history (monitoring is a surface's job).
-- Multi-node placement edges (deferred with the single-node guard).
 - New env vars (reuses `RHUMB_PROXMOX_*`; `node-facts.json` path is derived
   from the workspace, no override).
 

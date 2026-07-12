@@ -15,6 +15,10 @@ const fixtures: Record<string, unknown> = {
     { storage: "local-lvm", used: 41, total: 100 },
     { storage: "no-total" },
   ],
+  "/cluster/resources?type=vm": [
+    { vmid: 105, node: "MicroPX", name: "printer-poller", type: "lxc" },
+    { vmid: 200, node: "pnp", name: "build", type: "qemu" },
+  ],
 };
 
 function refresher(call: (m: string, p: string) => Promise<unknown>, path: string) {
@@ -33,6 +37,26 @@ describe("createNodeFactsRefresher", () => {
       storage: [{ id: "local-lvm", usedPct: 41 }],
     }]);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(facts);
+  });
+
+  it("maps guest placements from /cluster/resources", async () => {
+    const path = join(dir, "node-facts.json");
+    const facts = await refresher(async (_m, p) => fixtures[p], path)();
+    expect(facts.placements).toEqual({
+      byVmid: { "105": "MicroPX", "200": "pnp" },
+      byName: { "printer-poller": "MicroPX", build: "pnp" },
+    });
+  });
+
+  it("omits placements when the cluster resources call fails", async () => {
+    const path = join(dir, "node-facts.json");
+    const call = async (_m: string, p: string) => {
+      if (p.startsWith("/cluster/")) throw new Error("boom");
+      return fixtures[p];
+    };
+    const facts = await refresher(call, path)();
+    expect(facts.placements).toBeUndefined();
+    expect(facts.nodes).toHaveLength(1);
   });
 
   it("degrades per-node when status/storage sub-calls fail", async () => {
