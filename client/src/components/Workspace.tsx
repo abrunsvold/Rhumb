@@ -3,7 +3,7 @@ import { Canvas } from "./Canvas";
 import { Rail, type RailSection } from "./Rail";
 import { GearPanel } from "./GearPanel";
 import { SessionsPanel } from "./SessionsPanel";
-import { SurfacesPanel } from "./SurfacesPanel";
+import { OntologyPanel } from "./OntologyPanel";
 import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
 import { useChatSessions } from "../hooks/useChatSessions";
@@ -64,7 +64,12 @@ export function Workspace({
             />
           )}
           {section === "surfaces" && (
-            <SurfacesPanel tabs={surfTabs} activeId={activeSurf} onSelect={setActiveSurf} />
+            <OntologyPanel
+              agentBase={agentBase}
+              surfaceTabs={surfTabs}
+              activeSurfaceId={activeSurf}
+              onSelectSurface={setActiveSurf}
+            />
           )}
         </aside>
       )}

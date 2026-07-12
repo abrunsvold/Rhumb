@@ -1,5 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { AgentEvent, RegistrySnapshot, SessionMeta } from "./types";
+import type { AgentEvent, OntologySnapshot, RegistrySnapshot, SessionMeta } from "./types";
 import type { TranscriptMessage } from "./agentEvents";
 
 export interface AppConfig {
@@ -167,4 +167,8 @@ export function openSessionStream(
   channel.onmessage = onEvent;
   void invoke("start_session_stream", { agentBase, sessionId, onEvent: channel });
   return () => void invoke("stop_session_stream", { sessionId });
+}
+
+export function getOntology(agentBase: string): Promise<OntologySnapshot> {
+  return invoke<OntologySnapshot>("get_ontology", { agentBase });
 }

@@ -11,6 +11,11 @@ vi.mock("../src/lib/tauri", () => ({
   uploadFile: vi.fn(),
   getTranscript: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
+  getOntology: vi.fn().mockResolvedValue({
+    nodes: [{ type: "dashboard", id: "dashboard-x1", title: "Sales", managed: "system", props: {}, relationships: [] }],
+    syncedAt: "2026-07-09T12:00:00.000Z",
+    syncError: null,
+  }),
   renameSession: vi.fn(),
   archiveSession: vi.fn(),
 }));
@@ -22,10 +27,10 @@ function setup() {
 }
 
 describe("Workspace shell", () => {
-  it("renders the rail with Sessions, Surfaces, and Connection buttons", () => {
+  it("renders the rail with Sessions, System map, and Connection buttons", () => {
     setup();
     expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Surfaces" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "System map" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Connection" })).toBeTruthy();
   });
 
@@ -51,8 +56,8 @@ describe("Workspace shell", () => {
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Surfaces" }));
-    const salesButton = screen.getByRole("button", { name: /sales/i });
+    await userEvent.click(screen.getByRole("button", { name: "System map" }));
+    const salesButton = await screen.findByRole("button", { name: /sales/i });
     expect(salesButton).toBeTruthy();
     expect(salesButton.getAttribute("aria-current")).toBe("true");
   });

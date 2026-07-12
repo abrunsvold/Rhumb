@@ -28,6 +28,7 @@ import { readManifest } from "./services/manifest.js";
 import { loadOntologyConfig } from "./ontology/config.js";
 import { createOntologyOps, ONTOLOGY_TOOL_NAMES } from "./ontology/ops.js";
 import { createOntologyServer } from "./ontology/server.js";
+import { createOntologyRouter } from "./ontology/router.js";
 import { syncSystem } from "./ontology/projector.js";
 import type { Express } from "express";
 
@@ -132,6 +133,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   if (infraPending) {
     app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
   }
+  app.use("/ontology", createOntologyRouter({ ops: ontologyOps }));
 
   return app;
 }

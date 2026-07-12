@@ -15,6 +15,8 @@ export type OntologyQuery =
 
 export interface OntologyOps {
   sync(): { added: number; updated: number; removed: number };
+  list(): OntologyNode[];
+  status(): { syncedAt: string | null; syncError: string | null };
   query(q: OntologyQuery): unknown;
   upsert(node: { id: string; title: string; subtype?: string; props?: Record<string, string> }): OntologyNode;
   link(from: string, edge: string, to: string): OntologyNode;
@@ -34,9 +36,23 @@ export const ONTOLOGY_TOOL_NAMES: readonly string[] = [
 export function createOntologyOps(deps: OntologyOpsDeps): OntologyOps {
   const allNodes = () => [...listNodes(deps.systemDir), ...listNodes(deps.domainDir)];
   const domainPath = (id: string) => join(deps.domainDir, `${id}.md`);
+  let syncedAt: string | null = null;
+  let syncError: string | null = null;
 
   return {
-    sync: deps.sync,
+    sync() {
+      try {
+        const r = deps.sync();
+        syncedAt = deps.now();
+        syncError = null;
+        return r;
+      } catch (e) {
+        syncError = e instanceof Error ? e.message : String(e);
+        throw e;
+      }
+    },
+    list: allNodes,
+    status: () => ({ syncedAt, syncError }),
     query(q) {
       const g = buildGraph(allNodes());
       if (q.kind === "node") return g.getNode(q.id) ?? null;

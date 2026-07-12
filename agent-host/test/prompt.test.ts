@@ -7,4 +7,10 @@ describe("RHUMB_PROMPT_APPEND", () => {
     expect(RHUMB_PROMPT_APPEND).toContain("Call tools directly");
     expect(RHUMB_PROMPT_APPEND).toContain("plain text");
   });
+
+  it("tells the agent the ontology tools exist and how the layers split", () => {
+    expect(RHUMB_PROMPT_APPEND).toMatch(/mcp__ontology__query/);
+    expect(RHUMB_PROMPT_APPEND).toMatch(/upsert_node/);
+    expect(RHUMB_PROMPT_APPEND).toMatch(/system layer/i);
+  });
 });

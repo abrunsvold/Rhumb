@@ -38,6 +38,15 @@ describe("buildApp wiring", () => {
     expect(res.status).toBe(200);
   });
 
+  it("serves GET /ontology with nodes and sync status", async () => {
+    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const res = await request(app).get("/ontology");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.nodes)).toBe(true);
+    expect(res.body).toHaveProperty("syncedAt");
+    expect(res.body).toHaveProperty("syncError");
+  });
+
   it("sessions disallow AskUserQuestion and append the Rhumb system prompt", async () => {
     let captured: Record<string, unknown> | undefined;
     const app = buildApp({
