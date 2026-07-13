@@ -47,6 +47,34 @@ describe("buildApp wiring", () => {
     expect(res.body).toHaveProperty("syncError");
   });
 
+  it("exposes no watchdog when RHUMB_WATCHDOG_MINUTES is unset", () => {
+    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true, watchdogMinutes: null } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    expect(app.locals.watchdog).toBeUndefined();
+  });
+
+  it("runs watchdog ticks as restricted read-only sessions", async () => {
+    let captured: { prompt?: string; options?: Record<string, unknown> } = {};
+    const app = buildApp({
+      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true, watchdogMinutes: 5 } as never,
+      query: (args: { prompt: string; options?: Record<string, unknown> }) => {
+        captured = args;
+        return (async function* () {
+          yield { type: "system", subtype: "init", session_id: "wd-1" };
+          yield { type: "result", result: "All healthy", is_error: false };
+        })();
+      },
+    });
+    const watchdog = app.locals.watchdog as { tick: () => Promise<string> };
+    expect(watchdog).toBeDefined();
+    expect(await watchdog.tick()).toBe("ran");
+    expect(captured.prompt).toContain("watchdog");
+    const disallowed = captured.options?.disallowedTools as string[];
+    expect(disallowed).toContain("Bash");
+    expect(disallowed).toContain("Write");
+    expect(disallowed).toContain("mcp__infra__destroy_vm");
+    expect(disallowed).not.toContain("mcp__ontology__query");
+  });
+
   it("sessions disallow AskUserQuestion and append the Rhumb system prompt", async () => {
     let captured: Record<string, unknown> | undefined;
     const app = buildApp({

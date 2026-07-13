@@ -17,7 +17,7 @@ import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.j
 import { createDdlFactsRefresher, readDdlFactsFile } from "./infra/ddlFacts.js";
 import { createAdminExecutor, createAdminQuery, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
-import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
+import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES, GATED_TOOLS } from "./infra/server.js";
 import { createInfraRouter } from "./infra/router.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
@@ -27,6 +27,7 @@ import { createServiceOps } from "./services/ops.js";
 import { createHealthGate, createNetProbes } from "./services/health.js";
 import { createDataSourceResolver } from "./services/datasource.js";
 import { readManifest } from "./services/manifest.js";
+import { createWatchdog, watchdogDisallowedTools, WATCHDOG_PROMPT } from "./watchdog.js";
 import { loadOntologyConfig } from "./ontology/config.js";
 import { createOntologyOps, ONTOLOGY_TOOL_NAMES } from "./ontology/ops.js";
 import { createOntologyServer } from "./ontology/server.js";
@@ -168,6 +169,28 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   }
   app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));
 
+  if (deps.config.watchdogMinutes) {
+    // A second manager over the same query fn, differing only in tool policy:
+    // mutation is structurally impossible (see watchdogDisallowedTools).
+    const watchdogManager = new SessionManager({
+      query: deps.query,
+      model: deps.config.model,
+      workspace: deps.config.workspace,
+      permissionMode: deps.config.permissionMode,
+      extraOptions: { ...sessionExtraOptions, disallowedTools: watchdogDisallowedTools(GATED_TOOLS) },
+    });
+    app.locals.watchdog = createWatchdog({
+      intervalMs: deps.config.watchdogMinutes * 60_000,
+      runTurn: () =>
+        watchdogManager.run(WATCHDOG_PROMPT, undefined, (e) => {
+          if (e.type === "session" && e.sessionId) {
+            sessions.upsertFromTurn(e.sessionId, `Watchdog — ${new Date().toISOString().slice(0, 16).replace("T", " ")}`);
+          }
+        }),
+      log: (m) => console.error(m),
+    });
+  }
+
   return app;
 }
 
@@ -184,6 +207,11 @@ export function main(): void {
   // present (loadConfig requires it), so no extra wiring is needed here.
   mkdirSync(config.workspace, { recursive: true });
   const app = buildApp({ config, query: realQuery });
+  // Timers start only here — buildApp callers (tests) drive tick() directly.
+  (app.locals.watchdog as { start(): void } | undefined)?.start();
+  if (config.watchdogMinutes) {
+    console.log(`[rhumb] watchdog: read-only reconcile session every ${config.watchdogMinutes}m`);
+  }
   const onListen = () => {
     const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
     console.log(`rhumb agent-host listening on ${bound}:${config.port} (model ${config.model})`);
