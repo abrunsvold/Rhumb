@@ -81,3 +81,34 @@ describe("infra router (parked entries)", () => {
     expect(pending.get("a1")?.status).toBe("denied");
   });
 });
+
+describe("infra router (parked resolution audit)", () => {
+  it("records approved and denied decisions for parked entries", async () => {
+    let n = 0;
+    const pending = new PendingActions({ now: () => "T", id: () => `a${++n}` });
+    const audits: string[] = [];
+    const a = express();
+    a.use(express.json());
+    a.use("/infra", createInfraRouter({
+      pending,
+      executeParked: async () => {},
+      auditResolution: (action, decision) => audits.push(`${action.tool}:${decision}`),
+    }));
+    pending.enqueue("start_service", { id: "p" }, { mode: "parked", proposedBy: "watchdog" });
+    pending.enqueue("redeploy_service", { id: "x" }, { mode: "parked", proposedBy: "watchdog" });
+    await request(a).post("/infra/pending/a1/resolve").send({ decision: "approve" });
+    await request(a).post("/infra/pending/a2/resolve").send({ decision: "deny" });
+    expect(audits).toEqual(["start_service:approved", "redeploy_service:denied"]);
+  });
+
+  it("does not audit blocking resolutions here (the gate already does)", async () => {
+    const pending = new PendingActions({ now: () => "T", id: () => "a1" });
+    const audits: string[] = [];
+    const a = express();
+    a.use(express.json());
+    a.use("/infra", createInfraRouter({ pending, auditResolution: (x, d) => audits.push(d) }));
+    pending.enqueue("destroy_vm", { id: 9 });
+    await request(a).post("/infra/pending/a1/resolve").send({ decision: "approve" });
+    expect(audits).toEqual([]);
+  });
+});
