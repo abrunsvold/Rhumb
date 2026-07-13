@@ -60,6 +60,18 @@ Set via the `RHUMB_PERMISSION_MODE` environment variable
   (`session` | `result` | `error` | `raw`).
 - `GET /healthz` — `{ ok: true }`.
 
+## Watchdog (scheduled read-only sessions)
+
+Set `RHUMB_WATCHDOG_MINUTES=<n>` and the host runs a reconcile-and-report
+session every *n* minutes: it syncs the ontology, checks every service's
+status and health endpoint, compares hosts/containers/node placement against
+the map, and files the report as a normal session titled `Watchdog — <stamp>`
+(read it in the client's Sessions panel). Mutation is structurally impossible
+in these sessions — `Bash`/`Write`/`Edit` and **all gated infra tools are
+disallowed outright**, not gated, so a watchdog turn can never sit blocked in
+the approval queue while nobody is watching. Unset the variable to turn the
+watchdog off.
+
 ## Driving and approving over HTTP
 
 In identity mode (the default), every control-plane request must arrive through
