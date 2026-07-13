@@ -36,3 +36,12 @@ describe("reducePending", () => {
     expect(list.map((x) => [x.origin, x.pendingId])).toEqual([["data", "p1"], ["infra", "a1"]]);
   });
 });
+
+describe("reducePending (proposals)", () => {
+  it("threads proposedBy through infra events and ignores unknown event kinds", () => {
+    const added = reducePending([], { type: "added", action: { pendingId: "a1", tool: "start_service", input: { id: "p" }, proposedBy: "watchdog" } }, "infra");
+    expect(added[0]).toMatchObject({ pendingId: "a1", tool: "start_service", proposedBy: "watchdog" });
+    const afterExec = reducePending(added, { type: "executed", action: { pendingId: "a1" } }, "infra");
+    expect(afterExec).toEqual(added); // unknown kinds leave the list untouched
+  });
+});

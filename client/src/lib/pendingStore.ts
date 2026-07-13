@@ -5,6 +5,7 @@ export interface PendingItem {
   op?: unknown;           // data op or infra input
   surfaceId?: string | null; // data
   tool?: string;          // infra
+  proposedBy?: string;    // infra: "interactive" | "watchdog"
 }
 
 export function reducePending(list: PendingItem[], event: unknown, origin: "data" | "infra"): PendingItem[] {
@@ -17,7 +18,10 @@ export function reducePending(list: PendingItem[], event: unknown, origin: "data
     const item: PendingItem =
       origin === "data"
         ? { origin, pendingId: raw.pendingId as string, source: raw.source as string, op: raw.op, surfaceId: (raw.surfaceId ?? null) as string | null }
-        : { origin, pendingId: raw.pendingId as string, tool: raw.tool as string, op: raw.input };
+        : {
+            origin, pendingId: raw.pendingId as string, tool: raw.tool as string, op: raw.input,
+            ...(typeof raw.proposedBy === "string" ? { proposedBy: raw.proposedBy } : {}),
+          };
     return [...list, item];
   }
   if (e.type === "resolved") return list.filter((x) => x.pendingId !== raw.pendingId);

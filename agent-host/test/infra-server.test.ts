@@ -229,3 +229,26 @@ describe("provision_database wires the DDL audit", () => {
     expect((dbExecs["reports"] ?? []).some((s) => s.includes("CREATE EVENT TRIGGER _rhumb_ddl_audit_end"))).toBe(true);
   });
 });
+
+describe("makeCanUseTool (parked mode)", () => {
+  it("returns immediately with deny + queued id, audits 'parked', records the proposer", async () => {
+    const pending = new PendingActions({ now: () => "T", id: () => "a1" });
+    const auditPath = join(dir, "a.jsonl");
+    const canUse = makeCanUseTool({ pending, auditPath, now: () => "T" }, { mode: "parked", proposedBy: "watchdog" });
+    const r = await canUse("mcp__infra__start_service", { id: "poller" }, {} as never);
+    expect(r.behavior).toBe("deny");
+    expect((r as { message: string }).message).toContain("a1");
+    expect((r as { message: string }).message).toContain("operator approv");
+    expect(pending.get("a1")).toMatchObject({ mode: "parked", status: "pending", proposedBy: "watchdog", tool: "start_service" });
+    const audit = readFileSync(auditPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit).toEqual([{ ts: "T", tool: "mcp__infra__start_service", input: { id: "poller" }, decision: "parked" }]);
+  });
+
+  it("still allows non-gated tools without parking", async () => {
+    const pending = new PendingActions({ now: () => "T", id: () => "a1" });
+    const canUse = makeCanUseTool({ pending, auditPath: join(dir, "a.jsonl"), now: () => "T" }, { mode: "parked" });
+    const r = await canUse("mcp__infra__list_vms", {}, {} as never);
+    expect(r.behavior).toBe("allow");
+    expect(pending.list()).toHaveLength(0);
+  });
+});
