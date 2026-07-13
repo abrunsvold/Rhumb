@@ -61,4 +61,9 @@ describe("WATCHDOG_PROMPT", () => {
     expect(WATCHDOG_PROMPT).toMatch(/service_status/);
     expect(WATCHDOG_PROMPT).toMatch(/cannot mutate|read-only/i);
   });
+
+  it("spells out the exact type vocabulary (first live run queried a nonexistent type)", () => {
+    expect(WATCHDOG_PROMPT).toMatch(/node, service, container, datasource, dashboard/);
+    expect(WATCHDOG_PROMPT).toMatch(/type entity/);
+  });
 });
