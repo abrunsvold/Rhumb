@@ -7,6 +7,7 @@ export interface Config {
   controlToken?: string;
   allowedUsers: string[];
   insecureDev: boolean;
+  watchdogMinutes: number | null;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -69,5 +70,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
     allowedUsers,
     insecureDev,
+    watchdogMinutes: (() => {
+      const n = Number.parseInt(env.RHUMB_WATCHDOG_MINUTES ?? "", 10);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    })(),
   };
 }

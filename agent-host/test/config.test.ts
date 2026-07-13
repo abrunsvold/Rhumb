@@ -109,3 +109,16 @@ describe("loadServiceConfig healthGateMs", () => {
     expect(cfg?.healthGateMs).toBe(90_000);
   });
 });
+
+describe("RHUMB_WATCHDOG_MINUTES", () => {
+  const base = { CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_INSECURE_DEV: "1" };
+  it("parses a positive integer interval", () => {
+    expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "30" }).watchdogMinutes).toBe(30);
+  });
+  it("is off when unset, zero, negative, or garbage", () => {
+    expect(loadConfig({ ...base }).watchdogMinutes).toBeNull();
+    expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "0" }).watchdogMinutes).toBeNull();
+    expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "-5" }).watchdogMinutes).toBeNull();
+    expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "soon" }).watchdogMinutes).toBeNull();
+  });
+});
