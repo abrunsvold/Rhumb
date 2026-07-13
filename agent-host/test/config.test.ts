@@ -23,6 +23,7 @@ describe("loadConfig", () => {
       permissionMode: "acceptEdits",
       allowedUsers: [],
       insecureDev: true,
+      watchdogMinutes: null,
     });
   });
 
@@ -42,6 +43,7 @@ describe("loadConfig", () => {
       permissionMode: "acceptEdits",
       allowedUsers: [],
       insecureDev: true,
+      watchdogMinutes: null,
     });
   });
 
