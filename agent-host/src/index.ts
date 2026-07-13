@@ -17,7 +17,10 @@ import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.j
 import { createDdlFactsRefresher, readDdlFactsFile } from "./infra/ddlFacts.js";
 import { createAdminExecutor, createAdminQuery, connStringForDb } from "./infra/pgAdmin.js";
 import { PendingActions } from "./infra/pending.js";
-import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES, GATED_TOOLS } from "./infra/server.js";
+import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
+import { createGatedExecutor } from "./infra/executor.js";
+import { appendInfraAudit } from "./infra/audit.js";
+import type { PendingAction } from "./infra/types.js";
 import { createInfraRouter } from "./infra/router.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
@@ -41,6 +44,8 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   sessionExtraOptions.systemPrompt = { type: "preset", preset: "claude_code", append: RHUMB_PROMPT_APPEND };
   const infra = loadInfraConfig(process.env);
   let infraPending: PendingActions | undefined;
+  let executeParked: ((a: PendingAction) => Promise<void>) | undefined;
+  let watchdogCanUseTool: unknown;
 
   const onto = loadOntologyConfig(process.env);
   const readJson = <T>(p: string, fallback: T): T => {
@@ -97,7 +102,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   if (infra.proxmox && infra.pgAdmin) {
     const pgAdmin = infra.pgAdmin;
     const now = () => new Date().toISOString();
-    const pending = new PendingActions({ now, id: () => randomUUID() });
+    const pending = new PendingActions({ now, id: () => randomUUID(), persistPath: joinPath(deps.config.workspace, "pending-actions.json") });
     const svcCfg = loadServiceConfig(process.env);
     const serviceOps = svcCfg
       ? (() => {
@@ -113,7 +118,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
           });
         })()
       : undefined;
-    const server = createInfraServer({
+    const infraDeps = {
       proxmox: createProxmoxClient(infra.proxmox),
       admin: createAdminExecutor(pgAdmin.connectionString),
       dataSourcesPath: infra.dataSourcesPath,
@@ -129,10 +134,27 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         void refreshExternal?.().catch(() => {});
         try { ontologyOps.sync(); } catch { /* never fail the infra op */ }
       },
-    });
+    };
+    const server = createInfraServer(infraDeps);
     sessionExtraOptions.mcpServers = { infra: server };
     sessionExtraOptions.allowedTools = [...READ_TOOL_NAMES];
     sessionExtraOptions.canUseTool = makeCanUseTool({ pending, auditPath: infra.auditPath, now });
+    // Unattended (watchdog) sessions park proposals instead of blocking.
+    watchdogCanUseTool = makeCanUseTool({ pending, auditPath: infra.auditPath, now }, { mode: "parked", proposedBy: "watchdog" });
+    // Approved parked entries execute here, outside any turn, with the same
+    // executor the in-turn tool handlers use.
+    const gatedExecutor = createGatedExecutor(infraDeps);
+    executeParked = async (a) => {
+      try {
+        const result = await gatedExecutor.execute(a.tool, a.input);
+        pending.recordOutcome(a.pendingId, "executed", result);
+        appendInfraAudit(infra.auditPath, { ts: now(), tool: `mcp__infra__${a.tool}`, input: a.input, decision: "executed", result });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        pending.recordOutcome(a.pendingId, "failed", msg);
+        appendInfraAudit(infra.auditPath, { ts: now(), tool: `mcp__infra__${a.tool}`, input: a.input, decision: "error", error: msg });
+      }
+    };
     infraPending = pending;
   }
 
@@ -165,7 +187,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   });
 
   if (infraPending) {
-    app.use("/infra", express.json(), createInfraRouter({ pending: infraPending }));
+    app.use("/infra", express.json(), createInfraRouter({ pending: infraPending, executeParked }));
   }
   app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));
 
@@ -177,7 +199,13 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       model: deps.config.model,
       workspace: deps.config.workspace,
       permissionMode: deps.config.permissionMode,
-      extraOptions: { ...sessionExtraOptions, disallowedTools: watchdogDisallowedTools(GATED_TOOLS) },
+      extraOptions: {
+        ...sessionExtraOptions,
+        disallowedTools: watchdogDisallowedTools(),
+        // Parked gate: proposals queue for approval instead of blocking the
+        // unattended turn. Only present when infra is configured at all.
+        ...(watchdogCanUseTool ? { canUseTool: watchdogCanUseTool } : {}),
+      },
     });
     app.locals.watchdog = createWatchdog({
       intervalMs: deps.config.watchdogMinutes * 60_000,

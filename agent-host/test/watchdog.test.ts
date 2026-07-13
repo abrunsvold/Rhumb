@@ -43,14 +43,18 @@ describe("createWatchdog", () => {
 });
 
 describe("watchdogDisallowedTools", () => {
-  it("disallows every mutating built-in and every gated infra tool, none of the read tools", () => {
-    const list = watchdogDisallowedTools(GATED_TOOLS);
+  it("disallows mutating built-ins and both destroy tools; proposable gated tools flow to the parked gate", () => {
+    const list = watchdogDisallowedTools();
     for (const t of ["AskUserQuestion", "Bash", "Write", "Edit", "NotebookEdit"]) expect(list).toContain(t);
-    for (const g of GATED_TOOLS) expect(list).toContain(`mcp__infra__${g}`);
     expect(list).toContain("mcp__infra__destroy_vm");
+    expect(list).toContain("mcp__infra__destroy_service");
+    // remediation tools are NOT disallowed — they park for approval instead
+    expect(list).not.toContain("mcp__infra__start_service");
+    expect(list).not.toContain("mcp__infra__redeploy_service");
     expect(list).not.toContain("mcp__ontology__query");
     expect(list).not.toContain("mcp__infra__service_status");
     expect(list).not.toContain("Read");
+    expect(GATED_TOOLS.length).toBeGreaterThan(0); // vocabulary still exported for the gate itself
   });
 });
 
@@ -65,5 +69,12 @@ describe("WATCHDOG_PROMPT", () => {
   it("spells out the exact type vocabulary (first live run queried a nonexistent type)", () => {
     expect(WATCHDOG_PROMPT).toMatch(/node, service, container, datasource, dashboard/);
     expect(WATCHDOG_PROMPT).toMatch(/type entity/);
+  });
+
+  it("instructs proposal behavior: queue once, never retry, note ids", () => {
+    expect(WATCHDOG_PROMPT).toMatch(/operator approval/);
+    expect(WATCHDOG_PROMPT).toMatch(/Never retry/);
+    expect(WATCHDOG_PROMPT).toMatch(/proposal id/);
+    expect(WATCHDOG_PROMPT).toMatch(/destroy operations are unavailable/i);
   });
 });

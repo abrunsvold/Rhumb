@@ -19,12 +19,26 @@ type CanUseTool = (toolName: string, input: Record<string, unknown>, opts: unkno
 
 const GATED_TOOL_NAMES = new Set(GATED_TOOLS.map((t) => `mcp__infra__${t}`));
 
-export function makeCanUseTool(deps: { pending: PendingActions; auditPath: string; now: () => string }): CanUseTool {
+export function makeCanUseTool(
+  deps: { pending: PendingActions; auditPath: string; now: () => string },
+  opts?: { mode?: "blocking" | "parked"; proposedBy?: "interactive" | "watchdog" },
+): CanUseTool {
   return async (toolName, input) => {
     if (!GATED_TOOL_NAMES.has(toolName)) {
       return { behavior: "allow", updatedInput: input };
     }
     const gatedTool = toolName.replace("mcp__infra__", "") as GatedTool;
+    if (opts?.mode === "parked") {
+      // Unattended sessions park proposals instead of blocking on a promise
+      // nobody may ever resolve; execution happens on operator approval via
+      // the infra router.
+      const { action } = deps.pending.enqueue(gatedTool, input, { mode: "parked", proposedBy: opts.proposedBy ?? "interactive" });
+      appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input, decision: "parked" });
+      return {
+        behavior: "deny",
+        message: `Queued for operator approval as ${action.pendingId}. It will execute only if the operator approves — do not retry; note the proposal in your report.`,
+      };
+    }
     const { decision } = deps.pending.enqueue(gatedTool, input);
     let d: "approve" | "deny";
     try {
