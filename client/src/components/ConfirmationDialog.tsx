@@ -39,6 +39,9 @@ export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: st
           )}
         </div>
         {current.origin === "data" && <p className="text-xs text-muted">Surface: {current.surfaceId ?? "unknown"}</p>}
+        {current.origin === "infra" && current.proposedBy === "watchdog" && (
+          <p className="text-xs text-muted">Proposed by the watchdog — executes only if you approve.</p>
+        )}
         <pre className="max-h-56 overflow-auto rounded border border-line bg-raised p-2 font-mono text-xs">
           {JSON.stringify(current.op, null, 2)}
         </pre>

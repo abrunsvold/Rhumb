@@ -51,3 +51,18 @@ describe("ConfirmationDialog", () => {
     expect(infraResolveSpy).toHaveBeenCalledWith("http://a:8787", "a1", "approve");
   });
 });
+
+describe("ConfirmationDialog (watchdog proposals)", () => {
+  beforeEach(() => { vi.clearAllMocks(); capturedOnPending = null; capturedInfra = null; });
+
+  it("labels a watchdog proposal and omits the label for interactive actions", async () => {
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedInfra?.({ type: "added", action: { pendingId: "w1", tool: "start_service", input: { id: "poller" }, proposedBy: "watchdog" } });
+    expect(await screen.findByText(/proposed by the watchdog/i)).toBeTruthy();
+
+    capturedInfra?.({ type: "resolved", action: { pendingId: "w1" } });
+    capturedInfra?.({ type: "added", action: { pendingId: "w2", tool: "destroy_vm", input: { id: 3 }, proposedBy: "interactive" } });
+    expect(await screen.findByText(/destroy_vm/)).toBeTruthy();
+    expect(screen.queryByText(/proposed by the watchdog/i)).toBeNull();
+  });
+});
