@@ -34,18 +34,28 @@ export type GatedTool =
   | "create_vm" | "start_vm" | "stop_vm" | "resize_vm" | "destroy_vm" | "provision_database"
   | "spawn_service" | "stop_service" | "start_service" | "destroy_service" | "redeploy_service";
 
+export type PendingMode = "blocking" | "parked";
+export type PendingStatus = "pending" | "approved" | "denied" | "executed" | "failed" | "expired";
+export type Proposer = "interactive" | "watchdog";
+
 export interface PendingAction {
   pendingId: string;
   tool: GatedTool;
   input: Record<string, unknown>;
   createdAt: string;
+  mode: PendingMode;
+  status: PendingStatus;
+  proposedBy: Proposer;
+  resolvedAt?: string;
+  result?: string;
+  error?: string;
 }
 
 export interface InfraAuditEntry {
   ts: string;
   tool: string;
   input: Record<string, unknown>;
-  decision: "approved" | "denied" | "error";
+  decision: "approved" | "denied" | "error" | "parked" | "executed";
   result?: unknown;
   error?: string;
 }
