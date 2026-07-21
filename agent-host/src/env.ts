@@ -4,7 +4,7 @@ import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
  *  spawned Claude Code process authenticates the way the operator configured and
  *  cannot read the operator's infrastructure secrets.
  *
- *  Three classes are removed before `credentialEnv` is applied:
+ *  Two classes are removed before `credentialEnv` is applied:
  *   - every credential var in PROVIDER_CREDENTIAL_VARS — an ambient value must
  *     never reach the agent. This is an allowlist, not a blocklist: notably an
  *     ambient ANTHROPIC_BASE_URL would otherwise silently redirect all model
@@ -25,5 +25,24 @@ export function sanitizedEnv(
   for (const key of Object.keys(env)) {
     if (key.startsWith("RHUMB_")) delete env[key];
   }
+
+  // Defense in depth: the two passes above strip everything from `base`, but
+  // the security guarantee still depends on `credentialEnv` itself staying
+  // narrow. `provider.ts` builds it narrowly today, but nothing stops a future
+  // caller from spreading a broader config object into it and silently
+  // reintroducing a RHUMB_* var or an unlisted credential. Enforce the
+  // allowlist here too, and fail closed (throw) rather than silently drop —
+  // a dropped credential would surface later as a confusing auth failure at
+  // runtime, whereas a throw surfaces the mistake immediately at startup,
+  // where the operator is looking.
+  for (const key of Object.keys(credentialEnv)) {
+    if (!(PROVIDER_CREDENTIAL_VARS as readonly string[]).includes(key)) {
+      throw new Error(
+        `sanitizedEnv: credentialEnv contains disallowed key "${key}" — only ` +
+          `${PROVIDER_CREDENTIAL_VARS.join(", ")} may be injected into the agent's environment.`,
+      );
+    }
+  }
+
   return { ...env, ...credentialEnv };
 }

@@ -65,4 +65,19 @@ describe("sanitizedEnv", () => {
     expect(input.ANTHROPIC_API_KEY).toBe("sk-ant-test");
     expect(input.RHUMB_PG_ADMIN).toBe("pg");
   });
+
+  it("throws if credentialEnv carries a RHUMB_* var", () => {
+    expect(() =>
+      sanitizedEnv(
+        { PATH: "/usr/bin" },
+        { CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_PG_ADMIN: "postgres://admin:pw@pg:5432/postgres" },
+      ),
+    ).toThrow(/disallowed key "RHUMB_PG_ADMIN"/);
+  });
+
+  it("throws if credentialEnv carries a key outside PROVIDER_CREDENTIAL_VARS", () => {
+    expect(() =>
+      sanitizedEnv({ PATH: "/usr/bin" }, { ANTHROPIC_API_KEY: "sk-ant-test", SOME_OTHER_SECRET: "x" }),
+    ).toThrow(/disallowed key "SOME_OTHER_SECRET"/);
+  });
 });
