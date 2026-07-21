@@ -164,7 +164,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
 
   const manager = new SessionManager({
     query: deps.query,
-    model: deps.config.model,
+    model: deps.config.provider.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
@@ -196,7 +196,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // mutation is structurally impossible (see watchdogDisallowedTools).
     const watchdogManager = new SessionManager({
       query: deps.query,
-      model: deps.config.model,
+      model: deps.config.provider.model,
       workspace: deps.config.workspace,
       permissionMode: deps.config.permissionMode,
       extraOptions: {
@@ -222,19 +222,23 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   return app;
 }
 
-// Wrap the SDK's query so it matches our narrowed QueryFn signature.
-const realQuery: QueryFn = (args) =>
-  sdkQuery({
-    ...args,
-    options: { ...args.options, env: sanitizedEnv(process.env) },
-  } as never);
+// Wrap the SDK's query so it matches our narrowed QueryFn signature. The env we
+// hand the SDK is what the spawned Claude Code process sees: the selected
+// provider's credentials and nothing else (see sanitizedEnv).
+export function createRealQuery(credentialEnv: Record<string, string>): QueryFn {
+  return (args) =>
+    sdkQuery({
+      ...args,
+      options: { ...args.options, env: sanitizedEnv(process.env, credentialEnv) },
+    } as never);
+}
 
 export function main(): void {
   const config = loadConfig(process.env);
-  // The SDK reads CLAUDE_CODE_OAUTH_TOKEN from the environment; it is already
-  // present (loadConfig requires it), so no extra wiring is needed here.
+  // Credentials reach the SDK only through the env we build per query — the
+  // host's own process env is never passed through unfiltered.
   mkdirSync(config.workspace, { recursive: true });
-  const app = buildApp({ config, query: realQuery });
+  const app = buildApp({ config, query: createRealQuery(config.provider.credentialEnv) });
   // Timers start only here — buildApp callers (tests) drive tick() directly.
   (app.locals.watchdog as { start(): void } | undefined)?.start();
   if (config.watchdogMinutes) {
@@ -242,7 +246,10 @@ export function main(): void {
   }
   const onListen = () => {
     const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
-    console.log(`rhumb agent-host listening on ${bound}:${config.port} (model ${config.model})`);
+    console.log(
+      `rhumb agent-host listening on ${bound}:${config.port} ` +
+        `(provider ${config.provider.id}, model ${config.provider.model})`,
+    );
     if (config.insecureDev) {
       console.warn(
         "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +
