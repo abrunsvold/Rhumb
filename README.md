@@ -10,7 +10,7 @@ Most ways of working with a coding agent leave you with a chat transcript. The a
 
 ## Why Rhumb
 
-- **Use your existing Claude subscription.** Server-side Claude Code runs under its normal interactive login — not pay-per-token API billing.
+- **Use your existing Claude subscription — or an API key or gateway instead.** In the default mode, server-side Claude Code runs under your normal interactive login rather than pay-per-token billing; api-key and gateway modes are also supported (see below).
 - **Outputs are durable, not disposable.** The agent builds dashboards and apps that stay running and reachable at stable URLs.
 - **Your compute, your data.** Nothing lives in a hosted SaaS. Everything durable — the agent, your data, the apps it builds — runs on a box you control.
 - **The agent operates your infrastructure.** On the roadmap: it can manage VMs and provision databases to support real work, not just read data.
@@ -24,7 +24,7 @@ Most ways of working with a coding agent leave you with a chat transcript. The a
 
 What sets Rhumb apart is that the agent **stands up the backend *and* the UI *and* registers them together**, on a box you own — you describe the tool, you don't wire it up yourself.
 
-The on-ramp is homelab-grade (Proxmox + Tailscale + your own subscription), so the honest framing is *fast internal tools for people who already self-host* — not for everyone.
+The on-ramp is homelab-grade (Proxmox + Tailscale + your own Claude credentials), so the honest framing is *fast internal tools for people who already self-host* — not for everyone.
 
 **→ See [docs/positioning.md](docs/positioning.md)** for the full persona and 8 example tools (each mapping to a Rhumb subsystem).
 
@@ -71,7 +71,7 @@ Two sides, joined over Tailscale:
                                          └──────────────────────────────┘
 ```
 
-**Principle:** everything durable lives **server-side**. The client is a rich remote window; the heavy lifting and your Claude subscription stay on the box where the compute is. Subsystems are joined by a shared `RHUMB_WORKSPACE` folder — a file-as-contract: the agent writes surfaces into it, the dashboard host serves them.
+**Principle:** everything durable lives **server-side**. The client is a rich remote window; the heavy lifting and your Claude credentials stay on the box where the compute is. Subsystems are joined by a shared `RHUMB_WORKSPACE` folder — a file-as-contract: the agent writes surfaces into it, the dashboard host serves them.
 
 ### Packages
 
@@ -93,7 +93,7 @@ claude setup-token      # subscription mode only — the installer also accepts 
 sudo scripts/install.sh
 ```
 
-The installer checks prerequisites (telling you exactly what to fix if one is missing), auto-detects your tailnet login for the access allowlist, prompts for the Claude token, builds both hosts, mounts them behind `tailscale serve`, and installs systemd units (`rhumb-agent`, `rhumb-dashboard`) so everything starts on boot and restarts on crash. When it finishes it prints your Rhumb URL.
+The installer checks prerequisites (telling you exactly what to fix if one is missing), auto-detects your tailnet login for the access allowlist, prompts for whichever Claude credentials your selected mode needs (an OAuth token, an API key, or a gateway URL), builds both hosts, mounts them behind `tailscale serve`, and installs systemd units (`rhumb-agent`, `rhumb-dashboard`) so everything starts on boot and restarts on crash. When it finishes it prints your Rhumb URL.
 
 All configuration lives in one file, `/etc/rhumb/rhumb.env`, with the optional settings (Postgres provisioning, spawned-service LXC knobs, ontology paths) documented inline as commented-out lines. The installer is idempotent: after `git pull`, re-run it to rebuild and restart — your configuration is preserved. If an ambient shell variable (e.g. an exported `ANTHROPIC_API_KEY`) differs from the value already persisted in `rhumb.env`, the installer warns by name — never printing a secret's value — and uses the ambient one, so a re-run can't silently clobber a saved credential without you noticing.
 
