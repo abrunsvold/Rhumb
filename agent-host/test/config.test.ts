@@ -1,25 +1,29 @@
 import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { loadServiceConfig } from "../src/services/config.js";
+import { loadProvider } from "../src/provider.js";
 
 describe("loadConfig", () => {
-  it("throws when CLAUDE_CODE_OAUTH_TOKEN is missing", () => {
+  it("throws when no credential is present for the default provider", () => {
     expect(() => loadConfig({})).toThrow(/CLAUDE_CODE_OAUTH_TOKEN/);
   });
 
-  it("rejects an API key as a substitute for the subscription token", () => {
-    expect(() => loadConfig({ ANTHROPIC_API_KEY: "sk-ant-xxx" })).toThrow(
-      /CLAUDE_CODE_OAUTH_TOKEN/,
-    );
+  it("accepts an API key when that provider is selected", () => {
+    const cfg = loadConfig({
+      RHUMB_LLM_PROVIDER: "api-key",
+      ANTHROPIC_API_KEY: "sk-ant-xxx",
+      RHUMB_INSECURE_DEV: "1",
+    });
+    expect(cfg.provider.id).toBe("api-key");
+    expect(cfg.provider.credentialEnv).toEqual({ ANTHROPIC_API_KEY: "sk-ant-xxx" });
   });
 
   it("returns defaults when only the token is set", () => {
     const cfg = loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_INSECURE_DEV: "1" });
     expect(cfg).toEqual({
       port: 8787,
-      model: "claude-opus-4-8",
       workspace: "./workspace",
-      oauthToken: "tok",
+      provider: { id: "subscription", model: "claude-opus-4-8", credentialEnv: { CLAUDE_CODE_OAUTH_TOKEN: "tok" } },
       permissionMode: "acceptEdits",
       allowedUsers: [],
       insecureDev: true,
@@ -37,9 +41,8 @@ describe("loadConfig", () => {
     });
     expect(cfg).toEqual({
       port: 9000,
-      model: "claude-sonnet-4-6",
       workspace: "/srv/ws",
-      oauthToken: "tok",
+      provider: { id: "subscription", model: "claude-sonnet-4-6", credentialEnv: { CLAUDE_CODE_OAUTH_TOKEN: "tok" } },
       permissionMode: "acceptEdits",
       allowedUsers: [],
       insecureDev: true,

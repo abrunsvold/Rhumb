@@ -1,8 +1,9 @@
+import { loadProvider, type ProviderConfig } from "./provider.js";
+
 export interface Config {
   port: number;
-  model: string;
   workspace: string;
-  oauthToken: string;
+  provider: ProviderConfig;
   permissionMode: string;
   controlToken?: string;
   allowedUsers: string[];
@@ -18,13 +19,7 @@ const VALID_PERMISSION_MODES = new Set([
 ]);
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const oauthToken = env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
-  if (!oauthToken) {
-    throw new Error(
-      "CLAUDE_CODE_OAUTH_TOKEN is required. Generate one with `claude setup-token` " +
-        "(uses your Claude subscription). Rhumb does not use ANTHROPIC_API_KEY.",
-    );
-  }
+  const provider = loadProvider(env);
   let port = 8787;
   if (env.RHUMB_PORT) {
     const parsed = Number.parseInt(env.RHUMB_PORT, 10);
@@ -63,9 +58,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
   return {
     port,
-    model: env.RHUMB_MODEL?.trim() || "claude-opus-4-8",
     workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
-    oauthToken,
+    provider,
     permissionMode,
     controlToken: env.RHUMB_CONTROL_TOKEN?.trim() || undefined,
     allowedUsers,
