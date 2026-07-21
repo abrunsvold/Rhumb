@@ -106,6 +106,56 @@ cp "$STAGE_GW/rhumb.env" "$STAGE_GW/rhumb.env.first"
 scripts/install.sh --dry-run --yes --stage-dir "$STAGE_GW" >/dev/null
 cmp -s "$STAGE_GW/rhumb.env.first" "$STAGE_GW/rhumb.env" || fail "gateway re-run not byte-identical"
 
+# --- ambient env value overriding a persisted one is a deliberate feature
+# (--yes / CI seeding) but must warn visibly when it silently replaces a
+# *different* persisted value; must stay silent when ambient == persisted or
+# ambient is absent; and must never echo a secret's value either way ---
+STAGE_WARN="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://correct-gateway.internal:4000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-secret-1 \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" >/dev/null
+
+# mismatched ambient ANTHROPIC_BASE_URL (non-secret): warns, names both values,
+# and the ambient value still wins (documented precedence, not redesigned here)
+warn_out="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000 \
+RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
+printf '%s\n' "$warn_out" | grep -q 'ANTHROPIC_BASE_URL' \
+  || fail "no warning for mismatched ambient ANTHROPIC_BASE_URL"
+printf '%s\n' "$warn_out" | grep -q 'correct-gateway.internal:4000' \
+  || fail "warning should name the persisted (non-secret) value being overridden"
+grep -q '^ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000$' "$STAGE_WARN/rhumb.env" \
+  || fail "ambient value should still win over persisted (precedence is unchanged)"
+
+# mismatched ambient ANTHROPIC_AUTH_TOKEN (secret): warns by name only, never
+# echoing either the old or new token value
+warn_out="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-secret-2 RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
+printf '%s\n' "$warn_out" | grep -q 'ANTHROPIC_AUTH_TOKEN' \
+  || fail "no warning for mismatched ambient ANTHROPIC_AUTH_TOKEN"
+printf '%s\n' "$warn_out" | grep -q 'bearer-secret' \
+  && fail "secret value leaked into warning output"
+
+# ambient ANTHROPIC_BASE_URL now matches the persisted value -> no warning
+warn_out="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000 \
+RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
+printf '%s\n' "$warn_out" | grep -q 'ANTHROPIC_BASE_URL is set in the environment' \
+  && fail "warning fired even though ambient value matches the persisted value"
+
+# no ambient credential vars at all -> silent, and re-run stays byte-identical
+cp "$STAGE_WARN/rhumb.env" "$STAGE_WARN/rhumb.env.before"
+warn_out="$(RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
+printf '%s\n' "$warn_out" | grep -qE 'ANTHROPIC_BASE_URL|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN' \
+  && fail "warning fired even though no ambient credential vars were set"
+cmp -s "$STAGE_WARN/rhumb.env.before" "$STAGE_WARN/rhumb.env" \
+  || fail "re-run without ambient vars should be byte-identical"
+
+rm -rf "$STAGE_WARN"
+
 # --- unknown provider is rejected ---
 if RHUMB_LLM_PROVIDER=ollama RHUMB_ALLOWED_USERS=bob@github \
    scripts/install.sh --dry-run --yes --stage-dir "$(mktemp -d)" >/dev/null 2>&1; then

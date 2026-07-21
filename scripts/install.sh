@@ -145,6 +145,31 @@ if [ -f "$ENV_FILE" ]; then
   fi
 fi
 
+# warn_if_overridden <var-name> <persisted-value> [secret]
+# Ambient exported env vars deliberately take precedence over the value
+# persisted in rhumb.env (that's how --yes and CI installs supply values) —
+# but ANTHROPIC_* are standard Anthropic SDK/CLI var names, so they're often
+# already exported in a developer's shell for an unrelated reason. Warn
+# whenever that ambient value silently overrides a different persisted one,
+# so a re-run doesn't clobber e.g. a gateway URL without anyone noticing.
+# Never echo secret values — name the variable and note that it differs.
+warn_if_overridden() {
+  local __var="$1" __persisted="$2" __secret="${3:-}" __ambient
+  __ambient="${!__var:-}"
+  [ -n "$__ambient" ] || return 0
+  [ -n "$__persisted" ] || return 0
+  [ "$__ambient" != "$__persisted" ] || return 0
+  if [ -n "$__secret" ]; then
+    warn "$__var is set in the environment and differs from the value persisted in $ENV_FILE — using the environment value, overriding the saved one"
+  else
+    warn "$__var is set in the environment (\"$__ambient\") and differs from the persisted value (\"$__persisted\") in $ENV_FILE — using the environment value"
+  fi
+}
+warn_if_overridden CLAUDE_CODE_OAUTH_TOKEN "$CUR_TOKEN" secret
+warn_if_overridden ANTHROPIC_API_KEY "$CUR_API_KEY" secret
+warn_if_overridden ANTHROPIC_BASE_URL "$CUR_BASE_URL"
+warn_if_overridden ANTHROPIC_AUTH_TOKEN "$CUR_AUTH_TOKEN" secret
+
 # ---------------------------------------------------------------- prompts
 # prompt <var-name> <label> <default> [secret]
 # --yes or non-tty: takes the default. Otherwise interactive; empty keeps default.
