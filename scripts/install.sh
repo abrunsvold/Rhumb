@@ -153,6 +153,12 @@ fi
 # whenever that ambient value silently overrides a different persisted one,
 # so a re-run doesn't clobber e.g. a gateway URL without anyone noticing.
 # Never echo secret values — name the variable and note that it differs.
+#
+# Only call this for the credential var(s) that belong to the mode selected
+# for THIS run (see the case block below, after RHUMB_LLM_PROVIDER is
+# resolved). A var belonging to a *different* mode isn't being "overridden"
+# — the writer simply won't emit it for the selected mode — so this
+# wording would be actively misleading if fired unconditionally.
 warn_if_overridden() {
   local __var="$1" __persisted="$2" __secret="${3:-}" __ambient
   __ambient="${!__var:-}"
@@ -165,10 +171,6 @@ warn_if_overridden() {
     warn "$__var is set in the environment (\"$__ambient\") and differs from the persisted value (\"$__persisted\") in $ENV_FILE — using the environment value"
   fi
 }
-warn_if_overridden CLAUDE_CODE_OAUTH_TOKEN "$CUR_TOKEN" secret
-warn_if_overridden ANTHROPIC_API_KEY "$CUR_API_KEY" secret
-warn_if_overridden ANTHROPIC_BASE_URL "$CUR_BASE_URL"
-warn_if_overridden ANTHROPIC_AUTH_TOKEN "$CUR_AUTH_TOKEN" secret
 
 # ---------------------------------------------------------------- prompts
 # prompt <var-name> <label> <default> [secret]
@@ -197,22 +199,26 @@ prompt RHUMB_LLM_PROVIDER "Credential mode (subscription|api-key|gateway)" \
   "${RHUMB_LLM_PROVIDER:-${CUR_PROVIDER:-subscription}}"
 case "$RHUMB_LLM_PROVIDER" in
   subscription)
+    warn_if_overridden CLAUDE_CODE_OAUTH_TOKEN "$CUR_TOKEN" secret
     prompt CLAUDE_CODE_OAUTH_TOKEN "Claude OAuth token (from 'claude setup-token')" \
       "${CLAUDE_CODE_OAUTH_TOKEN:-$CUR_TOKEN}" secret
     [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] \
       || die "CLAUDE_CODE_OAUTH_TOKEN is required — run 'claude setup-token' on any machine, then re-run the installer"
     ;;
   api-key)
+    warn_if_overridden ANTHROPIC_API_KEY "$CUR_API_KEY" secret
     prompt ANTHROPIC_API_KEY "Anthropic API key" \
       "${ANTHROPIC_API_KEY:-$CUR_API_KEY}" secret
     [ -n "$ANTHROPIC_API_KEY" ] \
       || die "ANTHROPIC_API_KEY is required for RHUMB_LLM_PROVIDER=api-key — create one at console.anthropic.com"
     ;;
   gateway)
+    warn_if_overridden ANTHROPIC_BASE_URL "$CUR_BASE_URL"
     prompt ANTHROPIC_BASE_URL "Gateway base URL (Anthropic-compatible endpoint)" \
       "${ANTHROPIC_BASE_URL:-$CUR_BASE_URL}"
     [ -n "$ANTHROPIC_BASE_URL" ] \
       || die "ANTHROPIC_BASE_URL is required for RHUMB_LLM_PROVIDER=gateway — see docs/setup-manual.md"
+    warn_if_overridden ANTHROPIC_AUTH_TOKEN "$CUR_AUTH_TOKEN" secret
     prompt ANTHROPIC_AUTH_TOKEN "Gateway auth token (blank if the gateway needs none)" \
       "${ANTHROPIC_AUTH_TOKEN:-$CUR_AUTH_TOKEN}" secret
     ;;

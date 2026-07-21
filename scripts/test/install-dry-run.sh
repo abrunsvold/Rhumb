@@ -16,9 +16,13 @@ trap 'rm -rf "$STAGE"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # --- fresh install (dry-run, all defaults, seeded secrets) ---
-CLAUDE_CODE_OAUTH_TOKEN=tok-test-123 \
+# Nothing is persisted yet, so no override warning should fire no matter
+# what — assert stderr is clean, not just that the run succeeds.
+fresh_err="$(CLAUDE_CODE_OAUTH_TOKEN=tok-test-123 \
 RHUMB_ALLOWED_USERS=alice@github \
-  scripts/install.sh --dry-run --yes --stage-dir "$STAGE" >/dev/null
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE" 2>&1 >/dev/null)"
+printf '%s\n' "$fresh_err" | grep -qE 'overriding the saved one|is set in the environment' \
+  && fail "fresh install (nothing persisted yet) should never emit an override warning"
 
 grep -q '^CLAUDE_CODE_OAUTH_TOKEN=tok-test-123$' "$STAGE/rhumb.env" || fail "token not written"
 grep -q '^RHUMB_ALLOWED_USERS=alice@github$'     "$STAGE/rhumb.env" || fail "allowlist not written"
@@ -155,6 +159,50 @@ cmp -s "$STAGE_WARN/rhumb.env.before" "$STAGE_WARN/rhumb.env" \
   || fail "re-run without ambient vars should be byte-identical"
 
 rm -rf "$STAGE_WARN"
+
+# --- mode change between runs: the previous mode's credential var is
+# dropped from rhumb.env (the writer only emits the selected mode's vars),
+# it is NOT "overridden" — so no override warning should mention it, even
+# when an ambient value for it is still exported from the old mode ---
+STAGE_SWITCH="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw-orig.internal:4000 \
+RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_SWITCH" >/dev/null
+
+# switch gateway -> subscription with a stale, mismatched ambient
+# ANTHROPIC_BASE_URL still exported (as if left over from a gateway shell) —
+# this is the exact scenario from the review finding
+switch_err="$(RHUMB_LLM_PROVIDER=subscription CLAUDE_CODE_OAUTH_TOKEN=tok-switch-1 \
+ANTHROPIC_BASE_URL=https://totally-different.example:9999 \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_SWITCH" 2>&1 >/dev/null)"
+
+grep -q '^RHUMB_LLM_PROVIDER=subscription$' "$STAGE_SWITCH/rhumb.env" \
+  || fail "mode switch: provider not updated to subscription"
+grep -q '^CLAUDE_CODE_OAUTH_TOKEN=tok-switch-1$' "$STAGE_SWITCH/rhumb.env" \
+  || fail "mode switch: new mode's credential not written"
+grep -q '^ANTHROPIC_BASE_URL=' "$STAGE_SWITCH/rhumb.env" \
+  && fail "mode switch: old mode's credential should be dropped, not persisted"
+printf '%s\n' "$switch_err" | grep -q 'ANTHROPIC_BASE_URL' \
+  && fail "mode switch: must not warn about a var irrelevant to the newly selected mode"
+
+# switch back subscription -> gateway with a stale ambient
+# CLAUDE_CODE_OAUTH_TOKEN still exported from the previous mode
+switch_err="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw-new.internal:5000 \
+RHUMB_MODEL=qwen3-coder CLAUDE_CODE_OAUTH_TOKEN=tok-stale \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_SWITCH" 2>&1 >/dev/null)"
+
+grep -q '^RHUMB_LLM_PROVIDER=gateway$' "$STAGE_SWITCH/rhumb.env" \
+  || fail "mode switch: provider not updated back to gateway"
+grep -q '^ANTHROPIC_BASE_URL=https://gw-new.internal:5000$' "$STAGE_SWITCH/rhumb.env" \
+  || fail "mode switch: new mode's credential not written on switch back"
+grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$STAGE_SWITCH/rhumb.env" \
+  && fail "mode switch: old mode's credential should be dropped, not persisted, on switch back"
+printf '%s\n' "$switch_err" | grep -q 'CLAUDE_CODE_OAUTH_TOKEN' \
+  && fail "mode switch: must not warn about a var irrelevant to the newly selected mode (switch back)"
+
+rm -rf "$STAGE_SWITCH"
 
 # --- unknown provider is rejected ---
 if RHUMB_LLM_PROVIDER=ollama RHUMB_ALLOWED_USERS=bob@github \
