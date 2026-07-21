@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
+# Hermetic run: the installer intentionally honors already-exported credential
+# vars as pre-seeded values (that's what --yes is for), so an ambient
+# ANTHROPIC_BASE_URL/ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/RHUMB_LLM_PROVIDER
+# (e.g. from running this inside a Claude session) would silently leak into
+# every assertion below. Start from a clean slate for these.
+unset ANTHROPIC_BASE_URL ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN RHUMB_LLM_PROVIDER 2>/dev/null || true
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -66,5 +73,45 @@ grep -q '^RHUMB_PORT=7777$' "$STAGE/rhumb.env" || fail "markerless core value no
 if grep -E '^#?RHUMB_[A-Z_]+=.*[[:space:]]#' "$STAGE/rhumb.env"; then
   fail "inline comment after env assignment (systemd EnvironmentFile footgun)"
 fi
+
+# --- api-key mode: writes the key, writes no OAuth token ---
+STAGE_API="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=api-key ANTHROPIC_API_KEY=sk-ant-test-1 \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_API" >/dev/null
+grep -q '^RHUMB_LLM_PROVIDER=api-key$'    "$STAGE_API/rhumb.env" || fail "provider not written"
+grep -q '^ANTHROPIC_API_KEY=sk-ant-test-1$' "$STAGE_API/rhumb.env" || fail "api key not written"
+grep -q '^CLAUDE_CODE_OAUTH_TOKEN='       "$STAGE_API/rhumb.env" && fail "oauth token leaked into api-key install"
+
+# --- api-key mode requires the key ---
+if RHUMB_LLM_PROVIDER=api-key ANTHROPIC_API_KEY='' RHUMB_ALLOWED_USERS=bob@github \
+   scripts/install.sh --dry-run --yes --stage-dir "$(mktemp -d)" >/dev/null 2>&1; then
+  fail "empty API key should be rejected"
+fi
+
+# --- gateway mode: base URL plus explicit model, optional auth token ---
+STAGE_GW="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw.internal:4000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-xyz \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_GW" >/dev/null
+grep -q '^RHUMB_LLM_PROVIDER=gateway$'                "$STAGE_GW/rhumb.env" || fail "gateway provider not written"
+grep -q '^ANTHROPIC_BASE_URL=https://gw.internal:4000$' "$STAGE_GW/rhumb.env" || fail "base url not written"
+grep -q '^ANTHROPIC_AUTH_TOKEN=bearer-xyz$'           "$STAGE_GW/rhumb.env" || fail "gateway auth token not written"
+grep -q '^RHUMB_MODEL=qwen3-coder$'                   "$STAGE_GW/rhumb.env" || fail "gateway model not written"
+grep -q '^CLAUDE_CODE_OAUTH_TOKEN='                   "$STAGE_GW/rhumb.env" && fail "oauth token leaked into gateway install"
+
+# --- gateway re-run is byte-identical (idempotence across the new branch) ---
+cp "$STAGE_GW/rhumb.env" "$STAGE_GW/rhumb.env.first"
+scripts/install.sh --dry-run --yes --stage-dir "$STAGE_GW" >/dev/null
+cmp -s "$STAGE_GW/rhumb.env.first" "$STAGE_GW/rhumb.env" || fail "gateway re-run not byte-identical"
+
+# --- unknown provider is rejected ---
+if RHUMB_LLM_PROVIDER=ollama RHUMB_ALLOWED_USERS=bob@github \
+   scripts/install.sh --dry-run --yes --stage-dir "$(mktemp -d)" >/dev/null 2>&1; then
+  fail "unknown provider should be rejected"
+fi
+
+rm -rf "$STAGE_API" "$STAGE_GW"
 
 echo "PASS install-dry-run"

@@ -84,8 +84,10 @@ if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; t
 fi
 command -v systemctl >/dev/null 2>&1 \
   || fail_or_warn "systemd not found — this installer targets systemd Linux; see docs/setup-manual.md for the manual path"
-command -v claude >/dev/null 2>&1 \
-  || warn "claude CLI not found on this box — fine: run 'claude setup-token' on any machine and paste the token below"
+if [ "${RHUMB_LLM_PROVIDER:-subscription}" = subscription ]; then
+  command -v claude >/dev/null 2>&1 \
+    || warn "claude CLI not found on this box — fine: run 'claude setup-token' on any machine and paste the token below"
+fi
 command -v python3 >/dev/null 2>&1 \
   || fail_or_warn "python3 not found — needed to parse tailscale status (apt install python3)"
 
@@ -116,6 +118,10 @@ CUR_PORT=""
 CUR_DASH_PORT=""
 CUR_MODEL=""
 CUR_MODE=""
+CUR_PROVIDER=""
+CUR_API_KEY=""
+CUR_BASE_URL=""
+CUR_AUTH_TOKEN=""
 
 if [ -f "$ENV_FILE" ]; then
   info "Existing config at $ENV_FILE — current values become the defaults"
@@ -127,6 +133,10 @@ if [ -f "$ENV_FILE" ]; then
   CUR_DASH_PORT="$(env_get RHUMB_DASHBOARD_PORT)"
   CUR_MODEL="$(env_get RHUMB_MODEL)"
   CUR_MODE="$(env_get RHUMB_PERMISSION_MODE)"
+  CUR_PROVIDER="$(env_get RHUMB_LLM_PROVIDER)"
+  CUR_API_KEY="$(env_get ANTHROPIC_API_KEY)"
+  CUR_BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
+  CUR_AUTH_TOKEN="$(env_get ANTHROPIC_AUTH_TOKEN)"
   if grep -qxF "$MARKER" "$ENV_FILE"; then
     OPTIONAL_SECTION="$(awk -v m="$MARKER" 'found; $0 == m { found = 1 }' "$ENV_FILE")"
   else
@@ -158,10 +168,33 @@ prompt() {
 }
 
 info "Configuration (enter accepts the [default])"
-prompt CLAUDE_CODE_OAUTH_TOKEN "Claude OAuth token (from 'claude setup-token')" \
-  "${CLAUDE_CODE_OAUTH_TOKEN:-$CUR_TOKEN}" secret
-[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] \
-  || die "CLAUDE_CODE_OAUTH_TOKEN is required — run 'claude setup-token' on any machine, then re-run the installer"
+prompt RHUMB_LLM_PROVIDER "Credential mode (subscription|api-key|gateway)" \
+  "${RHUMB_LLM_PROVIDER:-${CUR_PROVIDER:-subscription}}"
+case "$RHUMB_LLM_PROVIDER" in
+  subscription)
+    prompt CLAUDE_CODE_OAUTH_TOKEN "Claude OAuth token (from 'claude setup-token')" \
+      "${CLAUDE_CODE_OAUTH_TOKEN:-$CUR_TOKEN}" secret
+    [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] \
+      || die "CLAUDE_CODE_OAUTH_TOKEN is required — run 'claude setup-token' on any machine, then re-run the installer"
+    ;;
+  api-key)
+    prompt ANTHROPIC_API_KEY "Anthropic API key" \
+      "${ANTHROPIC_API_KEY:-$CUR_API_KEY}" secret
+    [ -n "$ANTHROPIC_API_KEY" ] \
+      || die "ANTHROPIC_API_KEY is required for RHUMB_LLM_PROVIDER=api-key — create one at console.anthropic.com"
+    ;;
+  gateway)
+    prompt ANTHROPIC_BASE_URL "Gateway base URL (Anthropic-compatible endpoint)" \
+      "${ANTHROPIC_BASE_URL:-$CUR_BASE_URL}"
+    [ -n "$ANTHROPIC_BASE_URL" ] \
+      || die "ANTHROPIC_BASE_URL is required for RHUMB_LLM_PROVIDER=gateway — see docs/setup-manual.md"
+    prompt ANTHROPIC_AUTH_TOKEN "Gateway auth token (blank if the gateway needs none)" \
+      "${ANTHROPIC_AUTH_TOKEN:-$CUR_AUTH_TOKEN}" secret
+    ;;
+  *)
+    die "RHUMB_LLM_PROVIDER must be one of subscription|api-key|gateway, got \"$RHUMB_LLM_PROVIDER\""
+    ;;
+esac
 prompt RHUMB_ALLOWED_USERS "Tailnet logins allowed to connect (comma-separated)" \
   "${RHUMB_ALLOWED_USERS:-${CUR_USERS:-$TS_LOGIN}}"
 [ -n "$RHUMB_ALLOWED_USERS" ] \
@@ -171,7 +204,14 @@ prompt RHUMB_WORKSPACE "Workspace directory" \
 prompt RHUMB_PORT "Agent host port" "${RHUMB_PORT:-${CUR_PORT:-8787}}"
 prompt RHUMB_DASHBOARD_PORT "Dashboard host port" \
   "${RHUMB_DASHBOARD_PORT:-${CUR_DASH_PORT:-8788}}"
-prompt RHUMB_MODEL "Claude model" "${RHUMB_MODEL:-${CUR_MODEL:-claude-opus-4-8}}"
+if [ "$RHUMB_LLM_PROVIDER" = gateway ]; then
+  prompt RHUMB_MODEL "Model id your gateway serves (no default is safe here)" \
+    "${RHUMB_MODEL:-$CUR_MODEL}"
+  [ -n "$RHUMB_MODEL" ] \
+    || die "RHUMB_MODEL is required for RHUMB_LLM_PROVIDER=gateway — set it to a model id your gateway serves"
+else
+  prompt RHUMB_MODEL "Claude model" "${RHUMB_MODEL:-${CUR_MODEL:-claude-opus-4-8}}"
+fi
 prompt RHUMB_PERMISSION_MODE "Permission mode (default|acceptEdits|bypassPermissions|plan)" \
   "${RHUMB_PERMISSION_MODE:-${CUR_MODE:-acceptEdits}}"
 
@@ -186,15 +226,23 @@ env_tmp="$(mktemp)"
 # Rhumb configuration — read by both hosts via systemd EnvironmentFile.
 # Re-running scripts/install.sh preserves these values (they become the prompt
 # defaults) and keeps everything below the optional-settings marker verbatim.
-CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN
+RHUMB_LLM_PROVIDER=$RHUMB_LLM_PROVIDER
 RHUMB_ALLOWED_USERS=$RHUMB_ALLOWED_USERS
 RHUMB_WORKSPACE=$RHUMB_WORKSPACE
 RHUMB_PORT=$RHUMB_PORT
 RHUMB_DASHBOARD_PORT=$RHUMB_DASHBOARD_PORT
 RHUMB_MODEL=$RHUMB_MODEL
 RHUMB_PERMISSION_MODE=$RHUMB_PERMISSION_MODE
-$MARKER
 EOF
+  case "$RHUMB_LLM_PROVIDER" in
+    subscription) printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN" ;;
+    api-key)      printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" ;;
+    gateway)
+      printf 'ANTHROPIC_BASE_URL=%s\n' "$ANTHROPIC_BASE_URL"
+      [ -n "$ANTHROPIC_AUTH_TOKEN" ] && printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "$ANTHROPIC_AUTH_TOKEN"
+      ;;
+  esac
+  printf '%s\n' "$MARKER"
   if [ -n "$OPTIONAL_SECTION" ]; then
     printf '%s\n' "$OPTIONAL_SECTION"
   else
