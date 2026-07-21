@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { loadServiceConfig } from "../src/services/config.js";
-import { loadProvider } from "../src/provider.js";
 
 describe("loadConfig", () => {
   it("throws when no credential is present for the default provider", () => {

@@ -224,8 +224,19 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
 
 // Wrap the SDK's query so it matches our narrowed QueryFn signature. The env we
 // hand the SDK is what the spawned Claude Code process sees: the selected
-// provider's credentials and nothing else (see sanitizedEnv).
+// provider's credentials, with no RHUMB_* var and no credential or
+// provider-selection var Rhumb knows about surviving from the host's own
+// environment. Unrelated vars (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, …) do pass
+// through — see sanitizedEnv for the exact guarantee.
 export function createRealQuery(credentialEnv: Record<string, string>): QueryFn {
+  // Validate eagerly, once. sanitizedEnv throws on a miswired credentialEnv,
+  // but the closure below runs lazily — first on the first user turn — so a
+  // miswiring would otherwise surface as a failed turn on a host that had
+  // already logged healthy. main() calls this before the server listens, so
+  // doing the work here puts the error at startup where the operator is
+  // looking. The result is intentionally discarded: each turn rebuilds it from
+  // the then-current process.env.
+  sanitizedEnv(process.env, credentialEnv);
   return (args) =>
     sdkQuery({
       ...args,
