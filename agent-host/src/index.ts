@@ -11,6 +11,7 @@ import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
+import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient, createPveCall } from "./infra/proxmox.js";
 import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.js";
@@ -244,8 +245,26 @@ export function createRealQuery(credentialEnv: Record<string, string>): QueryFn 
     } as never);
 }
 
+// Vars an operator may have set ambiently for corporate mTLS. They are always
+// stripped (see PROVIDER_CREDENTIAL_VARS in provider.ts) and never end up in
+// `credentialEnv`, so — unlike a missing ANTHROPIC_AUTH_TOKEN, which fails
+// loudly at boot — losing them fails silently: every model request breaks
+// with an opaque TLS handshake error and nothing points at the cause. Warn at
+// startup instead. Never log the value, only the variable name.
+export function warnIfClientCertVarsPresent(env: NodeJS.ProcessEnv): void {
+  const present = PROVIDER_CREDENTIAL_VARS.filter(
+    (name) => name.startsWith("CLAUDE_CODE_CLIENT_") && env[name] !== undefined,
+  );
+  if (present.length > 0) {
+    console.warn(
+      `[rhumb] WARNING: ${present.join(", ")} set in the environment but no longer passed to the agent — if your endpoint requires client-cert (mTLS) auth, model requests will fail.`,
+    );
+  }
+}
+
 export function main(): void {
   const config = loadConfig(process.env);
+  warnIfClientCertVarsPresent(process.env);
   // Credentials reach the SDK only through the env we build per query — the
   // host's own process env is never passed through unfiltered.
   mkdirSync(config.workspace, { recursive: true });

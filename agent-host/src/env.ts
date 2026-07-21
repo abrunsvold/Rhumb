@@ -4,7 +4,7 @@ import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
  *  back into the agent, so they are stripped alongside PROVIDER_CREDENTIAL_VARS.
  *  Kept as a separate list because they must never be *injectable*:
  *  PROVIDER_CREDENTIAL_VARS doubles as the allowlist for `credentialEnv`, and
- *  neither of these is something Rhumb should ever be setting.
+ *  none of these is something Rhumb should ever be setting.
  *
  *   - CLAUDE_ENV_FILE — the CLI sources this file's contents into the session
  *     environment used by the Bash tool. Pointed at /etc/rhumb/rhumb.env it
@@ -13,8 +13,25 @@ import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
  *     operator-confirmation gate.
  *   - CLAUDE_CODE_SHELL_PREFIX — prefixes every Bash command the agent runs, so
  *     an ambient value rewrites every shell invocation (and can read the child's
- *     environment or exfiltrate its arguments). */
-export const STRIPPED_ENV_VARS = ["CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL_PREFIX"] as const;
+ *     environment or exfiltrate its arguments).
+ *   - CLAUDE_CODE_SHELL — the bundled CLI's `Ri8()` reads this and, if the value
+ *     contains "bash" or "zsh" and is executable, uses it as the shell binary
+ *     for every Bash-tool invocation. Same class of attack as
+ *     CLAUDE_CODE_SHELL_PREFIX: an ambient `/tmp/x/bash` wrapper would intercept
+ *     every shell command the agent runs.
+ *   - CLAUDE_CONFIG_DIR — the CLI's `yQ()` resolves this (falling back to
+ *     `~/.claude`) to locate the credential store, `.config.json`, the keychain
+ *     account-name suffix, and the shell-snapshot directory. Not exploitable
+ *     today, since every provider mode places a first-party credential in the
+ *     child env so the on-disk store is never consulted — but it is a routing
+ *     var in the same family, and it becomes load-bearing the moment a future
+ *     mode leaves a credential unset. */
+export const STRIPPED_ENV_VARS = [
+  "CLAUDE_ENV_FILE",
+  "CLAUDE_CODE_SHELL_PREFIX",
+  "CLAUDE_CODE_SHELL",
+  "CLAUDE_CONFIG_DIR",
+] as const;
 
 /** Returns a copy of `base` carrying exactly one provider's credentials, so the
  *  spawned Claude Code process authenticates the way the operator configured and

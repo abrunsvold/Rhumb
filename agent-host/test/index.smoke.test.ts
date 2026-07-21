@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import request from "supertest";
-import { buildApp } from "../src/index.js";
+import { buildApp, warnIfClientCertVarsPresent } from "../src/index.js";
 
 describe("buildApp wiring", () => {
   it("builds an app whose /messages drives the injected query and streams a result", async () => {
@@ -90,5 +90,31 @@ describe("buildApp wiring", () => {
     const sp = captured?.systemPrompt as { type: string; preset: string; append: string };
     expect(sp).toMatchObject({ type: "preset", preset: "claude_code" });
     expect(sp.append).toContain("operator approval");
+  });
+});
+
+describe("warnIfClientCertVarsPresent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("warns, naming the vars but never their values, when a client-cert var is ambient", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnIfClientCertVarsPresent({
+      CLAUDE_CODE_CLIENT_CERT: "-----BEGIN CERTIFICATE-----super-secret-cert",
+      CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: "hunter2",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0][0] as string;
+    expect(message).toContain("CLAUDE_CODE_CLIENT_CERT");
+    expect(message).toContain("CLAUDE_CODE_CLIENT_KEY_PASSPHRASE");
+    expect(message).not.toContain("super-secret-cert");
+    expect(message).not.toContain("hunter2");
+  });
+
+  it("stays silent when no client-cert var is ambient", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnIfClientCertVarsPresent({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant-test" });
+    expect(warn).not.toHaveBeenCalled();
   });
 });

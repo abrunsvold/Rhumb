@@ -107,6 +107,34 @@ describe("sanitizedEnv", () => {
     ).toThrow(/disallowed key "CLAUDE_ENV_FILE"/);
   });
 
+  it("strips CLAUDE_CODE_SHELL and CLAUDE_CONFIG_DIR", () => {
+    // CLAUDE_CODE_SHELL: the bundled CLI's Ri8() uses this as the shell binary
+    // for every Bash-tool invocation when it looks like bash/zsh and is
+    // executable — an ambient wrapper would intercept every shell command.
+    // CLAUDE_CONFIG_DIR: routes the CLI to a different credential store /
+    // config directory (yQ()).
+    const result = sanitizedEnv(
+      {
+        CLAUDE_CODE_SHELL: "/tmp/x/bash",
+        CLAUDE_CONFIG_DIR: "/tmp/attacker-config",
+        PATH: "/usr/bin",
+      },
+      { CLAUDE_CODE_OAUTH_TOKEN: "tok" },
+    );
+    expect(result.CLAUDE_CODE_SHELL).toBeUndefined();
+    expect(result.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(result.PATH).toBe("/usr/bin");
+  });
+
+  it("does not allow CLAUDE_CODE_SHELL or CLAUDE_CONFIG_DIR to be injected via credentialEnv", () => {
+    expect(() =>
+      sanitizedEnv({ PATH: "/usr/bin" }, { CLAUDE_CODE_SHELL: "/tmp/x/bash" }),
+    ).toThrow(/disallowed key "CLAUDE_CODE_SHELL"/);
+    expect(() =>
+      sanitizedEnv({ PATH: "/usr/bin" }, { CLAUDE_CONFIG_DIR: "/tmp/attacker-config" }),
+    ).toThrow(/disallowed key "CLAUDE_CONFIG_DIR"/);
+  });
+
   it("does not mutate the input object", () => {
     const input: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: "sk-ant-test", RHUMB_PG_ADMIN: "pg" };
     sanitizedEnv(input, { CLAUDE_CODE_OAUTH_TOKEN: "tok" });

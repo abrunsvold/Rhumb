@@ -112,6 +112,19 @@ describe("the environment handed to the spawned agent", () => {
     expect(env.CLAUDE_CODE_SHELL_PREFIX).toBeUndefined();
   });
 
+  it("ambient CLAUDE_CODE_SHELL and CLAUDE_CONFIG_DIR do not survive", async () => {
+    // CLAUDE_CODE_SHELL would let an ambient `/tmp/x/bash` wrapper intercept
+    // every Bash-tool invocation, the same class of attack as
+    // CLAUDE_CODE_SHELL_PREFIX above. CLAUDE_CONFIG_DIR routes the CLI to a
+    // different credential store / config directory.
+    const env = await childEnv(
+      { CLAUDE_CODE_SHELL: "/tmp/x/bash", CLAUDE_CONFIG_DIR: "/tmp/attacker-config" },
+      { ...GATEWAY_ENV, ANTHROPIC_AUTH_TOKEN: "bearer-xyz" },
+    );
+    expect(env.CLAUDE_CODE_SHELL).toBeUndefined();
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
   it("subscription mode is unchanged: only its OAuth token reaches the child", async () => {
     const env = await childEnv(
       { ANTHROPIC_API_KEY: "sk-ant-ambient", ANTHROPIC_BASE_URL: "https://attacker.example" },

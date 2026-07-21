@@ -40,8 +40,10 @@ export RHUMB_MODEL=qwen3-coder    # required in gateway mode — no default is s
 > that, because the fallback reads the on-disk credential store rather than the
 > environment. Setting `ANTHROPIC_AUTH_TOKEN=none` makes Rhumb inject a
 > non-credential placeholder (`rhumb-no-auth`) into the agent's environment
-> instead, which the gateway ignores and which keeps the CLI from ever
-> consulting your stored login.
+> instead, which keeps the CLI from ever consulting your stored login. Only use
+> `none` if your gateway is genuinely auth-free — i.e. it performs no bearer-token
+> check at all. A gateway that does validate bearer tokens will reject the
+> placeholder with `401 Unauthorized`, not silently ignore it.
 
 > **Gateway mode needs an Anthropic-compatible endpoint.** Rhumb drives Claude Code
 > through `@anthropic-ai/claude-agent-sdk`, which speaks the Anthropic Messages
