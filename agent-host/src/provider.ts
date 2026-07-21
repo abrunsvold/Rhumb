@@ -17,17 +17,65 @@ export interface ProviderConfig {
 
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
-/** Every credential var Rhumb knows how to set. `sanitizedEnv` strips all of
- *  them before injecting the selected provider's, so an ambient value can never
- *  reach the agent — in particular an ambient ANTHROPIC_BASE_URL cannot silently
- *  redirect model traffic to an endpoint nobody configured. */
+/** Every variable that can supply the spawned CLI with a model credential or
+ *  point its model traffic somewhere else. `sanitizedEnv` strips all of them
+ *  before injecting the selected provider's, so an ambient value can never
+ *  reach the agent — in particular an ambient ANTHROPIC_BASE_URL cannot
+ *  silently redirect model traffic to an endpoint nobody configured.
+ *
+ *  Verified against the bundled CLI in
+ *  `node_modules/@anthropic-ai/claude-agent-sdk/cli.js`, which resolves its
+ *  provider as CLAUDE_CODE_USE_BEDROCK -> CLAUDE_CODE_USE_VERTEX ->
+ *  CLAUDE_CODE_USE_FOUNDRY -> first-party, and its first-party credential as
+ *  ANTHROPIC_AUTH_TOKEN -> ANTHROPIC_API_KEY -> CLAUDE_CODE_OAUTH_TOKEN ->
+ *  the *_FILE_DESCRIPTOR variants -> apiKeyHelper -> the stored claude.ai
+ *  login. Each family's base-URL/credential vars are listed alongside its
+ *  selector so enabling one ambiently cannot pick up ambient credentials.
+ *
+ *  Deliberately NOT listed: the generic `AWS_*` and `GOOGLE_*` credential
+ *  chains. They only reach model traffic through CLAUDE_CODE_USE_BEDROCK /
+ *  CLAUDE_CODE_USE_VERTEX, which are stripped here, and the agent has
+ *  legitimate non-model uses for them (an operator may well want it to run
+ *  `aws` or `gcloud`). AWS_BEARER_TOKEN_BEDROCK is the exception: it is only
+ *  ever consumed as a Bedrock model credential, so it is stripped.
+ *
+ *  This list doubles as the allowlist for `credentialEnv` keys (see
+ *  `sanitizedEnv`); adding to it widens what a future caller may inject, so
+ *  keep it to genuine model-credential / model-routing vars. Variables that
+ *  must be stripped but must never be injectable live in `STRIPPED_ENV_VARS`
+ *  in `env.ts`. */
 export const PROVIDER_CREDENTIAL_VARS = [
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
+  // first-party (api.anthropic.com or an Anthropic-compatible gateway)
   "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  // arbitrary headers — an Authorization: header here overrides everything else
+  "ANTHROPIC_CUSTOM_HEADERS",
+  // mTLS client identity presented to whatever endpoint is in use
+  "CLAUDE_CODE_CLIENT_CERT",
+  "CLAUDE_CODE_CLIENT_KEY",
+  "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+  // AWS Bedrock
   "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  // Google Vertex
   "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "VERTEX_BASE_URL",
+  // Microsoft Foundry
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_FOUNDRY_API_KEY",
+  "ANTHROPIC_FOUNDRY_RESOURCE",
 ] as const;
 
 /** What an operator writes in `ANTHROPIC_AUTH_TOKEN` to declare "this gateway
