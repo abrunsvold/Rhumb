@@ -25,9 +25,23 @@ export RHUMB_LLM_PROVIDER=api-key ANTHROPIC_API_KEY=sk-ant-...
 # gateway — any Anthropic-compatible endpoint, including self-hosted models
 export RHUMB_LLM_PROVIDER=gateway \
        ANTHROPIC_BASE_URL=https://gateway.internal:4000 \
-       ANTHROPIC_AUTH_TOKEN=...   # omit if your gateway needs none
+       ANTHROPIC_AUTH_TOKEN=...   # required — use `none` if your gateway needs no auth
 export RHUMB_MODEL=qwen3-coder    # required in gateway mode — no default is safe
 ```
+
+> **`ANTHROPIC_AUTH_TOKEN` is mandatory in gateway mode, and `none` is a real
+> value — not the same as leaving it unset.** The agent host refuses to start if
+> it is empty. Here is why: Claude Code builds the gateway's `Authorization`
+> header from `ANTHROPIC_AUTH_TOKEN`, and when that variable is absent it falls
+> back to the claude.ai OAuth credential stored on the box (macOS keychain or
+> `~/.claude/.credentials.json`) — so a gateway you configured "without auth"
+> would receive your personal claude.ai login as
+> `Authorization: Bearer sk-ant-oat01-...`. Environment sanitising cannot stop
+> that, because the fallback reads the on-disk credential store rather than the
+> environment. Setting `ANTHROPIC_AUTH_TOKEN=none` makes Rhumb inject a
+> non-credential placeholder (`rhumb-no-auth`) into the agent's environment
+> instead, which the gateway ignores and which keeps the CLI from ever
+> consulting your stored login.
 
 > **Gateway mode needs an Anthropic-compatible endpoint.** Rhumb drives Claude Code
 > through `@anthropic-ai/claude-agent-sdk`, which speaks the Anthropic Messages

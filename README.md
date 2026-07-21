@@ -40,7 +40,7 @@ Rhumb authenticates Claude one of three ways, selected with `RHUMB_LLM_PROVIDER`
 |---|---|---|
 | `subscription` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Uses your existing Claude subscription rather than pay-per-token billing. Carries the personal-tool constraint below. |
 | `api-key` | `ANTHROPIC_API_KEY` | Ordinary pay-per-token API access. No personal-tool constraint. |
-| `gateway` | `ANTHROPIC_BASE_URL`, optional `ANTHROPIC_AUTH_TOKEN`, explicit `RHUMB_MODEL` | Point Rhumb at an Anthropic-compatible endpoint — a LiteLLM proxy, an internal gateway, or a self-hosted open model behind one. Nothing need leave your network. |
+| `gateway` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` (**required** — use `none` for an auth-free gateway), explicit `RHUMB_MODEL` | Point Rhumb at an Anthropic-compatible endpoint — a LiteLLM proxy, an internal gateway, or a self-hosted open model behind one. Nothing need leave your network. |
 
 **The personal-tool constraint applies to `subscription` mode only.** That mode
 authenticates with an OAuth token tied to your own Claude subscription, and
@@ -52,6 +52,15 @@ no "sign in with Claude" layer for anyone else.
 In `api-key` and `gateway` mode that restriction does not apply: those are ordinary
 credentials governed by whatever terms you hold with the relevant provider. See
 [COMPLIANCE.md](COMPLIANCE.md) for the full reasoning.
+
+**Gateway mode requires `ANTHROPIC_AUTH_TOKEN`, and the agent host refuses to
+start without it.** If your gateway needs no auth, set it to the literal value
+`none`. The reason it cannot simply be left blank: with no auth token in its
+environment, Claude Code falls back to whatever claude.ai login is stored on the
+box (macOS keychain or `~/.claude/.credentials.json`) and sends *that* to your
+gateway as `Authorization: Bearer sk-ant-oat01-...`. The `none` sentinel makes
+Rhumb inject a non-credential placeholder instead, so the CLI never reaches for
+your stored login.
 
 ---
 

@@ -30,6 +30,19 @@ export const PROVIDER_CREDENTIAL_VARS = [
   "CLAUDE_CODE_USE_VERTEX",
 ] as const;
 
+/** What an operator writes in `ANTHROPIC_AUTH_TOKEN` to declare "this gateway
+ *  needs no auth". Compared case-insensitively against the trimmed value. */
+export const GATEWAY_NO_AUTH_SENTINEL = "none";
+
+/** What Rhumb actually injects for the sentinel. It must be non-empty so the
+ *  CLI never consults the on-disk credential store (see the gateway branch of
+ *  `loadProvider`), and it is deliberately self-describing rather than the
+ *  literal `none`: it shows up in gateway access logs as
+ *  `Authorization: Bearer rhumb-no-auth`, which reads unambiguously as "Rhumb
+ *  was configured for an auth-free gateway" instead of looking like a real
+ *  token that happens to be named `none`. It is not a secret and never was. */
+export const GATEWAY_NO_AUTH_PLACEHOLDER = "rhumb-no-auth";
+
 const VALID_IDS: readonly ProviderId[] = ["subscription", "api-key", "gateway"];
 
 function required(env: NodeJS.ProcessEnv, name: string, hint: string): string {
@@ -86,12 +99,31 @@ export function loadProvider(env: NodeJS.ProcessEnv): ProviderConfig {
     );
   }
   const authToken = env.ANTHROPIC_AUTH_TOKEN?.trim();
+  if (!authToken) {
+    // Fail closed. Claude Code builds the gateway's Authorization header as
+    // `process.env.ANTHROPIC_AUTH_TOKEN || <stored credential>` — with no env
+    // value it falls back to the operator's stored claude.ai OAuth login (macOS
+    // keychain / ~/.claude/.credentials.json) and sends it to whatever host
+    // ANTHROPIC_BASE_URL names. `sanitizedEnv` cannot prevent that: the
+    // fallback reads the on-disk credential store, not the environment, and
+    // HOME is deliberately preserved for the agent. The only reliable defence
+    // is to always hand the child a non-empty ANTHROPIC_AUTH_TOKEN.
+    throw new Error(
+      "ANTHROPIC_AUTH_TOKEN is required for RHUMB_LLM_PROVIDER=gateway. Set it to " +
+        "the credential your gateway expects, or to the literal value " +
+        `\`${GATEWAY_NO_AUTH_SENTINEL}\` if your gateway genuinely needs no auth. It ` +
+        "cannot be left empty: without an auth token in the environment, Claude Code " +
+        "falls back to the operator's stored claude.ai login and would transmit it to " +
+        "the gateway as a bearer token.",
+    );
+  }
   return {
     id,
     model,
     credentialEnv: {
       ANTHROPIC_BASE_URL: baseUrl,
-      ...(authToken ? { ANTHROPIC_AUTH_TOKEN: authToken } : {}),
+      ANTHROPIC_AUTH_TOKEN:
+        authToken.toLowerCase() === GATEWAY_NO_AUTH_SENTINEL ? GATEWAY_NO_AUTH_PLACEHOLDER : authToken,
     },
   };
 }

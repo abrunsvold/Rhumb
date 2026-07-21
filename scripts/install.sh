@@ -84,10 +84,11 @@ if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; t
 fi
 command -v systemctl >/dev/null 2>&1 \
   || fail_or_warn "systemd not found — this installer targets systemd Linux; see docs/setup-manual.md for the manual path"
-if [ "${RHUMB_LLM_PROVIDER:-subscription}" = subscription ]; then
-  command -v claude >/dev/null 2>&1 \
-    || warn "claude CLI not found on this box — fine: run 'claude setup-token' on any machine and paste the token below"
-fi
+# The `claude` CLI is only needed for subscription mode, so that check lives in
+# the subscription branch of the prompt block below — RHUMB_LLM_PROVIDER isn't
+# resolved yet here (the persisted value in rhumb.env is read further down), and
+# guarding on the ambient value alone told a gateway-mode box to run
+# `claude setup-token` on every re-run.
 command -v python3 >/dev/null 2>&1 \
   || fail_or_warn "python3 not found — needed to parse tailscale status (apt install python3)"
 
@@ -159,6 +160,13 @@ fi
 # resolved). A var belonging to a *different* mode isn't being "overridden"
 # — the writer simply won't emit it for the selected mode — so this
 # wording would be actively misleading if fired unconditionally.
+#
+# Even the "non-secret" values can carry one: a gateway URL may embed userinfo
+# (https://user:pass@gw:4000), and this warning goes to stderr and journald.
+# Strip userinfo before echoing.
+redact_userinfo() {
+  printf '%s' "$1" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]*@#\1***@#'
+}
 warn_if_overridden() {
   local __var="$1" __persisted="$2" __secret="${3:-}" __ambient
   __ambient="${!__var:-}"
@@ -168,7 +176,7 @@ warn_if_overridden() {
   if [ -n "$__secret" ]; then
     warn "$__var is set in the environment and differs from the value persisted in $ENV_FILE — using the environment value, overriding the saved one"
   else
-    warn "$__var is set in the environment (\"$__ambient\") and differs from the persisted value (\"$__persisted\") in $ENV_FILE — using the environment value"
+    warn "$__var is set in the environment (\"$(redact_userinfo "$__ambient")\") and differs from the persisted value (\"$(redact_userinfo "$__persisted")\") in $ENV_FILE — using the environment value"
   fi
 }
 
@@ -199,6 +207,8 @@ prompt RHUMB_LLM_PROVIDER "Credential mode (subscription|api-key|gateway)" \
   "${RHUMB_LLM_PROVIDER:-${CUR_PROVIDER:-subscription}}"
 case "$RHUMB_LLM_PROVIDER" in
   subscription)
+    command -v claude >/dev/null 2>&1 \
+      || warn "claude CLI not found on this box — fine: run 'claude setup-token' on any machine and paste the token below"
     warn_if_overridden CLAUDE_CODE_OAUTH_TOKEN "$CUR_TOKEN" secret
     prompt CLAUDE_CODE_OAUTH_TOKEN "Claude OAuth token (from 'claude setup-token')" \
       "${CLAUDE_CODE_OAUTH_TOKEN:-$CUR_TOKEN}" secret
@@ -219,8 +229,14 @@ case "$RHUMB_LLM_PROVIDER" in
     [ -n "$ANTHROPIC_BASE_URL" ] \
       || die "ANTHROPIC_BASE_URL is required for RHUMB_LLM_PROVIDER=gateway — see docs/setup-manual.md"
     warn_if_overridden ANTHROPIC_AUTH_TOKEN "$CUR_AUTH_TOKEN" secret
-    prompt ANTHROPIC_AUTH_TOKEN "Gateway auth token (blank if the gateway needs none)" \
+    # Required, never blank. With no auth token in its environment, Claude Code
+    # falls back to the operator's stored claude.ai login and sends it to the
+    # gateway as a bearer token — so an auth-free gateway must say so with the
+    # explicit `none` sentinel rather than by leaving this empty.
+    prompt ANTHROPIC_AUTH_TOKEN "Gateway auth token (or 'none' if the gateway needs no auth)" \
       "${ANTHROPIC_AUTH_TOKEN:-$CUR_AUTH_TOKEN}" secret
+    [ -n "$ANTHROPIC_AUTH_TOKEN" ] \
+      || die "ANTHROPIC_AUTH_TOKEN is required for RHUMB_LLM_PROVIDER=gateway — set it to your gateway's credential, or to the literal value 'none' if the gateway needs no auth; leaving it empty would make Claude Code fall back to your stored claude.ai login and send it to the gateway"
     ;;
   *)
     die "RHUMB_LLM_PROVIDER must be one of subscription|api-key|gateway, got \"$RHUMB_LLM_PROVIDER\""
@@ -270,7 +286,8 @@ EOF
     api-key)      printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" ;;
     gateway)
       printf 'ANTHROPIC_BASE_URL=%s\n' "$ANTHROPIC_BASE_URL"
-      [ -n "$ANTHROPIC_AUTH_TOKEN" ] && printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "$ANTHROPIC_AUTH_TOKEN"
+      # Always emitted: the agent host refuses to start without it (see above).
+      printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "$ANTHROPIC_AUTH_TOKEN"
       ;;
   esac
   printf '%s\n' "$MARKER"

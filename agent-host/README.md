@@ -25,7 +25,9 @@ Then export it before starting the host:
 > offer Claude login to anyone else. If you want to distribute a multi-tenant or
 > hosted offering in subscription mode, seek Anthropic's approval first. The
 > `api-key` and `gateway` modes involve no claude.ai login, so this note doesn't
-> apply to them. See [COMPLIANCE.md](../COMPLIANCE.md) for the full reasoning.
+> apply to them. (Gateway mode enforces that: `ANTHROPIC_AUTH_TOKEN` is required —
+> `none` for an auth-free gateway — because with it empty the CLI would fall back
+> to a stored claude.ai login and send it to the gateway.) See [COMPLIANCE.md](../COMPLIANCE.md) for the full reasoning.
 
 ## Run
 
@@ -35,7 +37,10 @@ Then export it before starting the host:
 
 Environment variables: `RHUMB_LLM_PROVIDER` (default `subscription`) plus that
 mode's credentials — `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`, or
-`ANTHROPIC_BASE_URL` (+ optional `ANTHROPIC_AUTH_TOKEN`); `RHUMB_PORT` (default
+`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (required in gateway mode; set it
+to `none` for an auth-free gateway — an empty value is refused because the CLI
+would otherwise fall back to a stored claude.ai login and send it to the
+gateway); `RHUMB_PORT` (default
 8787), `RHUMB_MODEL` (default `claude-opus-4-8`; required in gateway mode),
 `RHUMB_WORKSPACE` (default `./workspace`), `RHUMB_PERMISSION_MODE` (default
 `acceptEdits`), `RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g.

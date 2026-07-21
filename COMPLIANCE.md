@@ -26,6 +26,17 @@ this restriction does not apply. Those deployments are governed by the terms you
 hold with whoever supplies the credentials — Anthropic, your cloud provider, or
 nobody at all if you are serving a self-hosted model.
 
+That claim about gateway mode holds because Rhumb *enforces* it, not merely by
+convention. Claude Code, given a gateway base URL but no `ANTHROPIC_AUTH_TOKEN`,
+falls back to the claude.ai OAuth credential stored on the box and sends it to
+the gateway — which would put a claude.ai login into a deployment documented as
+having none. So the agent host requires `ANTHROPIC_AUTH_TOKEN` in gateway mode
+and refuses to start without it; operators of auth-free gateways set it to the
+literal `none`, which makes Rhumb inject a non-credential placeholder. A gateway
+deployment therefore never carries your claude.ai login, and a subscription
+credential is used only in `subscription` mode. See
+[SECURITY.md](SECURITY.md) and [docs/setup-manual.md](docs/setup-manual.md).
+
 ## How Rhumb stays inside that line
 
 In subscription mode, Rhumb is built and distributed as a **self-hosted personal

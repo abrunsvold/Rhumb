@@ -105,6 +105,44 @@ grep -q '^ANTHROPIC_AUTH_TOKEN=bearer-xyz$'           "$STAGE_GW/rhumb.env" || f
 grep -q '^RHUMB_MODEL=qwen3-coder$'                   "$STAGE_GW/rhumb.env" || fail "gateway model not written"
 grep -q '^CLAUDE_CODE_OAUTH_TOKEN='                   "$STAGE_GW/rhumb.env" && fail "oauth token leaked into gateway install"
 
+# --- gateway mode requires an auth token: an empty one must be rejected, not
+# silently persisted. Without ANTHROPIC_AUTH_TOKEN in its environment the CLI
+# falls back to the operator's stored claude.ai login and would transmit it to
+# the gateway, so "blank means the gateway needs none" is no longer accepted. ---
+if RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw.internal:4000 \
+   RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN='' RHUMB_ALLOWED_USERS=bob@github \
+   scripts/install.sh --dry-run --yes --stage-dir "$(mktemp -d)" >/dev/null 2>&1; then
+  fail "empty gateway auth token should be rejected"
+fi
+
+# --- the `none` sentinel is a real value: persisted verbatim so the host can
+# translate it into a non-empty credential for the child process ---
+STAGE_NOAUTH="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw.internal:4000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=none \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_NOAUTH" >/dev/null
+grep -q '^ANTHROPIC_AUTH_TOKEN=none$' "$STAGE_NOAUTH/rhumb.env" \
+  || fail "the 'none' sentinel should be persisted verbatim"
+rm -rf "$STAGE_NOAUTH"
+
+# --- a gateway URL with embedded userinfo must never be echoed in full ---
+STAGE_USERINFO="$(mktemp -d)"
+RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gwuser:gwpass@gw.internal:4000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=none \
+RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_USERINFO" >/dev/null
+userinfo_err="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://other:othersecret@gw2.internal:4000 \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=none RHUMB_ALLOWED_USERS=alice@github \
+  scripts/install.sh --dry-run --yes --stage-dir "$STAGE_USERINFO" 2>&1 >/dev/null)"
+printf '%s\n' "$userinfo_err" | grep -q 'ANTHROPIC_BASE_URL' \
+  || fail "no warning for mismatched ambient ANTHROPIC_BASE_URL with userinfo"
+printf '%s\n' "$userinfo_err" | grep -qE 'gwpass|othersecret' \
+  && fail "embedded userinfo leaked into warning output"
+printf '%s\n' "$userinfo_err" | grep -q '\*\*\*@gw' \
+  || fail "userinfo should be redacted to ***@ in the warning"
+rm -rf "$STAGE_USERINFO"
+
 # --- gateway re-run is byte-identical (idempotence across the new branch) ---
 cp "$STAGE_GW/rhumb.env" "$STAGE_GW/rhumb.env.first"
 scripts/install.sh --dry-run --yes --stage-dir "$STAGE_GW" >/dev/null
@@ -123,7 +161,7 @@ RHUMB_ALLOWED_USERS=alice@github \
 # mismatched ambient ANTHROPIC_BASE_URL (non-secret): warns, names both values,
 # and the ambient value still wins (documented precedence, not redesigned here)
 warn_out="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000 \
-RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-secret-1 RHUMB_ALLOWED_USERS=alice@github \
   scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
 printf '%s\n' "$warn_out" | grep -q 'ANTHROPIC_BASE_URL' \
   || fail "no warning for mismatched ambient ANTHROPIC_BASE_URL"
@@ -144,7 +182,7 @@ printf '%s\n' "$warn_out" | grep -q 'bearer-secret' \
 
 # ambient ANTHROPIC_BASE_URL now matches the persisted value -> no warning
 warn_out="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://ambient-mismatch.internal:9000 \
-RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-secret-1 RHUMB_ALLOWED_USERS=alice@github \
   scripts/install.sh --dry-run --yes --stage-dir "$STAGE_WARN" 2>&1 >/dev/null)"
 printf '%s\n' "$warn_out" | grep -q 'ANTHROPIC_BASE_URL is set in the environment' \
   && fail "warning fired even though ambient value matches the persisted value"
@@ -166,7 +204,7 @@ rm -rf "$STAGE_WARN"
 # when an ambient value for it is still exported from the old mode ---
 STAGE_SWITCH="$(mktemp -d)"
 RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw-orig.internal:4000 \
-RHUMB_MODEL=qwen3-coder RHUMB_ALLOWED_USERS=alice@github \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-orig RHUMB_ALLOWED_USERS=alice@github \
   scripts/install.sh --dry-run --yes --stage-dir "$STAGE_SWITCH" >/dev/null
 
 # switch gateway -> subscription with a stale, mismatched ambient
@@ -189,7 +227,7 @@ printf '%s\n' "$switch_err" | grep -q 'ANTHROPIC_BASE_URL' \
 # switch back subscription -> gateway with a stale ambient
 # CLAUDE_CODE_OAUTH_TOKEN still exported from the previous mode
 switch_err="$(RHUMB_LLM_PROVIDER=gateway ANTHROPIC_BASE_URL=https://gw-new.internal:5000 \
-RHUMB_MODEL=qwen3-coder CLAUDE_CODE_OAUTH_TOKEN=tok-stale \
+RHUMB_MODEL=qwen3-coder ANTHROPIC_AUTH_TOKEN=bearer-new CLAUDE_CODE_OAUTH_TOKEN=tok-stale \
 RHUMB_ALLOWED_USERS=alice@github \
   scripts/install.sh --dry-run --yes --stage-dir "$STAGE_SWITCH" 2>&1 >/dev/null)"
 

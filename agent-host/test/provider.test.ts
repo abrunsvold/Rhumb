@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadProvider } from "../src/provider.js";
+import { loadProvider, GATEWAY_NO_AUTH_PLACEHOLDER } from "../src/provider.js";
 
 describe("loadProvider — subscription", () => {
   it("defaults to subscription when RHUMB_LLM_PROVIDER is unset", () => {
@@ -52,13 +52,48 @@ describe("loadProvider — gateway", () => {
     RHUMB_LLM_PROVIDER: "gateway",
     ANTHROPIC_BASE_URL: "https://gw.internal:4000",
     RHUMB_MODEL: "qwen3-coder",
+    ANTHROPIC_AUTH_TOKEN: "bearer-xyz",
   };
 
   it("accepts a base URL and explicit model", () => {
     const p = loadProvider({ ...base });
     expect(p.id).toBe("gateway");
     expect(p.model).toBe("qwen3-coder");
-    expect(p.credentialEnv).toEqual({ ANTHROPIC_BASE_URL: "https://gw.internal:4000" });
+    expect(p.credentialEnv).toEqual({
+      ANTHROPIC_BASE_URL: "https://gw.internal:4000",
+      ANTHROPIC_AUTH_TOKEN: "bearer-xyz",
+    });
+  });
+
+  // Fail closed: with no ANTHROPIC_AUTH_TOKEN in the child env, Claude Code
+  // falls back to the operator's stored claude.ai OAuth credential and sends
+  // it to the gateway as `Authorization: Bearer sk-ant-oat01-...`.
+  it("refuses to start when ANTHROPIC_AUTH_TOKEN is missing", () => {
+    const { ANTHROPIC_AUTH_TOKEN: _omit, ...noToken } = base;
+    expect(() => loadProvider(noToken)).toThrow(/ANTHROPIC_AUTH_TOKEN is required/);
+  });
+
+  it("names both options in the missing-token error", () => {
+    const { ANTHROPIC_AUTH_TOKEN: _omit, ...noToken } = base;
+    expect(() => loadProvider(noToken)).toThrow(/`none`/);
+    expect(() => loadProvider(noToken)).toThrow(/claude\.ai login/);
+  });
+
+  it("treats a whitespace-only auth token as missing", () => {
+    expect(() => loadProvider({ ...base, ANTHROPIC_AUTH_TOKEN: "   " })).toThrow(
+      /ANTHROPIC_AUTH_TOKEN is required/,
+    );
+  });
+
+  it("maps the `none` sentinel to a non-empty placeholder", () => {
+    const p = loadProvider({ ...base, ANTHROPIC_AUTH_TOKEN: "none" });
+    expect(p.credentialEnv.ANTHROPIC_AUTH_TOKEN).toBe(GATEWAY_NO_AUTH_PLACEHOLDER);
+    expect(p.credentialEnv.ANTHROPIC_AUTH_TOKEN).not.toBe("");
+  });
+
+  it("accepts the sentinel case-insensitively and with surrounding space", () => {
+    const p = loadProvider({ ...base, ANTHROPIC_AUTH_TOKEN: "  NONE " });
+    expect(p.credentialEnv.ANTHROPIC_AUTH_TOKEN).toBe(GATEWAY_NO_AUTH_PLACEHOLDER);
   });
 
   it("includes ANTHROPIC_AUTH_TOKEN when present", () => {
@@ -70,14 +105,18 @@ describe("loadProvider — gateway", () => {
   });
 
   it("throws when ANTHROPIC_BASE_URL is missing", () => {
-    expect(() => loadProvider({ RHUMB_LLM_PROVIDER: "gateway", RHUMB_MODEL: "m" })).toThrow(
-      /ANTHROPIC_BASE_URL/,
-    );
+    expect(() =>
+      loadProvider({ RHUMB_LLM_PROVIDER: "gateway", RHUMB_MODEL: "m", ANTHROPIC_AUTH_TOKEN: "t" }),
+    ).toThrow(/ANTHROPIC_BASE_URL/);
   });
 
   it("throws when RHUMB_MODEL is missing — no default is safe here", () => {
     expect(() =>
-      loadProvider({ RHUMB_LLM_PROVIDER: "gateway", ANTHROPIC_BASE_URL: "https://gw:4000" }),
+      loadProvider({
+        RHUMB_LLM_PROVIDER: "gateway",
+        ANTHROPIC_BASE_URL: "https://gw:4000",
+        ANTHROPIC_AUTH_TOKEN: "t",
+      }),
     ).toThrow(/RHUMB_MODEL/);
   });
 
