@@ -5,8 +5,11 @@ exposes a small HTTP + SSE session API over your Tailscale network.
 
 ## Authentication — personal-tool framing
 
-Rhumb authenticates Claude with **your own Claude subscription**, not an API key.
-Generate a long-lived token once:
+Rhumb authenticates Claude with your own subscription, an API key, or an
+Anthropic-compatible gateway — set `RHUMB_LLM_PROVIDER` (`subscription` |
+`api-key` | `gateway`; default `subscription`).
+
+In subscription mode, generate a long-lived token once:
 
     claude setup-token
 
@@ -14,28 +17,32 @@ Then export it before starting the host:
 
     export CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`
 
-> **Compliance note.** Anthropic's terms state that, without prior approval,
-> third-party developers may not *offer* claude.ai login or rate limits in their
-> products — including agents built on the Claude Agent SDK. Rhumb is a
-> **self-hosted personal tool**: you run it on your own hardware with your own
-> credentials. It does not broker, proxy, or offer Claude login to anyone else.
-> If you want to distribute a multi-tenant or hosted offering, seek Anthropic's
-> approval first.
+> **Compliance note (subscription mode only).** Anthropic's terms state that,
+> without prior approval, third-party developers may not *offer* claude.ai login
+> or rate limits in their products — including agents built on the Claude Agent
+> SDK. In subscription mode Rhumb is a **self-hosted personal tool**: you run it
+> on your own hardware with your own credentials. It does not broker, proxy, or
+> offer Claude login to anyone else. If you want to distribute a multi-tenant or
+> hosted offering in subscription mode, seek Anthropic's approval first. The
+> `api-key` and `gateway` modes involve no claude.ai login, so this note doesn't
+> apply to them. See [COMPLIANCE.md](../COMPLIANCE.md) for the full reasoning.
 
 ## Run
 
     npm install
     npm run build
-    CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start
+    CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start   # or the api-key / gateway vars above
 
-Environment variables: `CLAUDE_CODE_OAUTH_TOKEN` (required), `RHUMB_PORT`
-(default 8787), `RHUMB_MODEL` (default `claude-opus-4-8`), `RHUMB_WORKSPACE`
-(default `./workspace`), `RHUMB_PERMISSION_MODE` (default `acceptEdits`),
-`RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g. `alice@github`;
-**required** in the default identity mode — the host refuses to start without
-it), `RHUMB_INSECURE_DEV` (set to `1` to skip the identity allowlist and
-loopback-only bind; **local development only**, never on a box reachable by
-anyone else).
+Environment variables: `RHUMB_LLM_PROVIDER` (default `subscription`) plus that
+mode's credentials — `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`, or
+`ANTHROPIC_BASE_URL` (+ optional `ANTHROPIC_AUTH_TOKEN`); `RHUMB_PORT` (default
+8787), `RHUMB_MODEL` (default `claude-opus-4-8`; required in gateway mode),
+`RHUMB_WORKSPACE` (default `./workspace`), `RHUMB_PERMISSION_MODE` (default
+`acceptEdits`), `RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g.
+`alice@github`; **required** in the default identity mode — the host refuses to
+start without it), `RHUMB_INSECURE_DEV` (set to `1` to skip the identity
+allowlist and loopback-only bind; **local development only**, never on a box
+reachable by anyone else).
 
 ## Security
 

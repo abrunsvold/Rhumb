@@ -5,16 +5,41 @@ recommended path on a Linux box. This page is for everything else: macOS, boxes
 without systemd, understanding what the installer does, and local development
 without a tailnet.
 
-You'll need [Node.js](https://nodejs.org) 20+, a Claude subscription, and (for
-the intended setup) a Tailscale tailnet.
+You'll need [Node.js](https://nodejs.org) 20+, Claude credentials (a subscription,
+an API key, or an Anthropic-compatible gateway), and (for the intended setup) a
+Tailscale tailnet.
 
 ## Manual setup
 
-### 1. Get a Claude token
+### 1. Choose a credential mode
+
+Rhumb authenticates Claude one of three ways, set with `RHUMB_LLM_PROVIDER`:
 
 ```sh
+# subscription (default) — uses your Claude subscription
 claude setup-token        # produces a long-lived CLAUDE_CODE_OAUTH_TOKEN
+
+# api-key — pay-per-token API access
+export RHUMB_LLM_PROVIDER=api-key ANTHROPIC_API_KEY=sk-ant-...
+
+# gateway — any Anthropic-compatible endpoint, including self-hosted models
+export RHUMB_LLM_PROVIDER=gateway \
+       ANTHROPIC_BASE_URL=https://gateway.internal:4000 \
+       ANTHROPIC_AUTH_TOKEN=...   # omit if your gateway needs none
+export RHUMB_MODEL=qwen3-coder    # required in gateway mode — no default is safe
 ```
+
+> **Gateway mode needs an Anthropic-compatible endpoint.** Rhumb drives Claude Code
+> through `@anthropic-ai/claude-agent-sdk`, which speaks the Anthropic Messages
+> API. OpenRouter and most local servers (ollama, vLLM) are OpenAI-compatible, so
+> put a translating proxy in front — [LiteLLM](https://github.com/BerriAI/litellm),
+> claude-code-router, or equivalent. Rhumb does not translate protocols itself.
+
+> **Tool-calling fidelity is the real limiter on open models.** Rhumb's agent loop
+> is tool-heavy: it provisions databases, spawns services, and writes through a
+> gated approval path. Models that handle prose well often still fail at reliable
+> multi-step tool use, and that shows up as an agent that stalls or loops rather
+> than one that writes bad text. Test with a small build before committing.
 
 ### 2. Put both hosts behind `tailscale serve`
 
@@ -40,14 +65,14 @@ refuse to start without it:
 cd agent-host
 npm install
 npm run build
-CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start
+CLAUDE_CODE_OAUTH_TOKEN=... RHUMB_ALLOWED_USERS=you@github npm start   # or the api-key / gateway vars above
 ```
 
-Defaults: port `8787`, model `claude-opus-4-8`, workspace `./workspace`,
-permission mode `acceptEdits`. The host binds loopback only — `tailscale serve`
-is what makes it reachable from the tailnet. See
-[`agent-host/README.md`](../agent-host/README.md) for all environment variables
-and the security model behind permission modes.
+Defaults: port `8787`, provider `subscription`, model `claude-opus-4-8`
+(subscription and api-key modes only), workspace `./workspace`, permission mode
+`acceptEdits`. The host binds loopback only — `tailscale serve` is what makes it
+reachable from the tailnet. See [`agent-host/README.md`](../agent-host/README.md)
+for all environment variables and the security model behind permission modes.
 
 ### 4. Run the dashboard host
 

@@ -34,12 +34,24 @@ The on-ramp is homelab-grade (Proxmox + Tailscale + your own subscription), so t
 
 The code is [Apache-2.0](LICENSE) — you're free to read, run, modify, and redistribute it, including commercially. That much this repository grants you outright.
 
-The one thing to understand first is a constraint between **you and Anthropic**, not something this license adds or removes: Rhumb authenticates Claude with **your own Claude subscription**, via an OAuth token from `claude setup-token` (not an API key). Anthropic's terms restrict third-party developers from **offering** claude.ai login or rate limits to other people inside their own products. So Rhumb is built around the single-operator model, because that's the clean path through those terms:
+Rhumb authenticates Claude one of three ways, selected with `RHUMB_LLM_PROVIDER`:
 
-- You run it on **your own hardware**, with **your own credentials**.
-- Out of the box it doesn't broker, proxy, or multiplex Claude login to anyone else, and there's no "sign in with Claude" layer.
+| `RHUMB_LLM_PROVIDER` | Credentials | Notes |
+|---|---|---|
+| `subscription` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Uses your existing Claude subscription rather than pay-per-token billing. Carries the personal-tool constraint below. |
+| `api-key` | `ANTHROPIC_API_KEY` | Ordinary pay-per-token API access. No personal-tool constraint. |
+| `gateway` | `ANTHROPIC_BASE_URL`, optional `ANTHROPIC_AUTH_TOKEN`, explicit `RHUMB_MODEL` | Point Rhumb at an Anthropic-compatible endpoint — a LiteLLM proxy, an internal gateway, or a self-hosted open model behind one. Nothing need leave your network. |
 
-If you want to build a multi-tenant or hosted offering on top of it, clearing that with Anthropic is yours to do — the license won't do it for you. See [COMPLIANCE.md](COMPLIANCE.md) for the full reasoning.
+**The personal-tool constraint applies to `subscription` mode only.** That mode
+authenticates with an OAuth token tied to your own Claude subscription, and
+Anthropic's terms restrict third-party developers from *offering* claude.ai login
+or rate limits to other people inside their own products. So in subscription mode
+Rhumb is built around the single-operator model — your hardware, your credentials,
+no "sign in with Claude" layer for anyone else.
+
+In `api-key` and `gateway` mode that restriction does not apply: those are ordinary
+credentials governed by whatever terms you hold with the relevant provider. See
+[COMPLIANCE.md](COMPLIANCE.md) for the full reasoning.
 
 ---
 
@@ -73,17 +85,17 @@ Two sides, joined over Tailscale:
 
 ## Quickstart
 
-**Prerequisites:** a Linux box with systemd on your [Tailscale](https://tailscale.com) tailnet, [Node.js](https://nodejs.org) 20+, and a Claude subscription. The intended home is a Proxmox host or container, but any Linux box gives you the core experience.
+**Prerequisites:** a Linux box with systemd on your [Tailscale](https://tailscale.com) tailnet, [Node.js](https://nodejs.org) 20+, and Claude credentials (a subscription, an API key, or an Anthropic-compatible gateway).
 
 ```sh
 git clone https://github.com/abrunsvold/Rhumb && cd Rhumb
-claude setup-token      # on any machine — you'll paste the token into the installer
+claude setup-token      # subscription mode only — the installer also accepts an API key or a gateway URL
 sudo scripts/install.sh
 ```
 
 The installer checks prerequisites (telling you exactly what to fix if one is missing), auto-detects your tailnet login for the access allowlist, prompts for the Claude token, builds both hosts, mounts them behind `tailscale serve`, and installs systemd units (`rhumb-agent`, `rhumb-dashboard`) so everything starts on boot and restarts on crash. When it finishes it prints your Rhumb URL.
 
-All configuration lives in one file, `/etc/rhumb/rhumb.env`, with the optional settings (Postgres provisioning, spawned-service LXC knobs, ontology paths) documented inline as commented-out lines. The installer is idempotent: after `git pull`, re-run it to rebuild and restart — your configuration is preserved.
+All configuration lives in one file, `/etc/rhumb/rhumb.env`, with the optional settings (Postgres provisioning, spawned-service LXC knobs, ontology paths) documented inline as commented-out lines. The installer is idempotent: after `git pull`, re-run it to rebuild and restart — your configuration is preserved. If an ambient shell variable (e.g. an exported `ANTHROPIC_API_KEY`) differs from the value already persisted in `rhumb.env`, the installer warns by name — never printing a secret's value — and uses the ambient one, so a re-run can't silently clobber a saved credential without you noticing.
 
 > **First run:** if `tailscale serve` has never been used on your tailnet, the installer pauses and prints a `login.tailscale.com` link — a tailnet admin must click it once to enable Serve (and HTTPS certificates, if prompted) before setup can continue.
 

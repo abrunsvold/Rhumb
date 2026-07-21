@@ -42,8 +42,11 @@ tailnet**. Several design choices only hold under that assumption:
   behind any data source to least privilege, since a surface can issue reads and
   (once approved) writes against whatever that role can reach.
 - **Credentials come only from the environment**, never from the repo. Keep your
-  `CLAUDE_CODE_OAUTH_TOKEN`, Proxmox tokens, and database credentials in a local
-  `.env` or your process manager — they are git-ignored by default.
+  Claude credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or
+  `ANTHROPIC_AUTH_TOKEN` depending on `RHUMB_LLM_PROVIDER`), Proxmox tokens, and
+  database credentials in a local `.env` or your process manager — they are
+  git-ignored by default. The agent subprocess receives only the selected
+  provider's credentials and no `RHUMB_*` var.
 
 See [`README.md`](README.md) and [`COMPLIANCE.md`](COMPLIANCE.md) for the full
 operational security and compliance model.
