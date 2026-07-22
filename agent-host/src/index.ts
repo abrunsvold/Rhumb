@@ -188,7 +188,12 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   });
 
   if (infraPending) {
-    app.use("/infra", express.json(), createInfraRouter({ pending: infraPending, executeParked }));
+    app.use("/infra", express.json(), createInfraRouter({
+      pending: infraPending,
+      executeParked,
+      auditResolution: (a, decision) =>
+        appendInfraAudit(infra.auditPath, { ts: new Date().toISOString(), tool: `mcp__infra__${a.tool}`, input: a.input, decision }),
+    }));
   }
   app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));
 

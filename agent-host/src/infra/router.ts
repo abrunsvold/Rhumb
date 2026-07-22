@@ -5,6 +5,10 @@ import type { PendingAction } from "./types.js";
 export function createInfraRouter(deps: {
   pending: PendingActions;
   executeParked?: (a: PendingAction) => Promise<void>;
+  // Blocking entries audit their resolution inside the gate (the awaiting
+  // canUseTool); parked entries have no waiter, so the router records the
+  // operator's decision here — a denied proposal must leave a trace too.
+  auditResolution?: (a: PendingAction, decision: "approved" | "denied") => void;
 }): Router {
   const router = express.Router();
 
@@ -29,8 +33,11 @@ export function createInfraRouter(deps: {
     // A blocking entry's turn continues on its own promise. An approved
     // parked entry executes in the background — respond now, outcome lands
     // on the entry (executed/failed stream events) and in the audit.
-    if (entry?.mode === "parked" && decision === "approve") {
-      void deps.executeParked?.(deps.pending.get(req.params.id) as PendingAction);
+    if (entry?.mode === "parked") {
+      deps.auditResolution?.(entry, decision === "approve" ? "approved" : "denied");
+      if (decision === "approve") {
+        void deps.executeParked?.(deps.pending.get(req.params.id) as PendingAction);
+      }
     }
     res.json({ ok: true });
   });
