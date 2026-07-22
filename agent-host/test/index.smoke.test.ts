@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import request from "supertest";
-import { buildApp } from "../src/index.js";
+import { buildApp, warnIfClientCertVarsPresent } from "../src/index.js";
 
 describe("buildApp wiring", () => {
   it("builds an app whose /messages drives the injected query and streams a result", async () => {
     const app = buildApp({
-      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true },
+      config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./ws", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true },
       query: () =>
         (async function* () {
           yield { type: "system", subtype: "init", session_id: "sess-7" };
@@ -21,25 +21,25 @@ describe("buildApp wiring", () => {
   });
 
   it("does not mount /infra without proxmox+pg-admin config", async () => {
-    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const app = buildApp({ config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
     const res = await request(app).get("/infra/pending");
     expect(res.status).toBe(404);
   });
 
   it("boots without service config (service tools inert)", async () => {
-    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const app = buildApp({ config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
   });
 
   it("boots with the ontology wired (no infra config required)", async () => {
-    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const app = buildApp({ config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
   });
 
   it("serves GET /ontology with nodes and sync status", async () => {
-    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const app = buildApp({ config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./workspace", allowedUsers: [], insecureDev: true } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
     const res = await request(app).get("/ontology");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.nodes)).toBe(true);
@@ -48,14 +48,14 @@ describe("buildApp wiring", () => {
   });
 
   it("exposes no watchdog when RHUMB_WATCHDOG_MINUTES is unset", () => {
-    const app = buildApp({ config: { port: 0, workspace: "./workspace", allowedUsers: [], insecureDev: true, watchdogMinutes: null } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
+    const app = buildApp({ config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./workspace", allowedUsers: [], insecureDev: true, watchdogMinutes: null } as never, query: () => (async function* () { yield { type: "result", result: "", is_error: false }; })() });
     expect(app.locals.watchdog).toBeUndefined();
   });
 
   it("runs watchdog ticks as restricted read-only sessions", async () => {
     let captured: { prompt?: string; options?: Record<string, unknown> } = {};
     const app = buildApp({
-      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true, watchdogMinutes: 5 } as never,
+      config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./ws", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true, watchdogMinutes: 5 } as never,
       query: (args: { prompt: string; options?: Record<string, unknown> }) => {
         captured = args;
         return (async function* () {
@@ -78,7 +78,7 @@ describe("buildApp wiring", () => {
   it("sessions disallow AskUserQuestion and append the Rhumb system prompt", async () => {
     let captured: Record<string, unknown> | undefined;
     const app = buildApp({
-      config: { port: 0, model: "m", workspace: "./ws", oauthToken: "tok", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true },
+      config: { port: 0, provider: { id: "subscription", model: "m", credentialEnv: {} }, workspace: "./ws", permissionMode: "acceptEdits", allowedUsers: [], insecureDev: true },
       query: (args: { options?: Record<string, unknown> }) => {
         captured = args.options;
         return (async function* () { yield { type: "result", result: "", is_error: false }; })();
@@ -90,5 +90,31 @@ describe("buildApp wiring", () => {
     const sp = captured?.systemPrompt as { type: string; preset: string; append: string };
     expect(sp).toMatchObject({ type: "preset", preset: "claude_code" });
     expect(sp.append).toContain("operator approval");
+  });
+});
+
+describe("warnIfClientCertVarsPresent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("warns, naming the vars but never their values, when a client-cert var is ambient", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnIfClientCertVarsPresent({
+      CLAUDE_CODE_CLIENT_CERT: "-----BEGIN CERTIFICATE-----super-secret-cert",
+      CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: "hunter2",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0][0] as string;
+    expect(message).toContain("CLAUDE_CODE_CLIENT_CERT");
+    expect(message).toContain("CLAUDE_CODE_CLIENT_KEY_PASSPHRASE");
+    expect(message).not.toContain("super-secret-cert");
+    expect(message).not.toContain("hunter2");
+  });
+
+  it("stays silent when no client-cert var is ambient", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnIfClientCertVarsPresent({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant-test" });
+    expect(warn).not.toHaveBeenCalled();
   });
 });

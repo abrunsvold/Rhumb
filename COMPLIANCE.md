@@ -7,10 +7,13 @@ responsible for clearing that with the relevant providers yourself.
 
 ## The core constraint
 
-Rhumb authenticates Claude with the **operator's own Claude subscription**, via a
-long-lived OAuth token produced by `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`).
-It never uses a pay-per-token API key, and it never holds anyone's credentials but
-the operator's own.
+Rhumb supports three credential modes (`RHUMB_LLM_PROVIDER`): `subscription`,
+`api-key`, and `gateway`. **This document's constraint applies to `subscription`
+mode only.**
+
+In subscription mode, Rhumb authenticates Claude with the **operator's own Claude
+subscription**, via a long-lived OAuth token produced by `claude setup-token`
+(`CLAUDE_CODE_OAUTH_TOKEN`).
 
 Anthropic's terms of service restrict third-party developers from **offering**
 claude.ai login or claude.ai rate limits within their own products — including
@@ -18,13 +21,30 @@ agents built on the Claude Agent SDK — without prior approval. The operative v
 is **offer**: the restriction is about exposing *your* Claude access (or a login to
 it) *to other people* as part of a product or service.
 
+In `api-key` and `gateway` mode no claude.ai login or rate limit is involved, so
+this restriction does not apply. Those deployments are governed by the terms you
+hold with whoever supplies the credentials — Anthropic, your cloud provider, or
+nobody at all if you are serving a self-hosted model.
+
+That claim about gateway mode holds because Rhumb *enforces* it, not merely by
+convention. Claude Code, given a gateway base URL but no `ANTHROPIC_AUTH_TOKEN`,
+falls back to the claude.ai OAuth credential stored on the box and sends it to
+the gateway — which would put a claude.ai login into a deployment documented as
+having none. So the agent host requires `ANTHROPIC_AUTH_TOKEN` in gateway mode
+and refuses to start without it; operators of auth-free gateways set it to the
+literal `none`, which makes Rhumb inject a non-credential placeholder. A gateway
+deployment therefore never carries your claude.ai login, and a subscription
+credential is used only in `subscription` mode. See
+[SECURITY.md](SECURITY.md) and [docs/setup-manual.md](docs/setup-manual.md).
+
 ## How Rhumb stays inside that line
 
-Rhumb is built and distributed as a **self-hosted personal tool**, not a product or
-service:
+In subscription mode, Rhumb is built and distributed as a **self-hosted personal
+tool**, not a product or service:
 
-- **One operator, their own credentials.** Each person who runs Rhumb supplies
-  their own `CLAUDE_CODE_OAUTH_TOKEN` and runs the software on their own hardware.
+- **One operator, their own credentials.** Each person running Rhumb in
+  subscription mode supplies their own `CLAUDE_CODE_OAUTH_TOKEN` and runs the
+  software on their own hardware.
 - **No brokering.** Rhumb does not proxy, multiplex, resell, or otherwise expose
   Claude login or rate limits to third parties. There is no "sign in with Claude"
   flow for end users.
@@ -37,10 +57,11 @@ service:
 
 ## If you want to go further
 
-Building a **multi-tenant or hosted** offering on top of Rhumb — anything where
-people who are not the operator reach Claude through your deployment — moves outside
-this personal-tool model. **Seek Anthropic's approval first.** That is your
-responsibility, not something this license or this repository grants you.
+Building a **multi-tenant or hosted** offering on top of Rhumb **in subscription
+mode** — anything where people who are not the operator reach *your* claude.ai
+access through your deployment — moves outside this personal-tool model. **Seek
+Anthropic's approval first.** That is your responsibility, not something this
+license or this repository grants you.
 
 ## Network & data posture (related, not legal)
 

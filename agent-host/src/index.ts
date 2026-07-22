@@ -11,6 +11,7 @@ import { SessionManager, type QueryFn } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
+import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient, createPveCall } from "./infra/proxmox.js";
 import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.js";
@@ -164,7 +165,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
 
   const manager = new SessionManager({
     query: deps.query,
-    model: deps.config.model,
+    model: deps.config.provider.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
     extraOptions: sessionExtraOptions,
@@ -196,7 +197,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // mutation is structurally impossible (see watchdogDisallowedTools).
     const watchdogManager = new SessionManager({
       query: deps.query,
-      model: deps.config.model,
+      model: deps.config.provider.model,
       workspace: deps.config.workspace,
       permissionMode: deps.config.permissionMode,
       extraOptions: {
@@ -222,19 +223,52 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   return app;
 }
 
-// Wrap the SDK's query so it matches our narrowed QueryFn signature.
-const realQuery: QueryFn = (args) =>
-  sdkQuery({
-    ...args,
-    options: { ...args.options, env: sanitizedEnv(process.env) },
-  } as never);
+// Wrap the SDK's query so it matches our narrowed QueryFn signature. The env we
+// hand the SDK is what the spawned Claude Code process sees: the selected
+// provider's credentials, with no RHUMB_* var and no credential or
+// provider-selection var Rhumb knows about surviving from the host's own
+// environment. Unrelated vars (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, …) do pass
+// through — see sanitizedEnv for the exact guarantee.
+export function createRealQuery(credentialEnv: Record<string, string>): QueryFn {
+  // Validate eagerly, once. sanitizedEnv throws on a miswired credentialEnv,
+  // but the closure below runs lazily — first on the first user turn — so a
+  // miswiring would otherwise surface as a failed turn on a host that had
+  // already logged healthy. main() calls this before the server listens, so
+  // doing the work here puts the error at startup where the operator is
+  // looking. The result is intentionally discarded: each turn rebuilds it from
+  // the then-current process.env.
+  sanitizedEnv(process.env, credentialEnv);
+  return (args) =>
+    sdkQuery({
+      ...args,
+      options: { ...args.options, env: sanitizedEnv(process.env, credentialEnv) },
+    } as never);
+}
+
+// Vars an operator may have set ambiently for corporate mTLS. They are always
+// stripped (see PROVIDER_CREDENTIAL_VARS in provider.ts) and never end up in
+// `credentialEnv`, so — unlike a missing ANTHROPIC_AUTH_TOKEN, which fails
+// loudly at boot — losing them fails silently: every model request breaks
+// with an opaque TLS handshake error and nothing points at the cause. Warn at
+// startup instead. Never log the value, only the variable name.
+export function warnIfClientCertVarsPresent(env: NodeJS.ProcessEnv): void {
+  const present = PROVIDER_CREDENTIAL_VARS.filter(
+    (name) => name.startsWith("CLAUDE_CODE_CLIENT_") && env[name] !== undefined,
+  );
+  if (present.length > 0) {
+    console.warn(
+      `[rhumb] WARNING: ${present.join(", ")} set in the environment but no longer passed to the agent — if your endpoint requires client-cert (mTLS) auth, model requests will fail.`,
+    );
+  }
+}
 
 export function main(): void {
   const config = loadConfig(process.env);
-  // The SDK reads CLAUDE_CODE_OAUTH_TOKEN from the environment; it is already
-  // present (loadConfig requires it), so no extra wiring is needed here.
+  warnIfClientCertVarsPresent(process.env);
+  // Credentials reach the SDK only through the env we build per query — the
+  // host's own process env is never passed through unfiltered.
   mkdirSync(config.workspace, { recursive: true });
-  const app = buildApp({ config, query: realQuery });
+  const app = buildApp({ config, query: createRealQuery(config.provider.credentialEnv) });
   // Timers start only here — buildApp callers (tests) drive tick() directly.
   (app.locals.watchdog as { start(): void } | undefined)?.start();
   if (config.watchdogMinutes) {
@@ -242,7 +276,10 @@ export function main(): void {
   }
   const onListen = () => {
     const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
-    console.log(`rhumb agent-host listening on ${bound}:${config.port} (model ${config.model})`);
+    console.log(
+      `rhumb agent-host listening on ${bound}:${config.port} ` +
+        `(provider ${config.provider.id}, model ${config.provider.model})`,
+    );
     if (config.insecureDev) {
       console.warn(
         "[rhumb] WARNING: RHUMB_INSECURE_DEV=1 — identity auth is OFF and the " +

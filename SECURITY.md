@@ -42,8 +42,21 @@ tailnet**. Several design choices only hold under that assumption:
   behind any data source to least privilege, since a surface can issue reads and
   (once approved) writes against whatever that role can reach.
 - **Credentials come only from the environment**, never from the repo. Keep your
-  `CLAUDE_CODE_OAUTH_TOKEN`, Proxmox tokens, and database credentials in a local
-  `.env` or your process manager — they are git-ignored by default.
+  Claude credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or
+  `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, depending on
+  `RHUMB_LLM_PROVIDER`), Proxmox tokens, and database credentials in a local
+  `.env` or your process manager — they are git-ignored by default. The agent
+  subprocess is handed the selected provider's credentials, and no `RHUMB_*`
+  var and no credential or provider-selection variable Rhumb knows about
+  reaches it from the ambient environment. This is a strip-list, not a full
+  allowlist: unrelated variables — including `HTTPS_PROXY` and
+  `NODE_EXTRA_CA_CERTS`, which corporate networks need — still pass through,
+  and those two can redirect or inspect model traffic. Only `credentialEnv`
+  itself is allowlist-validated.
+- **Gateway mode fails closed without an auth token.** `ANTHROPIC_AUTH_TOKEN` is
+  required whenever `RHUMB_LLM_PROVIDER=gateway`; set it to `none` for a gateway
+  that needs no auth. Left empty, Claude Code would fall back to the claude.ai
+  login stored on the box and transmit it to the gateway.
 
 See [`README.md`](README.md) and [`COMPLIANCE.md`](COMPLIANCE.md) for the full
 operational security and compliance model.
