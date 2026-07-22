@@ -298,9 +298,28 @@ EOF
 # Uncomment and set as needed. Relative artifacts default to files under
 # RHUMB_WORKSPACE. Full semantics: agent-host/README.md, dashboard-host/README.md.
 
+# Proxmox API credentials — all four are required together to enable the
+# infrastructure capability (VM lifecycle, LXC provisioning, spawned services).
+# Without them the agent still runs, it just cannot operate infrastructure.
+# Create a scoped API token under Datacenter > Permissions > API Tokens.
+#RHUMB_PROXMOX_URL=https://192.168.1.100:8006
+#RHUMB_PROXMOX_TOKEN_ID=rhumb@pve!rhumb
+#RHUMB_PROXMOX_TOKEN_SECRET=
+#RHUMB_PROXMOX_NODE=pve
+
+# Proxmox nodes usually present a self-signed certificate, which Node rejects.
+# This disables TLS verification for the WHOLE agent-host process, not just the
+# Proxmox calls — set it only on a trusted tailnet, and prefer installing the
+# node's CA certificate on this box instead.
+#NODE_TLS_REJECT_UNAUTHORIZED=0
+
 # Postgres superuser connection string — enables agent database provisioning
 # (and installs the per-database DDL audit on provision).
 #RHUMB_PG_ADMIN=postgres://postgres:secret@127.0.0.1:5432/postgres
+
+# Extra text appended to the agent's system prompt. Defaults to a note
+# explaining the operator confirmation gate; set this to add your own.
+#RHUMB_PROMPT_APPEND=
 
 # Registry/audit file overrides (defaults live under the workspace):
 # data-sources.json (registered data sources), data-trust.json (per-surface
