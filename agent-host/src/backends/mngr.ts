@@ -31,15 +31,26 @@ export type ExecFn = (
   opts?: { env?: Record<string, string> },
 ) => Promise<ExecResult>;
 
+/** The mngr `--label` key this backend uses to mark an agent as belonging
+ *  to a specific Rhumb principal. Verified against real mngr 0.2.17:
+ *  `create` accepts repeatable `--label KEY=VALUE`, and `list --format
+ *  json` round-trips it back as a `labels` object per agent (e.g.
+ *  `{"labels":{"rhumb_agent_id":"rhumb-test-123"}}`). This is the ONLY key
+ *  `resolveNativeIdByLabel` ever matches on — see its doc comment for why
+ *  matching on `name` (the pre-A1 behaviour) was a security defect. */
+const RHUMB_AGENT_ID_LABEL = "rhumb_agent_id";
+
 // Command shapes verified against mngr 0.2.17 in
 // docs/dogfood/2026-08-03-mngr-phase0.md. Adjust these builders — and
 // nothing else — if the CLI surface changes.
-const argvCreate = (name: string, credentialEnv: Record<string, string>): string[] => [
+const argvCreate = (name: string, agentId: string, credentialEnv: Record<string, string>): string[] => [
   "create",
   name,
   "claude",
   "--no-connect",
   "-y",
+  "--label",
+  `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
   ...credentialEnvFlags(credentialEnv),
 ];
 const argvSend = (nativeId: string, prompt: string): string[] => ["message", nativeId, "-m", prompt];
@@ -148,10 +159,16 @@ function newAssistantReply(
 
 /** Why `ensureAgent` left a principal unbound (`nativeId: null`), so
  *  `send()` can report something more accurate than one generic message for
- *  four different situations (see `ensureFailureMessage`). Not part of the
- *  public `AgentRef` contract — `EnsureResult` is a superset used only
- *  inside this module. */
-type EnsureFailureReason = "stopped" | "invalid-name" | "create-failed" | "unresolved";
+ *  the many situations that can lead there (see `ensureFailureMessage`).
+ *  Not part of the public `AgentRef` contract — `EnsureResult` is a
+ *  superset used only inside this module. */
+type EnsureFailureReason =
+  | "stopped"
+  | "invalid-name"
+  | "create-failed"
+  | "create-unconfirmed"
+  | "create-not-found"
+  | "bound-elsewhere";
 
 interface EnsureResult extends AgentRef {
   reason?: EnsureFailureReason;
@@ -163,8 +180,21 @@ function ensureFailureMessage(reason: EnsureFailureReason | undefined): string {
       return "mngr: this principal was stopped and must not be silently resumed; a new agentId is required to continue";
     case "invalid-name":
       return "mngr: agent name is not valid for `mngr create`, refused before invoking the CLI";
-    case "unresolved":
-      return "mngr: an agent may have just been created but its id could not be confirmed yet; it will be adopted on a later turn once list() is trustworthy again";
+    case "bound-elsewhere":
+      return "mngr: this mngr agent is already bound to a different Rhumb principal; refusing to share it";
+    case "create-unconfirmed":
+      // The listing itself was unknowable (non-zero exit / unparseable),
+      // NOT proof the agent doesn't exist — distinct from "create-not-found"
+      // below (A2: these were wrongly collapsed into one "unresolved"
+      // message that falsely implied a listing-trust problem even when the
+      // listing was perfectly trustworthy and simply empty).
+      return "mngr: an agent was likely just created but its id could not be confirmed yet (the listing itself was unavailable); it will be adopted on a later turn once list() is trustworthy again";
+    case "create-not-found":
+      // The listing WAS trustworthy (well-formed, zero exit) and simply
+      // showed no agent under the expected label. Unexpected, but not a
+      // listing problem — say so, rather than reusing the "unavailable
+      // listing" wording above.
+      return "mngr: create reported success but no agent with the expected label was found in a trustworthy listing; this will be retried on a later turn";
     case "create-failed":
     default:
       return "mngr: could not create an agent for this principal";
@@ -191,11 +221,15 @@ export function createMngrBackend(deps: {
    *  verified `{"agents":[...]}` shape — in particular a bare array, which
    *  an earlier draft of this backend mistakenly treated as valid). `null`
    *  means "unknowable", never "empty". */
-  async function listAgents(): Promise<Array<{ id?: string; name?: string }> | null> {
+  async function listAgents(): Promise<
+    Array<{ id?: string; name?: string; labels?: Record<string, unknown> }> | null
+  > {
     const res = await exec(argvList());
     if (res.code !== 0) return null;
     try {
-      const parsed = JSON.parse(res.stdout) as { agents?: Array<{ id?: string; name?: string }> };
+      const parsed = JSON.parse(res.stdout) as {
+        agents?: Array<{ id?: string; name?: string; labels?: Record<string, unknown> }>;
+      };
       if (!parsed || !Array.isArray(parsed.agents)) return null;
       return parsed.agents;
     } catch {
@@ -213,37 +247,69 @@ export function createMngrBackend(deps: {
     return ids;
   }
 
-  /** Resolves the mngr id of an agent by matching on its `name`, rather
-   *  than trusting `create`'s stdout. docs/dogfood/2026-08-03-mngr-phase0.md
-   *  records that mngr's stdout can carry provider banners and is "not safe
-   *  to parse without --format json"; `create`'s stdout was never
-   *  separately characterised as safe. Trusting it risks binding a banner
-   *  (or any other stray stdout) as the nativeId, which would never match a
-   *  real id in `liveIds()` and cause `ensure()` to conclude "provably
-   *  dead" and re-create on every subsequent turn.
+  /** Resolves the mngr id of an agent by matching on the
+   *  `RHUMB_AGENT_ID_LABEL` label this backend stamps every agent it
+   *  creates with (see `argvCreate`), rather than trusting `create`'s
+   *  stdout OR matching on `name`.
    *
-   *  Returns a DISCRIMINATED result rather than collapsing to `string |
-   *  null`, on purpose: "no agent with this name exists" (KNOWN ABSENT) and
-   *  "the listing itself could not be trusted" (UNKNOWABLE, non-zero exit
-   *  or unparseable output) are different facts and must not be conflated —
+   *  Matching on `name` (this function's pre-A1 behaviour) was a security
+   *  defect, not just a correctness one:
+   *   1. `AgentRecord.name` has no uniqueness constraint and `bind()`
+   *      doesn't check whether a nativeId is already claimed elsewhere, so
+   *      two Rhumb principals sharing a display name could both resolve to
+   *      — and both act on — the SAME mngr agent. That breaks the 1:1
+   *      agentId<->nativeId binding this whole module exists to protect
+   *      (one principal's prompts landing in another's transcript; `stop()`
+   *      on one tearing down the other's agent).
+   *   2. It was fail-OPEN: any agent under a matching name got adopted,
+   *      including one a human ran `mngr create <name> claude` for
+   *      directly, or one made by another tool — neither of which ever
+   *      went through `argvCreate`'s `--env` credential scrub (the entire
+   *      Q2 security guarantee this module exists to provide). Before
+   *      resolve-before-create existed, a name collision instead drove an
+   *      unconditional `create`, which mngr fails on the pre-existing
+   *      `mngr/<name>` branch — i.e. it failed CLOSED. Adoption-by-name
+   *      flipped that posture to fail-open, silently.
+   *
+   *  A label Rhumb itself stamps at creation time — checked for an EXACT
+   *  match against the calling principal's own `agentId` — has neither
+   *  problem: only an agent Rhumb created (and therefore already scrubbed)
+   *  can ever satisfy the match, and the match is scoped to exactly the one
+   *  principal asking.
+   *
+   *  Still returns a DISCRIMINATED result rather than collapsing to
+   *  `string | null`: "no agent carries this label" (KNOWN ABSENT) and "the
+   *  listing itself could not be trusted" (UNKNOWABLE, non-zero exit or
+   *  unparseable output) are different facts and must not be conflated —
    *  the same "null means unknowable, never empty" discipline `listAgents`/
-   *  `liveIds` already follow. Conflating them here was the N1 defect: a
-   *  transient listing failure right after a successful `create` would read
-   *  as "no such agent" and the caller would give up on a principal whose
-   *  mngr agent actually exists. Callers decide what UNKNOWABLE means for
-   *  them (see the "unresolved" reason in `ensureAgent`, which deliberately
-   *  does NOT report a failed create).
-   *
-   *  Name collisions with a pre-existing, unrelated agent are a known,
-   *  accepted limitation (first match wins) — mngr is assumed to enforce
-   *  name uniqueness. */
-  async function resolveNativeIdByName(
-    name: string,
+   *  `liveIds` already follow (this discrimination is unchanged by A1; only
+   *  the match key changed). See the two `create-*` reasons in
+   *  `ensureFailureMessage` for how callers use each case. */
+  async function resolveNativeIdByLabel(
+    agentId: string,
   ): Promise<{ status: "found"; id: string } | { status: "not-found" } | { status: "unknowable" }> {
     const agents = await listAgents();
     if (agents === null) return { status: "unknowable" };
-    const match = agents.find((a) => a?.name === name);
+    const match = agents.find((a) => a?.labels?.[RHUMB_AGENT_ID_LABEL] === agentId);
     return match?.id ? { status: "found", id: match.id } : { status: "not-found" };
+  }
+
+  /** Binds `nativeId` to `agentId`, unless that nativeId is already bound
+   *  to a DIFFERENT, non-stopped registry record — belt-and-braces guard
+   *  against a corrupted or colliding label (see A1). Adoption-by-label is
+   *  meant to be 1:1 by construction, but nothing on mngr's side enforces
+   *  that, and a silent cross-principal bind is exactly the trust violation
+   *  this whole module exists to prevent, so this fails closed rather than
+   *  trusting the label match alone. */
+  function bindIfUnclaimed(agentId: string, nativeId: string): EnsureResult {
+    const conflict = registry
+      .list()
+      .find((r) => r.nativeId === nativeId && r.agentId !== agentId && r.status !== "stopped");
+    if (conflict) {
+      return { agentId, nativeId: null, backend: "mngr", reason: "bound-elsewhere" };
+    }
+    registry.bind(agentId, nativeId);
+    return { agentId, nativeId, backend: "mngr" };
   }
 
   /** Snapshot of a live agent's transcript, or `null` when it cannot be read
@@ -299,30 +365,33 @@ export function createMngrBackend(deps: {
       }
     }
 
+    // Resolve-BEFORE-create, keyed on RHUMB_AGENT_ID_LABEL (A1) — adopt a
+    // pre-existing agent Rhumb already labelled for THIS principal, instead
+    // of unconditionally calling `create`. This is what actually fixes the
+    // N1 orphan path, not just the discriminated result type above: if a
+    // PRIOR ensure() call's `create` succeeded but the immediately-
+    // following resolveNativeIdByLabel was UNKNOWABLE (leaving the
+    // principal unbound, see below), this step is where that agent gets
+    // adopted on a LATER call — instead of calling `create` again, which
+    // Phase 0 documents fails once the branch `mngr/<name>` already exists
+    // (permanently orphaning the agent if retried blindly). It also makes
+    // `ensureAgent` idempotent under concurrent/repeated calls in general,
+    // not just in the recovery case. This runs before name validation on
+    // purpose: adoption never needs `name` (a stored, possibly-invalid
+    // display name should not block adopting an agent that already exists
+    // and is already correctly labelled).
+    const preexisting = await resolveNativeIdByLabel(agentId);
+    if (preexisting.status === "found") {
+      return bindIfUnclaimed(agentId, preexisting.id);
+    }
+
     const name = existing?.name ?? agentId;
     if (!VALID_MNGR_NAME.test(name)) {
       // Fail closed rather than hand an unsafe name to `create`.
       return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
     }
 
-    // Resolve-BEFORE-create: adopt a pre-existing agent under this name
-    // instead of unconditionally calling `create`. This is what actually
-    // fixes the N1 orphan path, not just the discriminated result type
-    // above: if a PRIOR ensure() call's `create` succeeded but the
-    // immediately-following resolveNativeIdByName was UNKNOWABLE (leaving
-    // the principal unbound, see below), this step is where that agent
-    // gets adopted on a LATER call — instead of calling `create` again,
-    // which Phase 0 documents fails once the branch `mngr/<name>` already
-    // exists (permanently orphaning the agent if retried blindly). It also
-    // makes `ensureAgent` idempotent under concurrent/repeated calls in
-    // general, not just in the recovery case.
-    const preexisting = await resolveNativeIdByName(name);
-    if (preexisting.status === "found") {
-      registry.bind(agentId, preexisting.id);
-      return { agentId, nativeId: preexisting.id, backend: "mngr" };
-    }
-
-    const res = await exec(argvCreate(name, credentialEnv), { env: credentialEnv });
+    const res = await exec(argvCreate(name, agentId, credentialEnv), { env: credentialEnv });
     if (res.code !== 0) {
       // A genuine create failure (mngr's own exit code says so). Leave the
       // principal unbound; send() reports it as an error event rather than
@@ -330,23 +399,28 @@ export function createMngrBackend(deps: {
       return { agentId, nativeId: null, backend: "mngr", reason: "create-failed" };
     }
 
-    const resolved = await resolveNativeIdByName(name);
+    const resolved = await resolveNativeIdByLabel(agentId);
     if (resolved.status === "found") {
-      registry.bind(agentId, resolved.id);
-      return { agentId, nativeId: resolved.id, backend: "mngr" };
+      return bindIfUnclaimed(agentId, resolved.id);
     }
-    // Neither "found" branch fired: either UNKNOWABLE (the list lookup
-    // itself failed) or "not-found" (create reported success but no agent
-    // shows up under this name — unexpected, but not something we can
-    // resolve here either). Deliberately NOT reported as "create-failed" in
-    // either case: `create`'s own exit code already said it succeeded, and
-    // concluding failure here is exactly the N1 defect. The principal stays
-    // unbound for THIS call (there is no confirmed id to hand back), but
-    // the resolve-before-create step above will pick this agent up on a
-    // later call once `list` is trustworthy again (UNKNOWABLE case) or will
-    // legitimately retry `create` (the "not-found" case, where nothing was
-    // actually created under this name and a fresh attempt is correct).
-    return { agentId, nativeId: null, backend: "mngr", reason: "unresolved" };
+    // Neither "found" branch fired. Deliberately NOT reported as
+    // "create-failed" in either sub-case: `create`'s own exit code already
+    // said it succeeded, and concluding failure here is exactly the N1
+    // defect. The principal stays unbound for THIS call (there is no
+    // confirmed id to hand back), but the two sub-cases differ in what
+    // happens next, so they're reported distinctly (A2):
+    if (resolved.status === "unknowable") {
+      // The listing itself failed right after create succeeded. The
+      // resolve-before-create step above will pick this agent up on a
+      // later call once `list` is trustworthy again.
+      return { agentId, nativeId: null, backend: "mngr", reason: "create-unconfirmed" };
+    }
+    // resolved.status === "not-found": a trustworthy listing genuinely
+    // shows no agent under this label. Nothing was actually adopted, so a
+    // later call will legitimately retry `create` via resolve-before-create
+    // finding nothing (rather than a stale claim that the listing was
+    // untrustworthy, which A2 flagged as inaccurate here).
+    return { agentId, nativeId: null, backend: "mngr", reason: "create-not-found" };
   }
 
   return {

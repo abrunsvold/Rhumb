@@ -59,13 +59,15 @@ describe("mngr backend", () => {
           return { code: 0, stdout: "Docker provider disabled\nsome-banner-line\n", stderr: "" };
         }
         if (argv[0] === "list") {
-          // Nothing exists under this name until AFTER create runs (the
+          // Nothing carries the label until AFTER create runs (the
           // resolve-BEFORE-create step, added for N1, must not "find" an
           // agent that doesn't exist yet).
           return {
             code: 0,
             stdout: JSON.stringify({
-              agents: created ? [{ id: "agent-resolved-via-list", name: rec.name }] : [],
+              agents: created
+                ? [{ id: "agent-resolved-via-list", labels: { rhumb_agent_id: rec.agentId } }]
+                : [],
             }),
             stderr: "",
           };
@@ -85,7 +87,28 @@ describe("mngr backend", () => {
     expect(createArgv?.slice(0, 5)).toEqual(["create", rec.name, "claude", "--no-connect", "-y"]);
   });
 
-  it("resolve-before-create adopts a pre-existing agent under this name instead of creating a duplicate", async () => {
+  it("create's argv includes --label rhumb_agent_id=<agentId> (A1)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: recordingExec(calls, ""),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const labelIndex = createArgv.indexOf("--label");
+    expect(labelIndex).toBeGreaterThanOrEqual(0);
+    // Labelled with the Rhumb PRINCIPAL (agentId), never the display name.
+    expect(createArgv[labelIndex + 1]).toBe(`rhumb_agent_id=${rec.agentId}`);
+  });
+
+  it("resolve-before-create adopts a pre-existing agent by rhumb_agent_id label, not by name (A1)", async () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     let createCalls = 0;
@@ -98,7 +121,13 @@ describe("mngr backend", () => {
         if (argv[0] === "list") {
           return {
             code: 0,
-            stdout: JSON.stringify({ agents: [{ id: "agent-preexisting", name: rec.name }] }),
+            // Deliberately a DIFFERENT name than `rec.name`, to prove
+            // adoption is keyed on the label, not on name.
+            stdout: JSON.stringify({
+              agents: [
+                { id: "agent-preexisting", name: "totally-different-name", labels: { rhumb_agent_id: rec.agentId } },
+              ],
+            }),
             stderr: "",
           };
         }
@@ -114,6 +143,124 @@ describe("mngr backend", () => {
     expect(ref.nativeId).toBe("agent-preexisting");
     expect(createCalls).toBe(0);
     expect(registry.get(rec.agentId)?.nativeId).toBe("agent-preexisting");
+  });
+
+  it("does NOT adopt an agent with a matching name but no (or a different) rhumb_agent_id label (A1, fail-closed)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    let createCalls = 0;
+    let created = false;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "create") {
+          createCalls += 1;
+          created = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv[0] === "list") {
+          const agents: Array<{ id: string; name?: string; labels?: Record<string, string> }> = [
+            // Same NAME, but NO label at all -- e.g. a human ran
+            // `mngr create probe claude` directly, or another tool made it.
+            // Must NOT be adopted: it never went through the --env scrub.
+            { id: "agent-human-created", name: rec.name },
+            // Same NAME, but the WRONG rhumb_agent_id -- must not match either.
+            { id: "agent-wrong-label", name: rec.name, labels: { rhumb_agent_id: "someone-elses-agentId" } },
+          ];
+          if (created) {
+            agents.push({ id: "agent-correctly-labeled", name: rec.name, labels: { rhumb_agent_id: rec.agentId } });
+          }
+          return { code: 0, stdout: JSON.stringify({ agents }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    // Neither the label-less nor the wrong-label agent was adopted; instead
+    // a genuinely new, correctly-labelled agent was created (proving
+    // adoption is fail-closed, not fail-open on a name match).
+    expect(ref.nativeId).toBe("agent-correctly-labeled");
+    expect(createCalls).toBe(1);
+  });
+
+  it("two principals sharing a display name do not bind to the same nativeId (A1)", async () => {
+    const registry = makeRegistry();
+    const rec1 = registry.create("shared-name", "mngr");
+    const rec2 = registry.create("shared-name", "mngr");
+    const createdAgents: Array<{ id: string; labels: Record<string, string> }> = [];
+    let counter = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "create") {
+          const labelIndex = argv.indexOf("--label");
+          const [, value] = argv[labelIndex + 1].split("=");
+          const id = `agent-native-${++counter}`;
+          createdAgents.push({ id, labels: { rhumb_agent_id: value } });
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv[0] === "list") {
+          return { code: 0, stdout: JSON.stringify({ agents: createdAgents }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref1 = await backend.ensure(rec1.agentId, CONFORMANCE_SPEC);
+    const ref2 = await backend.ensure(rec2.agentId, CONFORMANCE_SPEC);
+
+    expect(ref1.nativeId).not.toBeNull();
+    expect(ref2.nativeId).not.toBeNull();
+    // The whole point: sharing `name` must not collapse the two principals
+    // onto the same mngr agent.
+    expect(ref1.nativeId).not.toBe(ref2.nativeId);
+  });
+
+  it("refuses to bind a nativeId already bound to a different, non-stopped principal (A1 belt-and-braces guard)", async () => {
+    const registry = makeRegistry();
+    const rec1 = registry.create("probe1", "mngr");
+    const rec2 = registry.create("probe2", "mngr");
+    registry.bind(rec1.agentId, "agent-shared");
+    // Simulates a corrupted/colliding label: mngr reports the SAME native
+    // agent id under rec2's label, even though rec1 already legitimately
+    // owns it. Should never happen in practice -- this is the
+    // belt-and-braces case, not the common path.
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "list") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              agents: [{ id: "agent-shared", name: "probe1", labels: { rhumb_agent_id: rec2.agentId } }],
+            }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref = await backend.ensure(rec2.agentId, CONFORMANCE_SPEC);
+
+    expect(ref.nativeId).toBeNull();
+    expect(registry.get(rec2.agentId)?.nativeId).toBeNull();
+    // rec1's legitimate binding must be untouched.
+    expect(registry.get(rec1.agentId)?.nativeId).toBe("agent-shared");
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec2.agentId, nativeId: null, backend: "mngr" }, "hi", (e) => events.push(e));
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("already bound");
   });
 
   it("does not orphan a created agent when the immediately-following list is unknowable (N1)", async () => {
@@ -133,7 +280,7 @@ describe("mngr backend", () => {
           if (listShouldFail) return { code: 1, stdout: "", stderr: "docker provider warning noise" };
           return {
             code: 0,
-            stdout: JSON.stringify({ agents: [{ id: "agent-adopted", name: rec.name }] }),
+            stdout: JSON.stringify({ agents: [{ id: "agent-adopted", labels: { rhumb_agent_id: rec.agentId } }] }),
             stderr: "",
           };
         }
@@ -150,30 +297,34 @@ describe("mngr backend", () => {
     // Must NOT be treated as a failed create.
     const first = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
     expect(first.nativeId).toBeNull();
+    // `reason` is an internal EnsureResult field, not part of the public
+    // AgentRef contract -- cast to inspect it.
+    expect((first as { reason?: string }).reason).toBe("create-unconfirmed");
     expect(createCalls).toBe(1);
 
     // The transient list failure clears, and list now reports the agent
-    // create actually produced.
+    // create actually produced, correctly labelled.
     listShouldFail = false;
 
     // Second ensure(): must ADOPT the pre-existing agent via resolve-
-    // before-create, not call create again. Phase 0 documents that `create`
-    // fails once the branch `mngr/<name>` already exists — retrying it here
-    // would permanently orphan the agent instead of recovering it.
+    // before-create (keyed on the label, re-keyed for A1), not call create
+    // again. Phase 0 documents that `create` fails once the branch
+    // `mngr/<name>` already exists — retrying it here would permanently
+    // orphan the agent instead of recovering it.
     const second = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
     expect(second.nativeId).toBe("agent-adopted");
     expect(createCalls).toBe(1);
     expect(registry.get(rec.agentId)?.nativeId).toBe("agent-adopted");
   });
 
-  it("treats a create whose new agent cannot be found in list as unresolved, not a failed create (I2/N1)", async () => {
+  it("treats a create whose new agent cannot be found in a trustworthy list as create-not-found, distinct from create-unconfirmed (I2/N1/A2)", async () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     const backend = createMngrBackend({
       exec: async (argv) => {
         if (argv[0] === "create") return { code: 0, stdout: "", stderr: "" };
         if (argv[0] === "list") {
-          // No agent under this name shows up -- a genuinely KNOWN-ABSENT
+          // No agent under this label shows up -- a genuinely KNOWN-ABSENT
           // result (well-formed JSON, just empty), not an unknowable one.
           return { code: 0, stdout: JSON.stringify({ agents: [] }), stderr: "" };
         }
@@ -187,16 +338,19 @@ describe("mngr backend", () => {
     const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
 
     expect(ref.nativeId).toBeNull();
+    expect((ref as { reason?: string }).reason).toBe("create-not-found");
     expect(registry.get(rec.agentId)?.nativeId).toBeNull();
 
-    // M3: distinct from a genuine create failure -- send()'s error message
-    // must say the create outcome couldn't be confirmed, not that create
-    // itself failed.
+    // A2: distinct from BOTH a genuine create failure AND the "unconfirmed"
+    // (listing-was-unavailable) case -- this listing was perfectly
+    // trustworthy and simply showed nothing, which is a different fact.
     const events: AgentEvent[] = [];
     await backend.send({ agentId: rec.agentId, nativeId: null, backend: "mngr" }, "hi", (e) => events.push(e));
     const last = events.at(-1);
     expect(last?.type).toBe("error");
-    expect((last as { message: string }).message).toContain("could not be confirmed");
+    expect((last as { message: string }).message).toContain("reported success but no agent");
+    expect((last as { message: string }).message).not.toContain("could not be confirmed");
+    expect((last as { message: string }).message).not.toContain("could not create an agent");
   });
 
   it("ensure is idempotent: a bound principal does not spawn a second agent", async () => {
@@ -226,13 +380,13 @@ describe("mngr backend", () => {
     // `list --format json` reports a different agent under the "agents"
     // key before create, and additionally the freshly-created one after —
     // so the bound "agent-dead" is provably gone, and the new agent can be
-    // resolved by name afterwards.
+    // resolved by its rhumb_agent_id label afterwards.
     const backend = createMngrBackend({
       exec: async (argv) => {
         calls.push(argv);
         if (argv[0] === "list") {
           const agents = created
-            ? [{ id: "agent-someone-else" }, { id: "agent-reborn", name: rec.name }]
+            ? [{ id: "agent-someone-else" }, { id: "agent-reborn", labels: { rhumb_agent_id: rec.agentId } }]
             : [{ id: "agent-someone-else" }];
           return { code: 0, stdout: JSON.stringify({ agents }), stderr: "" };
         }
@@ -893,7 +1047,9 @@ describe("mngr backend", () => {
         if (argv[0] === "list") {
           return {
             code: 0,
-            stdout: JSON.stringify({ agents: [{ id: "agent-once", name: rec.name }] }),
+            stdout: JSON.stringify({
+              agents: [{ id: "agent-once", labels: { rhumb_agent_id: rec.agentId } }],
+            }),
             stderr: "",
           };
         }
@@ -994,13 +1150,21 @@ function makeSeededConformanceRegistry(prefix: string) {
 }
 
 function makeConformanceExec(): ExecFn {
-  const createdAgents: Array<{ id: string; name: string }> = [];
+  const createdAgents: Array<{ id: string; name: string; labels: Record<string, string> }> = [];
   let counter = 0;
   return async (argv) => {
     if (argv[0] === "create") {
       const name = argv[1];
+      // Adoption is keyed on the rhumb_agent_id label (A1), not on name —
+      // parse it out of argv the way real mngr would round-trip it back.
+      const labelIndex = argv.indexOf("--label");
+      const [labelKey, labelValue] = labelIndex >= 0 ? argv[labelIndex + 1].split("=") : [undefined, undefined];
       const id = `agent-conf-native-${++counter}`;
-      createdAgents.push({ id, name });
+      createdAgents.push({
+        id,
+        name,
+        labels: labelKey && labelValue !== undefined ? { [labelKey]: labelValue } : {},
+      });
       return { code: 0, stdout: "", stderr: "" };
     }
     if (argv[0] === "list") {
