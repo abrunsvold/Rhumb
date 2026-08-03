@@ -22,6 +22,17 @@ function makeRegistry(ids: string[] = ["id-1", "id-2", "id-3"]) {
   });
 }
 
+function makeRegistryWithVaryingNow() {
+  let n = 0;
+  let callCount = 0;
+  const times = ["2026-08-03T00:00:00.000Z", "2026-08-03T00:00:01.000Z"];
+  return createAgentRegistry({
+    indexPath,
+    now: () => times[callCount++] ?? "2026-08-03T00:00:02.000Z",
+    id: () => ["id-1", "id-2"][n++] ?? `id-${n}`,
+  });
+}
+
 describe("agent registry", () => {
   it("creates a record with a Rhumb-minted agentId and no nativeId yet", () => {
     const rec = makeRegistry().create("probe", "mngr");
@@ -64,5 +75,60 @@ describe("agent registry", () => {
   it("treats a corrupt index as empty rather than throwing", () => {
     writeFileSync(indexPath, "{ not json");
     expect(makeRegistry().list()).toEqual([]);
+  });
+
+  it("bind on unknown agentId returns false and does not create a record", () => {
+    const reg = makeRegistry();
+    const success = reg.bind("unknown-id", "agent-xyz");
+    expect(success).toBe(false);
+    expect(reg.list()).toHaveLength(0);
+  });
+
+  it("touch on known agentId returns true and updates lastActiveAt", () => {
+    const reg = makeRegistryWithVaryingNow();
+    const rec = reg.create("probe", "mngr");
+    const initialActiveAt = rec.lastActiveAt;
+    const success = reg.touch(rec.agentId);
+    expect(success).toBe(true);
+    const updated = reg.get(rec.agentId);
+    expect(updated?.lastActiveAt).not.toBe(initialActiveAt);
+  });
+
+  it("touch on unknown agentId returns false", () => {
+    const reg = makeRegistry();
+    const success = reg.touch("unknown-id");
+    expect(success).toBe(false);
+  });
+
+  it("markStopped on unknown agentId returns false", () => {
+    const reg = makeRegistry();
+    const success = reg.markStopped("unknown-id");
+    expect(success).toBe(false);
+  });
+
+  it("get returns a shallow copy; mutating it does not mutate the registry", () => {
+    const reg = makeRegistry();
+    const rec = reg.create("probe", "mngr");
+    const retrieved = reg.get(rec.agentId);
+    if (retrieved) {
+      retrieved.nativeId = "mutated";
+      retrieved.status = "stopped";
+    }
+    const recheck = reg.get(rec.agentId);
+    expect(recheck?.nativeId).toBeNull();
+    expect(recheck?.status).toBe("active");
+  });
+
+  it("list returns shallow copies; mutating them does not mutate the registry", () => {
+    const reg = makeRegistry();
+    const rec = reg.create("probe", "mngr");
+    const all = reg.list();
+    if (all[0]) {
+      all[0].nativeId = "mutated";
+      all[0].status = "stopped";
+    }
+    const recheck = reg.get(rec.agentId);
+    expect(recheck?.nativeId).toBeNull();
+    expect(recheck?.status).toBe("active");
   });
 });

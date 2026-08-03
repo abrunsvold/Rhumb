@@ -18,9 +18,9 @@ export interface AgentRecord {
 export interface AgentRegistry {
   create(name: string, backend: BackendId): AgentRecord;
   get(agentId: string): AgentRecord | undefined;
-  bind(agentId: string, nativeId: string): void;
-  touch(agentId: string): void;
-  markStopped(agentId: string): void;
+  bind(agentId: string, nativeId: string): boolean;
+  touch(agentId: string): boolean;
+  markStopped(agentId: string): boolean;
   list(): AgentRecord[];
 }
 
@@ -59,29 +59,33 @@ export function createAgentRegistry(deps: {
       return rec;
     },
     get(agentId) {
-      return records.find((r) => r.agentId === agentId);
+      const rec = records.find((r) => r.agentId === agentId);
+      return rec ? { ...rec } : undefined;
     },
     bind(agentId, nativeId) {
       const rec = records.find((r) => r.agentId === agentId);
-      if (!rec) return;
+      if (!rec) return false;
       rec.nativeId = nativeId;
       rec.lastActiveAt = deps.now();
       persist();
+      return true;
     },
     touch(agentId) {
       const rec = records.find((r) => r.agentId === agentId);
-      if (!rec) return;
+      if (!rec) return false;
       rec.lastActiveAt = deps.now();
       persist();
+      return true;
     },
     markStopped(agentId) {
       const rec = records.find((r) => r.agentId === agentId);
-      if (!rec) return;
+      if (!rec) return false;
       rec.status = "stopped";
       persist();
+      return true;
     },
     list() {
-      return records.slice();
+      return records.map((r) => ({ ...r }));
     },
   };
 }
