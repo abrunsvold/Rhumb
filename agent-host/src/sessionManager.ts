@@ -1,4 +1,6 @@
 import type { AgentEvent } from "./types.js";
+import type { AgentBackend, AgentRef } from "./backends/types.js";
+import { createSdkBackend } from "./backends/sdk.js";
 
 export type QueryFn = (args: {
   prompt: string;
@@ -6,24 +8,31 @@ export type QueryFn = (args: {
 }) => AsyncIterable<any>;
 
 export class SessionManager {
-  private readonly query: QueryFn;
-  private readonly model: string;
-  private readonly workspace: string;
-  private readonly permissionMode: string;
-  private readonly extraOptions: Record<string, unknown>;
+  private readonly backend: AgentBackend;
 
   constructor(opts: {
-    query: QueryFn;
+    query?: QueryFn;
+    /** Injected backend. When omitted, an SDK backend is built from `query`. */
+    backend?: AgentBackend;
     model: string;
     workspace: string;
     permissionMode?: string;
     extraOptions?: Record<string, unknown>;
   }) {
-    this.query = opts.query;
-    this.model = opts.model;
-    this.workspace = opts.workspace;
-    this.permissionMode = opts.permissionMode ?? "acceptEdits";
-    this.extraOptions = opts.extraOptions ?? {};
+    if (opts.backend) {
+      this.backend = opts.backend;
+    } else {
+      if (!opts.query) throw new Error("SessionManager requires either `query` or `backend`.");
+      this.backend = createSdkBackend({
+        query: opts.query,
+        spec: {
+          model: opts.model,
+          workspace: opts.workspace,
+          permissionMode: opts.permissionMode ?? "acceptEdits",
+          extraOptions: opts.extraOptions ?? {},
+        },
+      });
+    }
   }
 
   async run(
@@ -31,40 +40,14 @@ export class SessionManager {
     sessionId: string | undefined,
     onEvent: (e: AgentEvent) => void,
   ): Promise<string> {
-    const options: Record<string, unknown> = {
-      model: this.model,
-      cwd: this.workspace,
-      permissionMode: this.permissionMode,
+    // Slice 1 keeps the wire protocol: the caller's sessionId is both the
+    // Rhumb principal and the backend handle for the SDK path.
+    const ref: AgentRef = {
+      agentId: sessionId ?? "",
+      nativeId: sessionId ?? null,
+      backend: this.backend.id,
     };
-    if (sessionId) options.resume = sessionId;
-    const merged = { ...options, ...this.extraOptions };
-
-    let resolvedId = sessionId ?? "";
-    try {
-      for await (const message of this.query({ prompt, options: merged })) {
-        if (message?.type === "system" && message?.subtype === "init") {
-          resolvedId = message.session_id;
-          const cmds = Array.isArray(message.slash_commands)
-            ? message.slash_commands.filter((c: unknown): c is string => typeof c === "string")
-            : undefined;
-          onEvent(
-            cmds && cmds.length > 0
-              ? { type: "session", sessionId: resolvedId, slashCommands: cmds }
-              : { type: "session", sessionId: resolvedId },
-          );
-        } else if (message?.type === "result") {
-          onEvent({
-            type: "result",
-            result: String(message.result ?? ""),
-            isError: Boolean(message.is_error),
-          });
-        } else {
-          onEvent({ type: "raw", message });
-        }
-      }
-    } catch (err) {
-      onEvent({ type: "error", message: err instanceof Error ? err.message : String(err) });
-    }
-    return resolvedId;
+    const out = await this.backend.send(ref, prompt, onEvent);
+    return out.nativeId ?? "";
   }
 }
