@@ -8,4 +8,11 @@ const query: QueryFn = () =>
     yield { type: "result", result: "ok", is_error: false };
   })();
 
-runBackendConformance("sdk", () => createSdkBackend({ query, spec: CONFORMANCE_SPEC }));
+const failingQuery: QueryFn = () =>
+  (async function* () {
+    throw new Error("injected failure");
+  })();
+
+runBackendConformance("sdk", () => createSdkBackend({ query, spec: CONFORMANCE_SPEC }), () =>
+  createSdkBackend({ query: failingQuery, spec: CONFORMANCE_SPEC }),
+);
