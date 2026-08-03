@@ -16,7 +16,7 @@
 - **Do not modify** `client/` or `dashboard-host/`. No wire-protocol change: `POST /messages` keeps its current request and response shape.
 - **Do not modify** any file under `src/infra/`, `src/ontology/`, or `src/services/`. The trust, write-back, and audit layers are out of scope.
 - **`sdk` remains the default backend.** A deployment that sets nothing must behave exactly as it does today.
-- **Existing tests must pass unmodified.** Specifically `test/sessionManager.test.ts` and `test/server.test.ts` — they are the proof that the refactor is behavior-preserving. If a change would require editing them, the change is wrong.
+- **`test/sessionManager.test.ts` and `test/server.test.ts` must pass with zero edits.** They are the proof that the refactor is behavior-preserving. If a change would require editing either, the change is wrong. (Other existing test files may be appended to where a task explicitly says so — Task 5 appends cases to `test/config.test.ts`. No existing test case in any file may be weakened or deleted.)
 - **All imports use `.js` specifiers** (e.g. `import { x } from "./types.js"`) even though sources are `.ts`. This is an ESM project.
 - **All mngr CLI interaction goes through an injected `exec` seam.** No unit test may shell out to a real `mngr`, `tmux`, or network.
 - **Never log credential values,** only variable names. Precedent: `warnIfClientCertVarsPresent` in `src/index.ts`.
@@ -1529,9 +1529,10 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
     return { backend, agentId: rec.agentId, registry };
   }
 
-  it("spawns a real agent and binds its nativeId", { timeout: 120_000 }, async () => {
-    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    if (!token) return; // no credential on this machine; nothing to assert
+  // Skips rather than returning early: a test that asserts nothing is worse
+  // than one that honestly reports as skipped.
+  it.skipIf(!process.env.CLAUDE_CODE_OAUTH_TOKEN)("spawns a real agent and binds its nativeId", { timeout: 120_000 }, async () => {
+    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN as string;
     const { backend, agentId, registry } = makeBackend({ CLAUDE_CODE_OAUTH_TOKEN: token });
 
     const ref = await backend.ensure(agentId, {
