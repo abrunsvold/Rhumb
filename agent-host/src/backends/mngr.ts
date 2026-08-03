@@ -114,19 +114,61 @@ function parseTranscriptLine(line: string): TranscriptMessage | null {
   return null;
 }
 
-/** The last assistant reply in a transcript snapshot, or `null` if none is
- *  present yet. Transcript growth (more entries than before) is a sound
- *  DELIVERY signal — mngr appends a `user_message` the moment a prompt is
- *  submitted — but it is NOT an ANSWER signal: the newest entry may well be
- *  the operator's own prompt, echoed back as a `user_message`, with no
- *  `assistant_message` behind it yet. Only a `kind: "text"` entry (mapped
- *  from `assistant_message`) is ever eligible to become a `result` event. */
-function lastAssistantMessage(messages: TranscriptMessage[] | null): TranscriptMessage | null {
-  if (!messages) return null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].kind === "text") return messages[i];
+/** The newest assistant reply that appeared strictly at or after `before`'s
+ *  snapshot length, or `null` if none did. Two independent guards, both
+ *  needed:
+ *
+ *  1. Transcript growth is a sound DELIVERY signal — mngr appends a
+ *     `user_message` the moment a prompt is submitted — but it is NOT an
+ *     ANSWER signal: the newest entry may well be the operator's own
+ *     prompt, echoed back as a `user_message`, with no `assistant_message`
+ *     behind it yet. Only a `kind: "text"` entry (mapped from
+ *     `assistant_message`) is ever eligible to become a `result` event.
+ *  2. Only entries at index >= `before`'s length count as "new". Without
+ *     this, an agent with prior history could have its LAST turn's answer
+ *     reported as THIS turn's answer whenever the fresh reply hasn't
+ *     streamed into the transcript by the time `after` is read — the same
+ *     stale-reply failure mode as the non-zero-exit reconciliation path,
+ *     just reachable on the plain `code === 0` success path too.
+ *
+ *  If `before` itself is untrustworthy (`null` — the pre-send transcript
+ *  read failed), there is no baseline to measure "new" against, so this
+ *  conservatively returns `null` rather than guessing every entry in
+ *  `after` is new. */
+function newAssistantReply(
+  before: TranscriptMessage[] | null,
+  after: TranscriptMessage[] | null,
+): TranscriptMessage | null {
+  if (!after || before === null) return null;
+  for (let i = after.length - 1; i >= before.length; i--) {
+    if (after[i].kind === "text") return after[i];
   }
   return null;
+}
+
+/** Why `ensureAgent` left a principal unbound (`nativeId: null`), so
+ *  `send()` can report something more accurate than one generic message for
+ *  four different situations (see `ensureFailureMessage`). Not part of the
+ *  public `AgentRef` contract — `EnsureResult` is a superset used only
+ *  inside this module. */
+type EnsureFailureReason = "stopped" | "invalid-name" | "create-failed" | "unresolved";
+
+interface EnsureResult extends AgentRef {
+  reason?: EnsureFailureReason;
+}
+
+function ensureFailureMessage(reason: EnsureFailureReason | undefined): string {
+  switch (reason) {
+    case "stopped":
+      return "mngr: this principal was stopped and must not be silently resumed; a new agentId is required to continue";
+    case "invalid-name":
+      return "mngr: agent name is not valid for `mngr create`, refused before invoking the CLI";
+    case "unresolved":
+      return "mngr: an agent may have just been created but its id could not be confirmed yet; it will be adopted on a later turn once list() is trustworthy again";
+    case "create-failed":
+    default:
+      return "mngr: could not create an agent for this principal";
+  }
 }
 
 /** Runs Claude Code through the mngr CLI instead of in-process.
@@ -171,23 +213,37 @@ export function createMngrBackend(deps: {
     return ids;
   }
 
-  /** Resolves the mngr id of a just-created agent by matching on the name
-   *  passed to `create`, rather than trusting `create`'s stdout.
-   *  docs/dogfood/2026-08-03-mngr-phase0.md records that mngr's stdout can
-   *  carry provider banners and is "not safe to parse without --format
-   *  json"; `create`'s stdout was never separately characterised as safe.
-   *  Trusting it risks binding a banner (or any other stray stdout) as the
-   *  nativeId, which would never match a real id in `liveIds()` and cause
-   *  `ensure()` to conclude "provably dead" and re-create on every
-   *  subsequent turn — the exact duplicate-spawn outcome the liveness rule
-   *  exists to prevent. Returns `null` if no agent with that name is found
-   *  (name collisions with a pre-existing, unrelated agent are a known,
-   *  accepted limitation — mngr is assumed to enforce name uniqueness). */
-  async function resolveNativeIdByName(name: string): Promise<string | null> {
+  /** Resolves the mngr id of an agent by matching on its `name`, rather
+   *  than trusting `create`'s stdout. docs/dogfood/2026-08-03-mngr-phase0.md
+   *  records that mngr's stdout can carry provider banners and is "not safe
+   *  to parse without --format json"; `create`'s stdout was never
+   *  separately characterised as safe. Trusting it risks binding a banner
+   *  (or any other stray stdout) as the nativeId, which would never match a
+   *  real id in `liveIds()` and cause `ensure()` to conclude "provably
+   *  dead" and re-create on every subsequent turn.
+   *
+   *  Returns a DISCRIMINATED result rather than collapsing to `string |
+   *  null`, on purpose: "no agent with this name exists" (KNOWN ABSENT) and
+   *  "the listing itself could not be trusted" (UNKNOWABLE, non-zero exit
+   *  or unparseable output) are different facts and must not be conflated —
+   *  the same "null means unknowable, never empty" discipline `listAgents`/
+   *  `liveIds` already follow. Conflating them here was the N1 defect: a
+   *  transient listing failure right after a successful `create` would read
+   *  as "no such agent" and the caller would give up on a principal whose
+   *  mngr agent actually exists. Callers decide what UNKNOWABLE means for
+   *  them (see the "unresolved" reason in `ensureAgent`, which deliberately
+   *  does NOT report a failed create).
+   *
+   *  Name collisions with a pre-existing, unrelated agent are a known,
+   *  accepted limitation (first match wins) — mngr is assumed to enforce
+   *  name uniqueness. */
+  async function resolveNativeIdByName(
+    name: string,
+  ): Promise<{ status: "found"; id: string } | { status: "not-found" } | { status: "unknowable" }> {
     const agents = await listAgents();
-    if (agents === null) return null;
+    if (agents === null) return { status: "unknowable" };
     const match = agents.find((a) => a?.name === name);
-    return match?.id ?? null;
+    return match?.id ? { status: "found", id: match.id } : { status: "not-found" };
   }
 
   /** Snapshot of a live agent's transcript, or `null` when it cannot be read
@@ -206,7 +262,7 @@ export function createMngrBackend(deps: {
     return messages;
   }
 
-  async function ensureAgent(agentId: string): Promise<AgentRef> {
+  async function ensureAgent(agentId: string): Promise<EnsureResult> {
     const existing = registry.get(agentId);
 
     if (existing?.status === "stopped") {
@@ -227,9 +283,9 @@ export function createMngrBackend(deps: {
       //     exactly the duplicate-spawn bug the liveness rule exists to
       //     prevent, just triggered by status instead of liveness.
       // A stopped principal is therefore a dead end by design: send() will
-      // report this as a normal "could not create an agent" error. Reviving
-      // one requires a new agentId, minted by the caller.
-      return { agentId, nativeId: null, backend: "mngr" };
+      // report this via a "stopped" error, distinct from a create failure.
+      // Reviving one requires a new agentId, minted by the caller.
+      return { agentId, nativeId: null, backend: "mngr", reason: "stopped" };
     }
 
     if (existing?.nativeId) {
@@ -246,24 +302,51 @@ export function createMngrBackend(deps: {
     const name = existing?.name ?? agentId;
     if (!VALID_MNGR_NAME.test(name)) {
       // Fail closed rather than hand an unsafe name to `create`.
-      return { agentId, nativeId: null, backend: "mngr" };
+      return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
+    }
+
+    // Resolve-BEFORE-create: adopt a pre-existing agent under this name
+    // instead of unconditionally calling `create`. This is what actually
+    // fixes the N1 orphan path, not just the discriminated result type
+    // above: if a PRIOR ensure() call's `create` succeeded but the
+    // immediately-following resolveNativeIdByName was UNKNOWABLE (leaving
+    // the principal unbound, see below), this step is where that agent
+    // gets adopted on a LATER call — instead of calling `create` again,
+    // which Phase 0 documents fails once the branch `mngr/<name>` already
+    // exists (permanently orphaning the agent if retried blindly). It also
+    // makes `ensureAgent` idempotent under concurrent/repeated calls in
+    // general, not just in the recovery case.
+    const preexisting = await resolveNativeIdByName(name);
+    if (preexisting.status === "found") {
+      registry.bind(agentId, preexisting.id);
+      return { agentId, nativeId: preexisting.id, backend: "mngr" };
     }
 
     const res = await exec(argvCreate(name, credentialEnv), { env: credentialEnv });
     if (res.code !== 0) {
-      // Leave the principal unbound; send() reports the failure as an error
-      // event on the turn rather than throwing here.
-      return { agentId, nativeId: null, backend: "mngr" };
+      // A genuine create failure (mngr's own exit code says so). Leave the
+      // principal unbound; send() reports it as an error event rather than
+      // throwing here.
+      return { agentId, nativeId: null, backend: "mngr", reason: "create-failed" };
     }
 
-    const nativeId = await resolveNativeIdByName(name);
-    if (!nativeId) {
-      // Created, but we could not confirm which agent it became. Treat as a
-      // failed create rather than binding a guess (see resolveNativeIdByName).
-      return { agentId, nativeId: null, backend: "mngr" };
+    const resolved = await resolveNativeIdByName(name);
+    if (resolved.status === "found") {
+      registry.bind(agentId, resolved.id);
+      return { agentId, nativeId: resolved.id, backend: "mngr" };
     }
-    registry.bind(agentId, nativeId);
-    return { agentId, nativeId, backend: "mngr" };
+    // Neither "found" branch fired: either UNKNOWABLE (the list lookup
+    // itself failed) or "not-found" (create reported success but no agent
+    // shows up under this name — unexpected, but not something we can
+    // resolve here either). Deliberately NOT reported as "create-failed" in
+    // either case: `create`'s own exit code already said it succeeded, and
+    // concluding failure here is exactly the N1 defect. The principal stays
+    // unbound for THIS call (there is no confirmed id to hand back), but
+    // the resolve-before-create step above will pick this agent up on a
+    // later call once `list` is trustworthy again (UNKNOWABLE case) or will
+    // legitimately retry `create` (the "not-found" case, where nothing was
+    // actually created under this name and a fresh attempt is correct).
+    return { agentId, nativeId: null, backend: "mngr", reason: "unresolved" };
   }
 
   return {
@@ -279,7 +362,7 @@ export function createMngrBackend(deps: {
         const ensured = await ensureAgent(ref.agentId);
         nativeId = ensured.nativeId;
         if (!nativeId) {
-          onEvent({ type: "error", message: "mngr: could not create an agent for this principal" });
+          onEvent({ type: "error", message: ensureFailureMessage(ensured.reason) });
           return { ...ref, nativeId: null };
         }
       }
@@ -299,29 +382,33 @@ export function createMngrBackend(deps: {
       // earlier turn, and reporting that as the answer to THIS prompt would
       // be a stale reply presented as fresh (see the regression test for
       // this). Growth is also only a DELIVERY signal, not an ANSWER signal:
-      // see lastAssistantMessage for why the reply text is never taken from
-      // the newest transcript entry blindly.
+      // see newAssistantReply for why the reply text is never taken from
+      // the newest transcript entry blindly, and never from an entry that
+      // was already present in `before` (a PREVIOUS turn's reply, on the
+      // plain success path below).
       const before = await fetchTranscript(nativeId);
       const res = await exec(argvSend(nativeId, prompt), { env: credentialEnv });
       const after = await fetchTranscript(nativeId);
       const delivered = before !== null && after !== null && after.length > before.length;
+      const reply = newAssistantReply(before, after);
 
       if (res.code !== 0) {
         if (delivered) {
-          const reply = lastAssistantMessage(after);
           if (reply) {
-            // Delivered despite the non-zero exit, and an assistant reply is
-            // already present: report what the transcript actually shows,
-            // not the CLI's exit code.
+            // Delivered despite the non-zero exit, and a NEW assistant
+            // reply is already present: report what the transcript
+            // actually shows, not the CLI's exit code.
             registry.touch(ref.agentId);
             onEvent({ type: "result", result: reply.text, isError: false });
             return { ...ref, nativeId };
           }
-          // The transcript grew (the prompt was submitted) but no assistant
-          // reply is present yet — the turn is not actually answered. Do
-          // NOT synthesise a result from the operator's own prompt (a
-          // `user_message` entry); report this honestly rather than
-          // claiming success.
+          // The transcript grew (the prompt was submitted) but no NEW
+          // assistant reply is present yet — the turn is not actually
+          // answered. Do NOT synthesise a result from the operator's own
+          // prompt (a `user_message` entry); report this honestly rather
+          // than claiming success. Still touch(): submission was proven,
+          // even though the answer wasn't.
+          registry.touch(ref.agentId);
           onEvent({
             type: "error",
             message: `mngr: message delivered but not yet answered (${res.stderr.trim() || `exit ${res.code}`})`,
@@ -333,12 +420,12 @@ export function createMngrBackend(deps: {
       }
 
       registry.touch(ref.agentId);
-      const reply = lastAssistantMessage(after);
-      // Fallback note: if the transcript is unreadable or has no assistant
-      // entry yet, this falls back to `mngr message`'s own stdout. Phase 0
-      // never characterised that stdout as carrying the assistant's reply —
-      // it may be empty, a banner, or something else entirely — so this is
-      // a best-effort fallback, not a verified contract.
+      // Fallback note: if the transcript is unreadable, has no NEW
+      // assistant entry yet, or `before` itself was unreadable, this falls
+      // back to `mngr message`'s own stdout. Phase 0 never characterised
+      // that stdout as carrying the assistant's reply — it may be empty, a
+      // banner, or something else entirely — so this is a best-effort
+      // fallback, not a verified contract.
       onEvent({ type: "result", result: reply?.text ?? res.stdout.trim(), isError: false });
       return { ...ref, nativeId };
     },
