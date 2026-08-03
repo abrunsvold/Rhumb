@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { createMngrBackend, type ExecFn } from "../src/backends/mngr.js";
 import { createAgentRegistry } from "../src/agents.js";
 import { PROVIDER_CREDENTIAL_VARS } from "../src/provider.js";
+import { STRIPPED_ENV_VARS } from "../src/env.js";
 import { runBackendConformance, CONFORMANCE_SPEC } from "./backend-conformance.js";
 import type { AgentEvent } from "../src/types.js";
 
@@ -42,12 +43,28 @@ describe("mngr backend", () => {
     expect(backend.id).toBe("mngr");
   });
 
-  it("ensure creates a mngr agent and binds its nativeId to the principal", async () => {
+  it("ensure creates a mngr agent and resolves its nativeId via list, never trusting create's stdout (I2)", async () => {
     const calls: string[][] = [];
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     const backend = createMngrBackend({
-      exec: recordingExec(calls, "agent-abc123"),
+      exec: async (argv) => {
+        calls.push(argv);
+        if (argv[0] === "create") {
+          // A stdout banner, per Phase 0's note that mngr stdout is "not
+          // safe to parse without --format json" and create's stdout was
+          // never separately characterised. Must NOT be parsed as the id.
+          return { code: 0, stdout: "Docker provider disabled\nsome-banner-line\n", stderr: "" };
+        }
+        if (argv[0] === "list") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ agents: [{ id: "agent-resolved-via-list", name: rec.name }] }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
@@ -55,14 +72,33 @@ describe("mngr backend", () => {
 
     const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
 
-    expect(ref.nativeId).toBe("agent-abc123");
-    expect(registry.get(rec.agentId)?.nativeId).toBe("agent-abc123");
-    expect(calls[0]).toContain("create");
-    // create must invoke the verified mngr CLI shape: create <name> claude
-    // --no-connect -y ...
-    expect(calls[0]).toEqual(
-      expect.arrayContaining(["create", rec.name, "claude", "--no-connect", "-y"]),
-    );
+    expect(ref.nativeId).toBe("agent-resolved-via-list");
+    expect(registry.get(rec.agentId)?.nativeId).toBe("agent-resolved-via-list");
+    const createArgv = calls.find((c) => c[0] === "create");
+    expect(createArgv?.slice(0, 5)).toEqual(["create", rec.name, "claude", "--no-connect", "-y"]);
+  });
+
+  it("treats a create whose new agent cannot be found in list as a failed create (I2)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "create") return { code: 0, stdout: "", stderr: "" };
+        if (argv[0] === "list") {
+          // No agent under this name shows up.
+          return { code: 0, stdout: JSON.stringify({ agents: [] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    expect(ref.nativeId).toBeNull();
+    expect(registry.get(rec.agentId)?.nativeId).toBeNull();
   });
 
   it("ensure is idempotent: a bound principal does not spawn a second agent", async () => {
@@ -88,19 +124,25 @@ describe("mngr backend", () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     registry.bind(rec.agentId, "agent-dead");
-    // `list --format json` reports a different agent under the "agents" key,
-    // so the bound one is provably gone.
+    let created = false;
+    // `list --format json` reports a different agent under the "agents"
+    // key before create, and additionally the freshly-created one after —
+    // so the bound "agent-dead" is provably gone, and the new agent can be
+    // resolved by name afterwards.
     const backend = createMngrBackend({
       exec: async (argv) => {
         calls.push(argv);
-        if (argv.includes("list")) {
-          return {
-            code: 0,
-            stdout: JSON.stringify({ agents: [{ id: "agent-someone-else" }] }),
-            stderr: "",
-          };
+        if (argv[0] === "list") {
+          const agents = created
+            ? [{ id: "agent-someone-else" }, { id: "agent-reborn", name: rec.name }]
+            : [{ id: "agent-someone-else" }];
+          return { code: 0, stdout: JSON.stringify({ agents }), stderr: "" };
         }
-        return { code: 0, stdout: "agent-reborn", stderr: "" };
+        if (argv[0] === "create") {
+          created = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
       },
       registry,
       credentialEnv: {},
@@ -119,7 +161,9 @@ describe("mngr backend", () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     registry.bind(rec.agentId, "agent-existing");
-    // Unparseable list output must NOT be read as "the agent is dead".
+    // A non-zero exit from `list` must NOT be read as "the agent is dead" —
+    // liveness is unknowable, not false. (This short-circuits before JSON
+    // parsing is ever attempted, since res.code !== 0 alone forces "unknown".)
     const backend = createMngrBackend({
       exec: async (argv) => {
         calls.push(argv);
@@ -136,18 +180,18 @@ describe("mngr backend", () => {
     expect(calls.some((c) => c.includes("create"))).toBe(false);
   });
 
-  it("also treats a well-formed list without an agents array as unknown liveness", async () => {
+  it("also treats a well-formed-JSON list without an agents array as unknown liveness", async () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     registry.bind(rec.agentId, "agent-existing");
     const backend = createMngrBackend({
       exec: async (argv) => {
         if (argv.includes("list")) {
-          // A bare array, as the invalidated brief assumed — must NOT be
-          // read as "empty and therefore nothing is alive".
+          // A bare array, as an earlier draft of this backend assumed —
+          // must NOT be read as "empty and therefore nothing is alive".
           return { code: 0, stdout: JSON.stringify([{ id: "agent-existing" }]), stderr: "" };
         }
-        return { code: 0, stdout: "agent-new", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
       },
       registry,
       credentialEnv: {},
@@ -156,11 +200,62 @@ describe("mngr backend", () => {
 
     const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
 
-    // Unparseable-as-expected-shape list output must not trigger a respawn.
     expect(ref.nativeId).toBe("agent-existing");
   });
 
-  it("create blanks every PROVIDER_CREDENTIAL_VARS entry not present in credentialEnv", async () => {
+  it("ensure refuses to reuse or recreate for a principal marked stopped (I3a)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    registry.markStopped(rec.agentId);
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        // Even if mngr still lists the old agent as present (e.g. `mngr
+        // stop` detaches without destroying), ensure() must not silently
+        // reuse or replace it.
+        if (argv[0] === "list") {
+          return { code: 0, stdout: JSON.stringify({ agents: [{ id: "agent-x" }] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    expect(ref.nativeId).toBeNull();
+    expect(calls.some((c) => c.includes("create"))).toBe(false);
+    expect(registry.get(rec.agentId)?.nativeId).toBe("agent-x");
+    expect(registry.get(rec.agentId)?.status).toBe("stopped");
+  });
+
+  it("send reports the standard error when the principal is stopped", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    registry.markStopped(rec.agentId);
+    const backend = createMngrBackend({
+      exec: recordingExec([]),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    // A caller that (incorrectly) still has a nativeId-less ref for this
+    // stopped principal falls through to ensureAgent inside send().
+    await backend.send({ agentId: rec.agentId, nativeId: null, backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    expect(events.at(-1)?.type).toBe("error");
+  });
+
+  it("create blanks every PROVIDER_CREDENTIAL_VARS and STRIPPED_ENV_VARS entry not present in credentialEnv (I1)", async () => {
     const calls: string[][] = [];
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
@@ -176,15 +271,90 @@ describe("mngr backend", () => {
     const createArgv = calls[0];
     expect(createArgv).toContain("--env");
     expect(createArgv).toContain("ANTHROPIC_API_KEY=sk-injected");
-    // Every OTHER credential var must be explicitly blanked, not omitted —
-    // an omitted var is inherited from the tmux server.
+    // Every OTHER PROVIDER_CREDENTIAL_VARS entry must be explicitly blanked,
+    // not omitted — an omitted var is inherited from the tmux server.
     for (const key of PROVIDER_CREDENTIAL_VARS) {
       if (key === "ANTHROPIC_API_KEY") continue;
       expect(createArgv).toContain(`${key}=`);
     }
-    // Exactly one --env per PROVIDER_CREDENTIAL_VARS entry.
+    // Every STRIPPED_ENV_VARS entry must ALSO be blanked (I1): these are
+    // not credentials, but an ambient value (e.g. CLAUDE_CODE_SHELL_PREFIX)
+    // can rewrite or intercept every shell command the agent runs.
+    for (const key of STRIPPED_ENV_VARS) {
+      expect(createArgv).toContain(`${key}=`);
+    }
+    // Exactly one --env per variable across both lists — no more, no fewer.
     const envFlagCount = createArgv.filter((a) => a === "--env").length;
-    expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length);
+    expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length);
+  });
+
+  it("refuses to create with a flag-shaped agent name (I6)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("--env=ANTHROPIC_BASE_URL=https://attacker.example", "mngr");
+    const backend = createMngrBackend({
+      exec: recordingExec(calls, "agent-x"),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const ref = await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    expect(ref.nativeId).toBeNull();
+    expect(calls.some((c) => c.includes("create"))).toBe(false);
+  });
+
+  it("does not treat delivery as proven when the pre-send transcript read itself failed (C1)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          if (transcriptCalls === 1) {
+            // Transient failure reading the PRE-send transcript: whether
+            // anything grew is now unknowable, not "started from zero".
+            return { code: 1, stdout: "", stderr: "boom" };
+          }
+          // The post-send read succeeds and returns PRIOR history from an
+          // earlier, unrelated turn — not a real answer to this message.
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({
+              type: "assistant_message",
+              role: "assistant",
+              text: "stale reply from a previous turn",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        if (argv[0] === "message") {
+          return { code: 1, stdout: "", stderr: "mngr: host unreachable" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send(
+      { agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" },
+      "hello",
+      (e) => events.push(e),
+    );
+
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("host unreachable");
+    // Must never surface the previous turn's stale reply as this turn's answer.
+    if (last?.type === "result") {
+      expect((last as unknown as { result: string }).result).not.toContain("stale reply");
+    }
   });
 
   it("surfaces a non-zero exit as an error event when the transcript shows no new activity", async () => {
@@ -213,7 +383,7 @@ describe("mngr backend", () => {
     expect((events.at(-1) as { message: string }).message).toContain("host unreachable");
   });
 
-  it("does NOT surface a non-zero exit as an error when the transcript proves delivery", async () => {
+  it("does NOT surface a non-zero exit as an error when the transcript proves delivery with an assistant reply", async () => {
     // Reproduces the observed mngr behaviour: `mngr message` times out and
     // exits non-zero, but the transcript shows the turn was answered.
     const registry = makeRegistry();
@@ -224,7 +394,6 @@ describe("mngr backend", () => {
       exec: async (argv) => {
         if (argv[0] === "transcript") {
           transcriptCalls += 1;
-          // Before the send: empty. After the send: one new assistant reply.
           const stdout =
             transcriptCalls === 1
               ? ""
@@ -253,6 +422,120 @@ describe("mngr backend", () => {
     expect(events.at(-1)?.type).toBe("result");
     expect((events.at(-1) as { result: string }).result).toBe("pong");
     expect(ref.nativeId).toBe("agent-x");
+  });
+
+  it("does not echo the operator's own prompt as the result when delivered but not yet answered (C2)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          if (transcriptCalls === 1) return { code: 0, stdout: "", stderr: "" };
+          // Only the operator's own submitted prompt is visible so far — no
+          // assistant reply has landed.
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({ type: "user_message", role: "user", content: "hello" })}\n`,
+            stderr: "",
+          };
+        }
+        if (argv[0] === "message") {
+          return { code: 1, stdout: "", stderr: "Timeout waiting for message submission signal" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send(
+      { agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" },
+      "hello",
+      (e) => events.push(e),
+    );
+
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    if (last?.type === "result") {
+      expect((last as unknown as { result: string }).result).not.toBe("hello");
+    }
+  });
+
+  it("does not echo the operator's prompt as the result on a successful exit with no assistant reply yet (C2, success path)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({ type: "user_message", role: "user", content: "hello" })}\n`,
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send(
+      { agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" },
+      "hello",
+      (e) => events.push(e),
+    );
+
+    const last = events.at(-1);
+    expect(last?.type).toBe("result");
+    // Must fall back to `mngr message`'s own (empty) stdout, never to the
+    // user_message transcript entry — otherwise the operator's own prompt
+    // would come back as "the answer".
+    expect((last as { result: string }).result).toBe("");
+  });
+
+  it("selects the last ASSISTANT reply, not the last transcript entry of any kind", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          const lines = [
+            { type: "user_message", role: "user", content: "first question" },
+            { type: "assistant_message", role: "assistant", text: "first answer" },
+            { type: "user_message", role: "user", content: "hello" },
+          ];
+          return { code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send(
+      { agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" },
+      "hello",
+      (e) => events.push(e),
+    );
+
+    // Transcript did not grow (before === after), so this is the plain
+    // success path. The result must be the last ASSISTANT entry
+    // ("first answer"), never the last entry of any kind ("hello", the
+    // operator's own prompt, which happens to be transcript-last here).
+    const last = events.at(-1);
+    expect(last?.type).toBe("result");
+    expect((last as { result: string }).result).toBe("first answer");
   });
 
   it("transcript maps mngr jsonl events to TranscriptMessage, skipping unrecognised types", async () => {
@@ -290,6 +573,27 @@ describe("mngr backend", () => {
     ]);
   });
 
+  it("skips a transcript entry whose content/text is not a string, instead of coercing to empty text (minor)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const lines = [
+      JSON.stringify({ type: "user_message", role: "user", content: 42 }),
+      JSON.stringify({ type: "assistant_message", role: "assistant", text: null }),
+      JSON.stringify({ type: "user_message", role: "user", content: "real" }),
+    ].join("\n");
+    const backend = createMngrBackend({
+      exec: async (argv) =>
+        argv[0] === "transcript" ? { code: 0, stdout: lines, stderr: "" } : { code: 0, stdout: "", stderr: "" },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const t = await backend.transcript({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" });
+    expect(t).toEqual([{ kind: "user", text: "real" }]);
+  });
+
   it("transcript returns null when there is no nativeId", async () => {
     const registry = makeRegistry();
     const backend = createMngrBackend({
@@ -321,15 +625,56 @@ describe("mngr backend", () => {
     expect(listed.some((r) => r.agentId === rec.agentId)).toBe(false);
   });
 
+  it("stop does not mark the principal stopped when the mngr stop command fails (I3b)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async () => ({ code: 1, stdout: "", stderr: "mngr: agent busy" }),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await expect(
+      backend.stop({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }),
+    ).rejects.toThrow(/agent busy/);
+
+    expect(registry.get(rec.agentId)?.status).toBe("active");
+    const listed = await backend.list();
+    expect(listed.some((r) => r.agentId === rec.agentId)).toBe(true);
+  });
+
+  it("stop with no nativeId still marks the principal stopped without calling the CLI", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: recordingExec(calls),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.stop({ agentId: rec.agentId, nativeId: null, backend: "mngr" });
+
+    expect(registry.get(rec.agentId)?.status).toBe("stopped");
+    expect(calls.some((c) => c.includes("stop"))).toBe(false);
+  });
+
   it("two ensure() calls for the same agentId yield at most one list() entry", async () => {
     const registry = makeRegistry();
     const rec = registry.create("probe", "mngr");
     const backend = createMngrBackend({
       exec: async (argv) => {
-        if (argv.includes("list")) {
-          return { code: 0, stdout: JSON.stringify({ agents: [{ id: "agent-once" }] }), stderr: "" };
+        if (argv[0] === "list") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ agents: [{ id: "agent-once", name: rec.name }] }),
+            stderr: "",
+          };
         }
-        return { code: 0, stdout: "agent-once", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
       },
       registry,
       credentialEnv: {},
@@ -342,24 +687,116 @@ describe("mngr backend", () => {
     const listed = await backend.list();
     expect(listed.filter((r) => r.agentId === rec.agentId)).toHaveLength(1);
   });
-});
 
-// The same contract the sdk backend satisfies.
-runBackendConformance(
-  "mngr",
-  () => {
-    const registry = createAgentRegistry({
-      indexPath: join(mkdtempSync(join(tmpdir(), "rhumb-conf-")), "agents.json"),
-      now: () => "2026-08-03T00:00:00.000Z",
-      id: () => "rhumb-conf",
-    });
-    return createMngrBackend({
-      exec: async () => ({ code: 0, stdout: "agent-conf", stderr: "" }),
+  it("uses the exact verified argv shape for message/transcript/stop (I5)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        return { code: 0, stdout: "", stderr: "" };
+      },
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
     });
-  },
+
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello world", () => {});
+    await backend.transcript({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" });
+    await backend.stop({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" });
+
+    const messageCalls = calls.filter((c) => c[0] === "message");
+    expect(messageCalls).toHaveLength(1);
+    expect(messageCalls[0]).toEqual(["message", "agent-x", "-m", "hello world"]);
+
+    const transcriptCalls = calls.filter((c) => c[0] === "transcript");
+    expect(transcriptCalls.length).toBeGreaterThan(0);
+    for (const c of transcriptCalls) expect(c).toEqual(["transcript", "agent-x", "--format", "jsonl"]);
+
+    const stopCalls = calls.filter((c) => c[0] === "stop");
+    expect(stopCalls).toHaveLength(1);
+    expect(stopCalls[0]).toEqual(["stop", "agent-x"]);
+  });
+
+  it("uses the exact verified argv shape for list (I5)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        return { code: 0, stdout: JSON.stringify({ agents: [] }), stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.list();
+
+    const listCalls = calls.filter((c) => c[0] === "list");
+    expect(listCalls.length).toBeGreaterThan(0);
+    for (const c of listCalls) expect(c).toEqual(["list", "--format", "json"]);
+  });
+});
+
+// The same contract the sdk backend satisfies. `makeBackend` seeds the
+// registry with real records for every agentId the conformance suite calls
+// ensure() with, and uses a stateful fake exec that actually implements
+// create/list/message/transcript/stop consistently — an empty registry and
+// an always-identical canned exec (the brief's original fixture) made the
+// "no duplicates in list()" and "stop removes from list()" obligations pass
+// vacuously against an always-empty list() (I4).
+const CONFORMANCE_AGENT_IDS = [
+  "agent-conf-1",
+  "agent-conf-2",
+  "agent-conf-3",
+  "agent-conf-4",
+  "agent-conf-5",
+  "agent-conf-6",
+];
+
+function makeSeededConformanceRegistry(prefix: string) {
+  let n = 0;
+  const registry = createAgentRegistry({
+    indexPath: join(mkdtempSync(join(tmpdir(), prefix)), "agents.json"),
+    now: () => "2026-08-03T00:00:00.000Z",
+    id: () => CONFORMANCE_AGENT_IDS[n++],
+  });
+  for (const id of CONFORMANCE_AGENT_IDS) registry.create(id, "mngr");
+  return registry;
+}
+
+function makeConformanceExec(): ExecFn {
+  const createdAgents: Array<{ id: string; name: string }> = [];
+  let counter = 0;
+  return async (argv) => {
+    if (argv[0] === "create") {
+      const name = argv[1];
+      const id = `agent-conf-native-${++counter}`;
+      createdAgents.push({ id, name });
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (argv[0] === "list") {
+      return { code: 0, stdout: JSON.stringify({ agents: createdAgents }), stderr: "" };
+    }
+    // message / transcript / stop: nothing to simulate, plain success.
+    return { code: 0, stdout: "", stderr: "" };
+  };
+}
+
+runBackendConformance(
+  "mngr",
+  () =>
+    createMngrBackend({
+      exec: makeConformanceExec(),
+      registry: makeSeededConformanceRegistry("rhumb-conf-"),
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    }),
   () => {
     const registry = createAgentRegistry({
       indexPath: join(mkdtempSync(join(tmpdir(), "rhumb-conf-fail-")), "agents.json"),
