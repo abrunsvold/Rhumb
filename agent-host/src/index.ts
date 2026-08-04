@@ -12,6 +12,10 @@ import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
 import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
+import { createAgentRegistry } from "./agents.js";
+import { createMngrBackend } from "./backends/mngr.js";
+import { createRealExec, assertMngrPrerequisites } from "./backends/exec.js";
+import type { AgentBackend } from "./backends/types.js";
 import { loadInfraConfig } from "./infra/config.js";
 import { createProxmoxClient, createPveCall } from "./infra/proxmox.js";
 import { createNodeFactsRefresher, readNodeFactsFile } from "./infra/nodeFacts.js";
@@ -163,8 +167,40 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   sessionExtraOptions.mcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}), ontology: ontologyServer };
   sessionExtraOptions.allowedTools = [ ...((sessionExtraOptions.allowedTools as string[]) ?? []), ...ONTOLOGY_TOOL_NAMES ];
 
+  // The watchdog manager below (see WATCHDOG_MINUTES branch further down)
+  // deliberately stays on the SDK path: it is a read-only reconcile turn
+  // whose tool policy is the point, and slice 1 does not model unattended
+  // agents as principals.
+  let backend: AgentBackend | undefined;
+  if (deps.config.agentBackend === "mngr") {
+    assertMngrPrerequisites();
+    const registry = createAgentRegistry({
+      indexPath: joinPath(deps.config.workspace, "agents.json"),
+      now: () => new Date().toISOString(),
+      id: () => `rhumb-${randomUUID()}`,
+    });
+    backend = createMngrBackend({
+      exec: createRealExec(),
+      registry,
+      credentialEnv: deps.config.provider.credentialEnv,
+      spec: {
+        model: deps.config.provider.model,
+        workspace: deps.config.workspace,
+        permissionMode: deps.config.permissionMode,
+        extraOptions: sessionExtraOptions,
+      },
+      // sanitizedEnv (env.ts) strips every ambient RHUMB_* var for the SDK
+      // path via a dynamic wildcard scan; mngr.ts can only blank a fixed
+      // list, so the wildcard is computed here, where the real ambient
+      // environment is available, and threaded through as the additive
+      // extraBlankedVars dep (see mngr.ts's credentialEnvFlags doc comment).
+      extraBlankedVars: Object.keys(process.env).filter((k) => k.startsWith("RHUMB_")),
+    });
+  }
+
   const manager = new SessionManager({
     query: deps.query,
+    backend,
     model: deps.config.provider.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
@@ -283,7 +319,8 @@ export function main(): void {
     const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";
     console.log(
       `rhumb agent-host listening on ${bound}:${config.port} ` +
-        `(provider ${config.provider.id}, model ${config.provider.model})`,
+        `(provider ${config.provider.id}, model ${config.provider.model}, ` +
+        `agent backend ${config.agentBackend})`,
     );
     if (config.insecureDev) {
       console.warn(

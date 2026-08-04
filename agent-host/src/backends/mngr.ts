@@ -43,7 +43,12 @@ const RHUMB_AGENT_ID_LABEL = "rhumb_agent_id";
 // Command shapes verified against mngr 0.2.17 in
 // docs/dogfood/2026-08-03-mngr-phase0.md. Adjust these builders — and
 // nothing else — if the CLI surface changes.
-const argvCreate = (name: string, agentId: string, credentialEnv: Record<string, string>): string[] => [
+const argvCreate = (
+  name: string,
+  agentId: string,
+  credentialEnv: Record<string, string>,
+  extraBlankedVars: readonly string[],
+): string[] => [
   "create",
   name,
   "claude",
@@ -51,7 +56,7 @@ const argvCreate = (name: string, agentId: string, credentialEnv: Record<string,
   "-y",
   "--label",
   `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
-  ...credentialEnvFlags(credentialEnv),
+  ...credentialEnvFlags(credentialEnv, extraBlankedVars),
 ];
 const argvSend = (nativeId: string, prompt: string): string[] => ["message", nativeId, "-m", prompt];
 const argvStop = (nativeId: string): string[] => ["stop", nativeId];
@@ -67,28 +72,40 @@ const argvTranscript = (nativeId: string): string[] => ["transcript", nativeId, 
  *
  *  The guarantee this function actually provides: every entry in
  *  PROVIDER_CREDENTIAL_VARS (provider.ts) is set to exactly the selected
- *  provider's value, or blanked; and every entry in STRIPPED_ENV_VARS
- *  (env.ts) is unconditionally blanked. Together that reproduces
- *  `sanitizedEnv`'s two static passes across the mngr boundary.
+ *  provider's value, or blanked; every entry in STRIPPED_ENV_VARS (env.ts)
+ *  is unconditionally blanked; and every entry the caller passes in
+ *  `extraBlankedVars` is ALSO blanked, deduplicated against the two static
+ *  lists so no variable is ever emitted twice. Together that reproduces all
+ *  three of `sanitizedEnv`'s passes across the mngr boundary.
  *
- *  What it does NOT reproduce: `sanitizedEnv`'s third pass, which strips
- *  every `RHUMB_*` var by enumerating `process.env` dynamically. This
- *  function only knows two fixed variable lists — it has no access to the
- *  ambient environment of whatever process starts (or already started) the
- *  tmux server, so it cannot discover `RHUMB_*` vars to blank them. If an
- *  ambient `RHUMB_*` secret (e.g. the scoped Proxmox token, the PG admin
- *  connection string) is present on the tmux server's environment, it is NOT
- *  blanked here and would reach the agent. Closing that gap requires
- *  enumerating the real environment at the exec seam, which is Task 5's
- *  responsibility, not this backend's. */
-function credentialEnvFlags(credentialEnv: Record<string, string>): string[] {
+ *  `extraBlankedVars` exists because `sanitizedEnv`'s third pass — strip
+ *  every `RHUMB_*` var — is a wildcard, not a fixed list, and this module
+ *  has no access to the ambient environment of whatever process starts (or
+ *  already started) the tmux server; it only knows the two static lists
+ *  above. `src/index.ts` closes that gap: it computes the `RHUMB_*` keys of
+ *  `process.env` at the exec seam, where the real environment actually is,
+ *  and passes them in here. This parameter is purely additive — when a
+ *  caller omits it, behaviour (including the exact `--env` flag count) is
+ *  unchanged from before this parameter existed. */
+function credentialEnvFlags(
+  credentialEnv: Record<string, string>,
+  extraBlankedVars: readonly string[] = [],
+): string[] {
   const flags: string[] = [];
+  const emitted = new Set<string>();
   for (const key of PROVIDER_CREDENTIAL_VARS) {
     const value = credentialEnv[key];
     flags.push("--env", `${key}=${value ?? ""}`);
+    emitted.add(key);
   }
   for (const key of STRIPPED_ENV_VARS) {
     flags.push("--env", `${key}=`);
+    emitted.add(key);
+  }
+  for (const key of extraBlankedVars) {
+    if (emitted.has(key)) continue;
+    flags.push("--env", `${key}=`);
+    emitted.add(key);
   }
   return flags;
 }
@@ -213,8 +230,14 @@ export function createMngrBackend(deps: {
    *  provider.ts / env.ts; nothing ambient is added here. */
   credentialEnv: Record<string, string>;
   spec: AgentSpec;
+  /** Additional variable names to blank via `--env VAR=` on `create`,
+   *  appended to (and deduplicated against) the PROVIDER_CREDENTIAL_VARS /
+   *  STRIPPED_ENV_VARS blanking — see `credentialEnvFlags`. Optional and
+   *  purely additive: omitting it reproduces today's behaviour exactly.
+   *  `src/index.ts` passes the `RHUMB_*` keys of `process.env` here. */
+  extraBlankedVars?: readonly string[];
 }): AgentBackend {
-  const { exec, registry, credentialEnv } = deps;
+  const { exec, registry, credentialEnv, extraBlankedVars = [] } = deps;
 
   /** Parsed `mngr list --format json` agents, or `null` when the listing
    *  cannot be trusted (non-zero exit, or output that doesn't match the
@@ -391,7 +414,7 @@ export function createMngrBackend(deps: {
       return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
     }
 
-    const res = await exec(argvCreate(name, agentId, credentialEnv), { env: credentialEnv });
+    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars), { env: credentialEnv });
     if (res.code !== 0) {
       // A genuine create failure (mngr's own exit code says so). Leave the
       // principal unbound; send() reports it as an error event rather than

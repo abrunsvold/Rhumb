@@ -567,6 +567,62 @@ describe("mngr backend", () => {
     expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length);
   });
 
+  it("omitting extraBlankedVars changes nothing (byte-identical to before the parameter existed)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: recordingExec(calls, "agent-x"),
+      registry,
+      credentialEnv: { ANTHROPIC_API_KEY: "sk-injected" },
+      spec: CONFORMANCE_SPEC,
+      // extraBlankedVars deliberately omitted.
+    });
+
+    await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const envFlagCount = createArgv.filter((a) => a === "--env").length;
+    expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length);
+  });
+
+  it("blanks an ambient RHUMB_* var passed via extraBlankedVars, without double-emitting overlaps (Task 5 F-close)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: recordingExec(calls, "agent-x"),
+      registry,
+      credentialEnv: { ANTHROPIC_API_KEY: "sk-injected" },
+      spec: CONFORMANCE_SPEC,
+      // RHUMB_FOO is a genuine additional var; ANTHROPIC_API_KEY overlaps
+      // PROVIDER_CREDENTIAL_VARS and must not produce a second --env.
+      extraBlankedVars: ["RHUMB_FOO", "ANTHROPIC_API_KEY"],
+    });
+
+    await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    expect(createArgv).toContain("RHUMB_FOO=");
+    // Blanked, not the injected credential value — RHUMB_FOO carries no
+    // credential and must always be blanked.
+    const flagPairs: [string, string][] = [];
+    for (let i = 0; i < createArgv.length - 1; i++) {
+      if (createArgv[i] === "--env") flagPairs.push(["--env", createArgv[i + 1]]);
+    }
+    expect(flagPairs.filter(([, v]) => v.startsWith("RHUMB_FOO="))).toHaveLength(1);
+    // ANTHROPIC_API_KEY still appears exactly once, with the injected value
+    // (not blanked) — the overlap must not add a duplicate blank entry.
+    const apiKeyFlags = flagPairs.filter(([, v]) => v.startsWith("ANTHROPIC_API_KEY="));
+    expect(apiKeyFlags).toHaveLength(1);
+    expect(apiKeyFlags[0][1]).toBe("ANTHROPIC_API_KEY=sk-injected");
+    // Total flag count grows by exactly one (RHUMB_FOO) over the base case.
+    const envFlagCount = createArgv.filter((a) => a === "--env").length;
+    expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length + 1);
+  });
+
   it("refuses to create with a flag-shaped agent name (I6)", async () => {
     const calls: string[][] = [];
     const registry = makeRegistry();

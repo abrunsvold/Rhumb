@@ -1,4 +1,5 @@
 import { loadProvider, type ProviderConfig } from "./provider.js";
+import type { BackendId } from "./backends/types.js";
 
 export interface Config {
   port: number;
@@ -9,6 +10,7 @@ export interface Config {
   allowedUsers: string[];
   insecureDev: boolean;
   watchdogMinutes: number | null;
+  agentBackend: BackendId;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -56,6 +58,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
 
+  const rawBackend = env.RHUMB_AGENT_BACKEND?.trim();
+  if (rawBackend && rawBackend !== "sdk" && rawBackend !== "mngr") {
+    throw new Error(
+      `RHUMB_AGENT_BACKEND must be one of sdk|mngr, got "${rawBackend}".`,
+    );
+  }
+  const agentBackend: BackendId = rawBackend === "mngr" ? "mngr" : "sdk";
+
   return {
     port,
     workspace: env.RHUMB_WORKSPACE?.trim() || "./workspace",
@@ -68,5 +78,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       const n = Number.parseInt(env.RHUMB_WATCHDOG_MINUTES ?? "", 10);
       return Number.isInteger(n) && n > 0 ? n : null;
     })(),
+    agentBackend,
   };
 }

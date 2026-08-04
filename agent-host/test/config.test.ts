@@ -27,6 +27,7 @@ describe("loadConfig", () => {
       allowedUsers: [],
       insecureDev: true,
       watchdogMinutes: null,
+      agentBackend: "sdk",
     });
   });
 
@@ -46,6 +47,7 @@ describe("loadConfig", () => {
       allowedUsers: [],
       insecureDev: true,
       watchdogMinutes: null,
+      agentBackend: "sdk",
     });
   });
 
@@ -124,5 +126,24 @@ describe("RHUMB_WATCHDOG_MINUTES", () => {
     expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "0" }).watchdogMinutes).toBeNull();
     expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "-5" }).watchdogMinutes).toBeNull();
     expect(loadConfig({ ...base, RHUMB_WATCHDOG_MINUTES: "soon" }).watchdogMinutes).toBeNull();
+  });
+});
+
+describe("RHUMB_AGENT_BACKEND", () => {
+  const base = {
+    CLAUDE_CODE_OAUTH_TOKEN: "tok",
+    RHUMB_ALLOWED_USERS: "you@example.com",
+  } as NodeJS.ProcessEnv;
+
+  it("defaults to sdk when unset", () => {
+    expect(loadConfig({ ...base }).agentBackend).toBe("sdk");
+  });
+
+  it("accepts mngr", () => {
+    expect(loadConfig({ ...base, RHUMB_AGENT_BACKEND: "mngr" }).agentBackend).toBe("mngr");
+  });
+
+  it("rejects an unknown backend", () => {
+    expect(() => loadConfig({ ...base, RHUMB_AGENT_BACKEND: "wat" })).toThrow(/sdk\|mngr/);
   });
 });
