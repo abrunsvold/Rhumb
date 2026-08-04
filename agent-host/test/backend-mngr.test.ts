@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createMngrBackend, type ExecFn } from "../src/backends/mngr.js";
 import { createAgentRegistry } from "../src/agents.js";
@@ -426,6 +426,7 @@ describe("mngr backend", () => {
     const rec = registry.create("probe", "mngr");
     registry.bind(rec.agentId, "agent-dead");
     let created = false;
+    let messageSent = false;
     const backend = createMngrBackend({
       exec: async (argv) => {
         calls.push(argv);
@@ -439,8 +440,23 @@ describe("mngr backend", () => {
           created = true;
           return { code: 0, stdout: "", stderr: "" };
         }
-        if (argv[0] === "transcript") return { code: 0, stdout: "", stderr: "" };
-        if (argv[0] === "message") return { code: 0, stdout: "ok", stderr: "" };
+        if (argv[0] === "transcript") {
+          // Before the message is submitted the transcript is empty; after,
+          // the reborn agent answers. C1's poll needs a real reply to find,
+          // otherwise this test would (correctly) end in the honest
+          // "delivered but not yet answered" outcome instead of a result.
+          return messageSent
+            ? {
+                code: 0,
+                stdout: `${JSON.stringify({ type: "assistant_message", role: "assistant", text: "reborn-pong" })}\n`,
+                stderr: "",
+              }
+            : { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv[0] === "message") {
+          messageSent = true;
+          return { code: 0, stdout: "ok", stderr: "" };
+        }
         return { code: 0, stdout: "", stderr: "" };
       },
       registry,
@@ -843,6 +859,7 @@ describe("mngr backend", () => {
           permissionMode: "acceptEdits",
           extraOptions: { mcpServers: { ontology: {} } },
         },
+        replyTimeoutMs: 0,
       });
       warn.mockClear(); // construction itself already warned once; isolate what happens after
       await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
@@ -891,6 +908,7 @@ describe("mngr backend", () => {
       registry,
       credentialEnv: { ANTHROPIC_API_KEY: "sk-should-not-leak-into-process-env" },
       spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
     });
 
     await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hi", () => {});
@@ -1061,6 +1079,12 @@ describe("mngr backend", () => {
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      // Delivery IS proven here, so send() now waits for the answer on this
+      // path too (a non-zero `mngr message` exit is the NORMAL outcome
+      // against real mngr, even for turns that were delivered and answered
+      // in ~2s). No reply ever lands in this fixture, so go straight to the
+      // timeout branch instead of making the test wait for it.
+      replyTimeoutMs: 0,
     });
 
     const events: AgentEvent[] = [];
@@ -1110,6 +1134,7 @@ describe("mngr backend", () => {
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
     });
 
     const events: AgentEvent[] = [];
@@ -1138,11 +1163,18 @@ describe("mngr backend", () => {
             stderr: "",
           };
         }
-        return { code: 0, stdout: "", stderr: "" };
+        // `mngr message` exits 0 with a banner on stdout. Pre-C1 this
+        // banner was emitted as `{ type: "result", isError: false }` —
+        // mngr's own CLI chatter presented to the operator as the model's
+        // reply. It must never appear in an event now.
+        return { code: 0, stdout: "Docker provider disabled\nmessage submitted", stderr: "" };
       },
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      // The poll finds no NEW assistant entry; go straight to the timeout
+      // branch rather than making the test wait.
+      replyTimeoutMs: 0,
     });
 
     const events: AgentEvent[] = [];
@@ -1153,11 +1185,18 @@ describe("mngr backend", () => {
     );
 
     const last = events.at(-1);
-    expect(last?.type).toBe("result");
-    // Must fall back to `mngr message`'s own (empty) stdout, never to the
-    // user_message transcript entry — otherwise the operator's own prompt
-    // would come back as "the answer".
-    expect((last as { result: string }).result).toBe("");
+    // C1: no assistant reply ever landed, so the turn is NOT answered. The
+    // honest "delivered but not yet answered" outcome — never a result.
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("not yet answered");
+    // Neither the operator's own prompt nor mngr's stdout may surface as
+    // the answer, on any event.
+    for (const e of events) {
+      if (e.type === "result") {
+        expect((e as unknown as { result: string }).result).not.toBe("hello");
+        expect((e as unknown as { result: string }).result).not.toContain("message submitted");
+      }
+    }
   });
 
   it("selects the newest ASSISTANT reply, not the last transcript entry of any kind (N2)", async () => {
@@ -1225,11 +1264,12 @@ describe("mngr backend", () => {
             stderr: "",
           };
         }
-        return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "banner", stderr: "" };
       },
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
     });
 
     const events: AgentEvent[] = [];
@@ -1240,11 +1280,418 @@ describe("mngr backend", () => {
     );
 
     const last = events.at(-1);
+    // C1: the previous turn's reply is not this turn's answer, and mngr's
+    // stdout is not an answer at all — so the turn ends honestly
+    // unanswered rather than with either of them.
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("not yet answered");
+    for (const e of events) {
+      if (e.type === "result") {
+        expect((e as unknown as { result: string }).result).not.toBe("first answer");
+        expect((e as unknown as { result: string }).result).not.toBe("banner");
+      }
+    }
+  });
+
+  // --- C1: `mngr message` returns on SUBMISSION, not completion ---------
+
+  it("polls the transcript after a successful submission and emits the reply that appears (C1)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          // call 1 = the pre-send baseline (empty).
+          // calls 2-4 = polls where only the operator's own submitted
+          //             prompt is visible; Claude is still thinking.
+          // call 5   = the reply finally lands.
+          if (transcriptCalls === 1) return { code: 0, stdout: "", stderr: "" };
+          const lines: unknown[] = [{ type: "user_message", role: "user", content: "hello" }];
+          if (transcriptCalls >= 5) {
+            lines.push({ type: "assistant_message", role: "assistant", text: "pong" });
+          }
+          return { code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" };
+        }
+        // A successful submission whose stdout is a banner, exactly as real
+        // mngr behaves. It must never become the result.
+        return { code: 0, stdout: "Docker provider disabled", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 5_000,
+      replyPollIntervalMs: 0,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    // The turn waited across several polls rather than completing on the
+    // first read (which, pre-C1, is exactly what returned mngr's banner).
+    expect(transcriptCalls).toBeGreaterThanOrEqual(5);
+    const last = events.at(-1);
     expect(last?.type).toBe("result");
-    // Must NOT be "first answer" (the previous turn's reply, reported
-    // stale as the answer to THIS "hello"). Falls back to mngr message's
-    // own (empty) stdout instead.
-    expect((last as { result: string }).result).toBe("");
+    expect((last as { result: string }).result).toBe("pong");
+  });
+
+  it("reports the honest not-yet-answered outcome on timeout, never mngr's stdout (C1)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          if (transcriptCalls === 1) return { code: 0, stdout: "", stderr: "" };
+          // The prompt was submitted, but no assistant reply ever arrives.
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({ type: "user_message", role: "user", content: "hello" })}\n`,
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "mngr-banner-must-not-be-the-answer", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 20,
+      replyPollIntervalMs: 0,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    const last = events.at(-1);
+    // Same honest shape the non-zero-exit branch already produced.
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("not yet answered");
+    // The whole point of C1: mngr's CLI stdout is never the model's answer.
+    expect(JSON.stringify(events)).not.toContain("mngr-banner-must-not-be-the-answer");
+    expect(events.some((e) => e.type === "result")).toBe(false);
+  });
+
+  it("does not poll (and does not report a stale reply) when the pre-send transcript read failed (C1)", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          // The BASELINE read fails, so "new" can never be distinguished
+          // from "already there" for the rest of this turn.
+          if (transcriptCalls === 1) return { code: 1, stdout: "", stderr: "boom" };
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({
+              type: "assistant_message",
+              role: "assistant",
+              text: "stale reply from a previous turn",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "banner", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      // Deliberately long: if the implementation polled here it would
+      // either hang this test or surface the stale reply. It must instead
+      // short-circuit immediately.
+      replyTimeoutMs: 60_000,
+      replyPollIntervalMs: 0,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    expect(transcriptCalls).toBe(1);
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("not yet answered");
+    expect(JSON.stringify(events)).not.toContain("stale reply");
+  });
+
+  it("treats mngr's 'no transcript events yet' error as an EMPTY baseline, not an unreadable one (C1, first turn)", async () => {
+    // Observed live against mngr 0.2.17: on a brand-new agent's very first
+    // turn the PRE-send `mngr transcript` exits 1 with this error, and
+    // `mngr message` then exits 1 after 90s ("Timeout waiting for message
+    // submission signal") on a prompt the transcript proves was delivered
+    // and answered within ~2s. Reading that error as "unknowable" made the
+    // first turn of EVERY mngr agent report a bare CLI error while the
+    // model's real answer sat unread in the transcript.
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          if (transcriptCalls === 1) {
+            return {
+              code: 1,
+              stdout: JSON.stringify({
+                event: "error",
+                error_class: "MngrError",
+                message:
+                  "No common transcript found for agent 'probe'. The agent may not have produced any transcript events yet.",
+              }),
+              stderr: "Error: No common transcript found for agent 'probe'.",
+            };
+          }
+          return {
+            code: 0,
+            stdout:
+              [
+                { type: "user_message", role: "user", content: "hello" },
+                { type: "assistant_message", role: "assistant", text: "pong" },
+              ]
+                .map((l) => JSON.stringify(l))
+                .join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        return { code: 1, stdout: "", stderr: "Timeout waiting for message submission signal (waited 90.0s)" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    const last = events.at(-1);
+    expect(last?.type).toBe("result");
+    expect((last as { result: string }).result).toBe("pong");
+  });
+
+  it("still treats a genuinely unreadable transcript as unknowable, not empty (C1 guard)", async () => {
+    // The narrowness of the mapping above is the point: any OTHER non-zero
+    // transcript exit must still disable the new-vs-stale comparison, or
+    // the stale-reply failure mode comes straight back.
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "transcript") {
+          transcriptCalls += 1;
+          if (transcriptCalls === 1) return { code: 1, stdout: "", stderr: "boom: host unreachable" };
+          return {
+            code: 0,
+            stdout: `${JSON.stringify({
+              type: "assistant_message",
+              role: "assistant",
+              text: "stale reply from a previous turn",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        return { code: 1, stdout: "", stderr: "mngr: host unreachable" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello", (e) =>
+      events.push(e),
+    );
+
+    expect(events.at(-1)?.type).toBe("error");
+    expect(JSON.stringify(events)).not.toContain("stale reply");
+  });
+
+  // --- C2: the agent must operate on AgentSpec.workspace ----------------
+
+  it("create points mngr at spec.workspace and runs there IN PLACE, not in a worktree of the cwd repo (C2)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const spec = {
+      model: "m",
+      workspace: join(dir, "ws"),
+      permissionMode: "acceptEdits",
+      extraOptions: {},
+    };
+    const backend = createMngrBackend({
+      exec: recordingExec(calls),
+      registry,
+      credentialEnv: {},
+      spec,
+    });
+
+    await backend.ensure(rec.agentId, spec);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const sepIndex = createArgv.indexOf("--");
+    const beforeSep = sepIndex === -1 ? createArgv : createArgv.slice(0, sepIndex);
+
+    // `--from :<PATH>` — the `:` prefix is mandatory: a bare name means
+    // another mngr AGENT, not a directory.
+    const fromIndex = beforeSep.indexOf("--from");
+    expect(fromIndex).toBeGreaterThanOrEqual(0);
+    expect(beforeSep[fromIndex + 1]).toBe(`:${join(dir, "ws")}`);
+    // `--transfer none` = run in-place. Without it mngr's default for a git
+    // source is `git-worktree`: the agent would get a COPY on a fresh
+    // `mngr/<name>` branch and its writes to workspace/ would be invisible
+    // to the host.
+    const transferIndex = beforeSep.indexOf("--transfer");
+    expect(transferIndex).toBeGreaterThanOrEqual(0);
+    expect(beforeSep[transferIndex + 1]).toBe("none");
+    // workspace/ is expected to be dirty (it is where agents write), and an
+    // in-place run cuts no branch, so the default --ensure-clean must be off
+    // or EVERY turn fails on an uncommitted file.
+    expect(beforeSep).toContain("--no-ensure-clean");
+  });
+
+  it("resolves a relative workspace to an absolute path so it never depends on the host process's cwd (C2)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const spec = { model: "m", workspace: "./workspace", permissionMode: "acceptEdits", extraOptions: {} };
+    const backend = createMngrBackend({ exec: recordingExec(calls), registry, credentialEnv: {}, spec });
+
+    await backend.ensure(rec.agentId, spec);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const from = createArgv[createArgv.indexOf("--from") + 1];
+    expect(from).toBe(`:${resolve("./workspace")}`);
+    expect(from.startsWith(":/")).toBe(true);
+  });
+
+  it("refuses to construct with a blank workspace rather than silently running against the cwd (C2, fail closed)", () => {
+    const registry = makeRegistry();
+    expect(() =>
+      createMngrBackend({
+        exec: recordingExec([]),
+        registry,
+        credentialEnv: {},
+        spec: { model: "m", workspace: "   ", permissionMode: "acceptEdits", extraOptions: {} },
+      }),
+    ).toThrow(/workspace/i);
+  });
+
+  // --- I4: Task 3's boolean returns are actually checked -----------------
+
+  it("does not report a successful ensure when registry.bind fails (I4)", async () => {
+    const registry = makeRegistry();
+    // No record is ever created for this agentId — reachable through the
+    // public interface, since ensure() accepts any agentId string.
+    const orphanAgentId = "rhumb-never-registered";
+    let createCalls = 0;
+    let created = false;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv[0] === "create") {
+          createCalls += 1;
+          created = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv[0] === "list") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              agents: created ? [{ id: "agent-orphan", labels: { rhumb_agent_id: orphanAgentId } }] : [],
+            }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
+    });
+
+    const ref = await backend.ensure(orphanAgentId, CONFORMANCE_SPEC);
+
+    // A real mngr agent WAS created, but nothing was persisted — so the ref
+    // must not assert a binding that does not exist.
+    expect(createCalls).toBe(1);
+    expect(ref.nativeId).toBeNull();
+    expect((ref as { reason?: string }).reason).toBe("bind-failed");
+    expect(registry.get(orphanAgentId)).toBeUndefined();
+
+    // And send() reports it as its own distinct refusal, not as a create
+    // failure (create succeeded) nor as a silent success.
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: orphanAgentId, nativeId: null, backend: "mngr" }, "hi", (e) => events.push(e));
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    expect((last as { message: string }).message).toContain("could not be persisted");
+    expect((last as { message: string }).message).not.toContain("could not create an agent");
+  });
+
+  it("warns instead of silently ignoring a failed registry.touch (I4)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const registry = makeRegistry();
+      const backend = createMngrBackend({
+        exec: async (argv) => {
+          if (argv[0] === "transcript") return { code: 0, stdout: "", stderr: "" };
+          return { code: 0, stdout: "", stderr: "" };
+        },
+        registry,
+        credentialEnv: {},
+        spec: CONFORMANCE_SPEC,
+        replyTimeoutMs: 0,
+      });
+
+      // A ref carrying a nativeId but an agentId the registry never knew:
+      // send() skips ensureAgent entirely and goes straight to touch().
+      await backend.send({ agentId: "rhumb-unknown", nativeId: "agent-x", backend: "mngr" }, "hi", () => {});
+
+      expect(warn).toHaveBeenCalled();
+      const message = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(message).toContain("[rhumb]");
+      expect(message).toContain("rhumb-unknown");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("throws rather than claim stopped when registry.markStopped fails (I4)", async () => {
+    const registry = makeRegistry();
+    const backend = createMngrBackend({
+      exec: recordingExec([]),
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    // Same posture as I3b (a failed `mngr stop` throws): stop() resolving
+    // tells the caller the principal is retired, and it isn't.
+    await expect(
+      backend.stop({ agentId: "rhumb-unknown", nativeId: null, backend: "mngr" }),
+    ).rejects.toThrow(/no such record/);
+    await expect(
+      backend.stop({ agentId: "rhumb-unknown", nativeId: "agent-x", backend: "mngr" }),
+    ).rejects.toThrow(/no such record/);
   });
 
   it("transcript maps mngr jsonl events to TranscriptMessage, skipping unrecognised types", async () => {
@@ -1412,6 +1859,7 @@ describe("mngr backend", () => {
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
     });
 
     await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hello world", () => {});
@@ -1515,6 +1963,11 @@ runBackendConformance(
       registry: makeSeededConformanceRegistry("rhumb-conf-"),
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      // The conformance fake never produces an assistant reply, so C1's
+      // poll would otherwise run to its full production timeout. `0` keeps
+      // the contract being checked (a terminal result-or-error event)
+      // while reading the transcript exactly once, as before C1.
+      replyTimeoutMs: 0,
     }),
   () => {
     const registry = createAgentRegistry({
@@ -1527,6 +1980,7 @@ runBackendConformance(
       registry,
       credentialEnv: {},
       spec: CONFORMANCE_SPEC,
+      replyTimeoutMs: 0,
     });
   },
 );

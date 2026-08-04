@@ -57,7 +57,31 @@ reachable by anyone else); `RHUMB_AGENT_BACKEND` (default `sdk`; see
 | Value | Behavior |
 | --- | --- |
 | `sdk` | Claude Code in-process via the Agent SDK. One agent, one workspace. The behavior Rhumb has always had. |
-| `mngr` | Agents are spawned through the [mngr](https://github.com/imbue-ai/mngr) CLI. Localhost only in this release. |
+| `mngr` | **EXPERIMENTAL.** Agents are spawned through the [mngr](https://github.com/imbue-ai/mngr) CLI. Localhost only. See the limitations below before switching. |
+
+#### `mngr` mode is EXPERIMENTAL
+
+It is not a drop-in peer of `sdk`. What is *not* wired yet:
+
+- **No incremental streaming.** A turn emits one `session` event and then a
+  single terminal event (`result` or `error`) — nothing in between. The SSE
+  stream shows no tool calls, no partial text, no progress. `mngr` does have a
+  streaming channel (`mngr event <name> --follow`), but Rhumb does not consume
+  it; `send()` polls `mngr transcript --format jsonl` for the reply instead.
+- **A turn can end "delivered but not yet answered."** `mngr message` returns on
+  *submission*, not completion, so Rhumb waits for the reply to appear in the
+  transcript. If nothing appears within five minutes the turn ends with an
+  honest error rather than a fabricated answer. Against mngr 0.2.17 `mngr
+  message` routinely exits non-zero after a 90-second internal timeout on turns
+  that were in fact delivered and answered within seconds; Rhumb reconciles
+  against the transcript rather than trusting that exit code, so those turns
+  still return the model's real reply.
+- **No operator handle to list or stop agents.** `list()`, `stop()`, and
+  `transcript()` exist on the backend but have no production callers — no HTTP
+  route, no client affordance. Nothing in `src/` ever calls `stop()`. In
+  practice a mngr agent is created and then lives until you run `mngr destroy`
+  yourself.
+- **Workspace:** agents run **in place** in `RHUMB_WORKSPACE` — see below.
 
 `mngr` mode requires `mngr`, `tmux`, `git`, `jq`, and bash 4+ on `PATH`. The host
 checks eagerly at startup and refuses to boot without them, rather than failing
@@ -84,10 +108,29 @@ one another tool made, never carries the label, so it can never be adopted —
 only an agent Rhumb itself created (and therefore already credential-scrubbed,
 below) can ever match.
 
+**Workspace.** A mngr agent runs **in place** in `RHUMB_WORKSPACE`, so it sees
+the same data-sources, surfaces, ontology, and uploaded files the host does, and
+its writes land where the host reads them. Rhumb passes
+`--from :<workspace> --transfer none --no-ensure-clean` to `mngr create` to get
+this. Consequences worth knowing:
+
+- mngr's default is to fork a **git worktree** on a new `mngr/<name>` branch.
+  Rhumb deliberately does not use that: the workspace is shared mutable state,
+  not a branch. No branch or worktree is created for a Rhumb agent, and nothing
+  is left behind in any repo.
+- Because the agent runs directly in the workspace, **every mngr agent shares
+  one directory**. There is no per-agent isolation in this release.
+- If `RHUMB_WORKSPACE` happens to sit inside a git repo, a dirty tree is fine —
+  `--no-ensure-clean` is passed, because `workspace/` is *expected* to be dirty
+  (it is where agents write). Without it, any uncommitted file would fail every
+  turn.
+- The path is resolved to an absolute path before being handed to mngr, so it
+  never depends on the host process's working directory. The backend refuses to
+  start at all if the workspace is blank.
+
 **Credentials.** In `mngr` mode the spawned agent receives exactly the
-credential variables Rhumb injects and nothing from the ambient environment —
-the same guarantee described in [SECURITY.md](../SECURITY.md) for the SDK
-path. This matters more here than it sounds: mngr does **not** scrub the
+credential variables Rhumb chose **at spawn time** and nothing from the ambient
+environment. This matters more here than it sounds: mngr does **not** scrub the
 environment it hands a spawned agent by default — a spawned agent's env comes
 from whatever the mngr tmux server was originally started with, not from the
 environment of whichever process asked mngr to create it. Rhumb closes that
@@ -95,6 +138,34 @@ gap by passing an explicit `--env` override for every credential variable on
 every `mngr create` call — the selected provider's values as given, and every
 other credential variable blanked — which overrides the tmux server's
 inherited environment regardless of what it originally started with.
+
+> **Credentials are frozen at spawn (limitation).** `--env` is applied only at
+> `mngr create`. An agent adopted by its `rhumb_agent_id` label on a later turn
+> keeps whatever credential was injected when it was first spawned — across
+> agent-host restarts, token rotation, and provider switches. This is **weaker
+> than the SDK path**, which rebuilds `sanitizedEnv` on every turn and therefore
+> always uses the current credential. To make a rotated token or a changed
+> `RHUMB_LLM_PROVIDER` reach an existing mngr agent you must destroy and
+> recreate it (`mngr destroy <name> --force -b`).
+
+> **Changing any `RHUMB_*` variable requires `tmux kill-server`.** The SDK path
+> strips every `RHUMB_*` variable with a wildcard scan. The mngr path reproduces
+> that by enumerating the `RHUMB_*` keys of the **agent-host process's** own
+> environment and blanking each one via `--env`. But spawned agents inherit from
+> the **tmux server's** environment, which can predate the current agent-host
+> process. So after adding, removing, or changing a `RHUMB_*` variable,
+> restarting agent-host alone is **not** enough — run `tmux kill-server` so the
+> next `mngr create` starts a fresh server under the new environment. (Phase 0
+> hit exactly this: a stale tmux server silently made a credential-leak test
+> measure nothing.)
+
+> **Blank vs. absent (known divergence).** `env.ts` **deletes**
+> `STRIPPED_ENV_VARS` for the SDK path; the mngr path can only set them to the
+> empty string, since `--env VAR=` is the only way to override an inherited
+> value. So `CLAUDE_CONFIG_DIR=""` (and the other stripped variables) are
+> *present but empty* on every mngr agent, rather than absent. Empirically
+> tolerated by Claude Code CLI 2.1.196, but the two paths are not byte-identical
+> here.
 
 **Capability reduction, not a gate bypass.** A mngr agent does not receive
 Rhumb's in-process MCP servers (infra, ontology) or the operator-approval
@@ -106,6 +177,30 @@ tools `canUseTool` protects are served *by* the dropped MCP servers, so with
 those servers gone there is nothing left for the gate to protect, and the
 same `RHUMB_*` credential blanking described above means the agent cannot
 reach infra through Bash as a substitute either.
+
+#### Running the live mngr test suite
+
+`test/backend-mngr.integration.test.ts` drives real `mngr`, real `tmux`, and
+real `claude` processes. It is **opt-in** and does not run under `npm test`:
+
+    RHUMB_LIVE_MNGR=1 npx vitest run test/backend-mngr.integration.test.ts
+
+Both `RHUMB_LIVE_MNGR=1` **and** the `mngr`/`tmux`/`git` binaries are required;
+with the variable unset the suite reports as skipped. Two reasons it is gated
+rather than keyed on binary presence alone:
+
+- **It runs `tmux kill-server`,** which kills *all* of your tmux sessions, not
+  just mngr's. That call is mandatory for the suite's most valuable assertion
+  (that an ambient credential never reaches a spawned agent): a mngr agent's
+  environment comes from whatever the tmux **server** was started with, so a
+  server predating the test's decoy variables would make the test pass while
+  proving nothing. Killing it first is what makes an absent decoy meaningful.
+- **It takes several minutes** and creates real agents. Without the gate, `npm
+  test` silently became a multi-minute, side-effecting run on any machine that
+  happened to have mngr installed.
+
+Set `CLAUDE_CODE_OAUTH_TOKEN` as well to additionally exercise a turn that
+returns a real model reply; without it that one case reports as skipped.
 
 ## Security
 

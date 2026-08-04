@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 import type { TranscriptMessage } from "../types.js";
 import type { AgentBackend, AgentRef, AgentSpec } from "./types.js";
 import type { AgentRegistry } from "../agents.js";
@@ -68,6 +69,7 @@ const argvCreate = (
   "-y",
   "--label",
   `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
+  ...workspaceFlags(spec.workspace),
   ...credentialEnvFlags(credentialEnv, extraBlankedVars),
   // Per `mngr create --help`: "Arguments after -- are passed directly to
   // the agent command" — see agentArgsFor's doc comment for what crosses
@@ -79,6 +81,69 @@ const argvSend = (nativeId: string, prompt: string): string[] => ["message", nat
 const argvStop = (nativeId: string): string[] => ["stop", nativeId];
 const argvList = (): string[] => ["list", "--format", "json"];
 const argvTranscript = (nativeId: string): string[] => ["transcript", nativeId, "--format", "jsonl"];
+
+/** Makes the spawned agent actually operate on `AgentSpec.workspace` (C2).
+ *
+ *  Before this existed, `argvCreate` passed no source at all and
+ *  `createRealExec` passed no `cwd`, so `mngr create --from` fell back to
+ *  its documented default — "git root if omitted" — resolved from the
+ *  agent-host process's CWD. On the deployment box the systemd unit sets
+ *  `WorkingDirectory=<repo>/agent-host`, so that git root is **the Rhumb
+ *  checkout itself**. Three separate consequences, all silent:
+ *   1. the agent could not see `workspace/` at all — no data-sources, no
+ *      surfaces, no ontology, none of the uploads `POST /files` writes;
+ *   2. every principal left a `mngr/<name>` branch AND a git worktree
+ *      inside the operator's own checkout, permanently (nothing calls
+ *      `mngr destroy -b`, and nothing in `src/` calls `stop()`);
+ *   3. `mngr create` defaults to `--ensure-clean`, so ANY uncommitted
+ *      change in the checkout failed EVERY turn.
+ *
+ *  Verified against real mngr 0.2.17 (see the live suite's work_dir
+ *  assertion, and the C2 probes recorded in the final fix report):
+ *   - `--from :<PATH>` selects a DIRECTORY as the source (a bare name would
+ *     mean another mngr AGENT — hence the mandatory `:` prefix).
+ *   - `--transfer none` means "run in-place (no transfer)". This is the
+ *     load-bearing flag: without it mngr's default for a git source is
+ *     `git-worktree`, i.e. the agent would get a COPY on a fresh
+ *     `mngr/<name>` branch and every write it made to `workspace/` would
+ *     land somewhere the host never reads. Rhumb's workspace is shared
+ *     mutable state, not a branch to fork.
+ *   - `--no-ensure-clean` is required whenever the workspace happens to sit
+ *     in a git repo: mngr aborts on a dirty tree even under
+ *     `--transfer none`, which was confirmed empirically. For an in-place
+ *     run there is nothing to transfer and no branch to cut, so a dirty
+ *     tree is not a hazard — and `workspace/` is *expected* to be dirty
+ *     (it is where agents write).
+ *  Confirmed to work for BOTH a git and a non-git workspace, with
+ *  `MNGR_AGENT_WORK_DIR` equal to the workspace and `initial_branch: null`
+ *  in `mngr list --format json` (no branch, no worktree, nothing left
+ *  behind in any repo).
+ *
+ *  The path is `resolve()`d because `RHUMB_WORKSPACE` defaults to the
+ *  RELATIVE `./workspace`, and a relative `--from` would otherwise be
+ *  interpreted against whatever CWD the agent-host process happens to have
+ *  — reintroducing exactly the implicit-CWD dependency this fix removes. */
+function workspaceFlags(workspace: string): string[] {
+  return ["--from", `:${resolvePath(workspace)}`, "--transfer", "none", "--no-ensure-clean"];
+}
+
+/** Fail closed at construction rather than silently running the agent
+ *  against the wrong tree (C2's fallback (b), kept as a guard even though
+ *  (a) succeeded). A blank/whitespace workspace would `resolve()` to the
+ *  process CWD, which on the deployment box is the Rhumb checkout — the
+ *  precise failure this whole fix exists to eliminate — so it is refused by
+ *  name instead of being papered over. */
+function assertUsableWorkspace(workspace: unknown): void {
+  if (typeof workspace !== "string" || workspace.trim() === "") {
+    throw new Error(
+      "RHUMB_AGENT_BACKEND=mngr requires a non-empty AgentSpec.workspace: it is passed to " +
+        "`mngr create --from :<path> --transfer none` so the agent operates in-place on Rhumb's " +
+        "workspace. Refusing to construct the mngr backend, because an empty workspace would " +
+        "resolve to the agent-host process's current directory (the Rhumb checkout itself on a " +
+        "systemd deployment) and the agent would silently run against the wrong tree.",
+    );
+  }
+}
 
 /** mngr does not scrub the ambient environment: the spawned agent's env
  *  comes from whatever the tmux server was started with, not from the env of
@@ -299,6 +364,28 @@ function parseTranscriptLine(line: string): TranscriptMessage | null {
   return null;
 }
 
+/** True only for mngr's specific "this agent has not produced any
+ *  transcript events yet" error — the one non-zero `mngr transcript` exit
+ *  that means EMPTY rather than UNREADABLE. See `fetchTranscript` for why
+ *  the distinction matters and why this match is kept narrow. */
+function isNoTranscriptYetError(stdout: string): boolean {
+  const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object") continue;
+    const e = event as Record<string, unknown>;
+    if (e.event === "error" && typeof e.message === "string" && /no common transcript found/i.test(e.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** The newest assistant reply that appeared strictly at or after `before`'s
  *  snapshot length, or `null` if none did. Two independent guards, both
  *  needed:
@@ -331,6 +418,27 @@ function newAssistantReply(
   return null;
 }
 
+/** How long `send()` waits for the model's reply to appear in the
+ *  transcript after `mngr message` reports a successful SUBMISSION (C1).
+ *  Sized against the same real-world behaviour `EXEC_TIMEOUT_MS` (exec.ts)
+ *  is sized against: Phase 0 documented `mngr message` itself sitting for
+ *  90s before returning, and a real Claude Code turn (tool calls, file
+ *  edits) routinely runs minutes. Five minutes is long enough that a
+ *  genuine turn is not truncated, and short enough that a wedged agent
+ *  still resolves the operator's SSE stream with an honest
+ *  "delivered but not yet answered" rather than hanging forever. */
+const DEFAULT_REPLY_TIMEOUT_MS = 300_000;
+
+/** Gap between transcript polls while waiting for that reply. Each poll is
+ *  one `mngr transcript --format jsonl` process spawn, so this trades
+ *  latency-to-first-answer against how hard the loop hammers the CLI; 2s
+ *  keeps a fast turn feeling immediate at ~150 spawns worst case. */
+const DEFAULT_REPLY_POLL_INTERVAL_MS = 2_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /** Why `ensureAgent` left a principal unbound (`nativeId: null`), so
  *  `send()` can report something more accurate than one generic message for
  *  the many situations that can lead there (see `ensureFailureMessage`).
@@ -342,7 +450,8 @@ type EnsureFailureReason =
   | "create-failed"
   | "create-unconfirmed"
   | "create-not-found"
-  | "bound-elsewhere";
+  | "bound-elsewhere"
+  | "bind-failed";
 
 interface EnsureResult extends AgentRef {
   reason?: EnsureFailureReason;
@@ -356,6 +465,13 @@ function ensureFailureMessage(reason: EnsureFailureReason | undefined): string {
       return "mngr: agent name is not valid for `mngr create`, refused before invoking the CLI";
     case "bound-elsewhere":
       return "mngr: this mngr agent is already bound to a different Rhumb principal; refusing to share it";
+    case "bind-failed":
+      // I4: `registry.bind` returns false when no record exists for this
+      // agentId. Reporting a successful ensure in that case would hand back
+      // a ref asserting a binding that was never persisted — the agentId ->
+      // nativeId trust link is the ONE thing this module owns, so a bind
+      // that did not happen must never be reported as one that did.
+      return "mngr: a mngr agent exists for this principal but the agentId->nativeId binding could not be persisted (no such agent record in the registry); refusing to report an unbound principal as bound";
     case "create-unconfirmed":
       // The listing itself was unknowable (non-zero exit / unparseable),
       // NOT proof the agent doesn't exist — distinct from "create-not-found"
@@ -397,8 +513,28 @@ export function createMngrBackend(deps: {
    *  comment, I2, for the asymmetry and the `tmux kill-server` operator
    *  requirement it implies). */
   extraBlankedVars?: readonly string[];
+  /** How long `send()` waits for a NEW assistant reply to appear in the
+   *  transcript after a successful `mngr message` submission (C1). `mngr
+   *  message` returns on SUBMISSION, not completion — there is no
+   *  wait-for-reply flag — so without this the operator's turn would
+   *  complete before the model had answered. Injectable purely so unit
+   *  tests can drive the loop without real sleeps; production uses the
+   *  default. `0` means "read the transcript once, then give up", which is
+   *  exactly the pre-C1 call pattern minus the dishonest fallback. */
+  replyTimeoutMs?: number;
+  /** Delay between transcript polls while waiting for that reply (C1). */
+  replyPollIntervalMs?: number;
 }): AgentBackend {
-  const { exec, registry, credentialEnv, extraBlankedVars = [], spec } = deps;
+  const {
+    exec,
+    registry,
+    credentialEnv,
+    extraBlankedVars = [],
+    spec,
+    replyTimeoutMs = DEFAULT_REPLY_TIMEOUT_MS,
+    replyPollIntervalMs = DEFAULT_REPLY_POLL_INTERVAL_MS,
+  } = deps;
+  assertUsableWorkspace(spec?.workspace);
   warnAboutUncarriableSpec(spec);
 
   /** Parsed `mngr list --format json` agents, or `null` when the listing
@@ -493,16 +629,111 @@ export function createMngrBackend(deps: {
     if (conflict) {
       return { agentId, nativeId: null, backend: "mngr", reason: "bound-elsewhere" };
     }
-    registry.bind(agentId, nativeId);
+    // I4: `bind` returns false when the registry has no record for this
+    // agentId — reachable through the public interface, since `ensure()`
+    // accepts any agentId string and a caller can hand it one that was
+    // never `create`d (the conformance suite's failing-backend fixture does
+    // exactly that). Before this check, that path created a REAL mngr
+    // agent, silently failed to persist the binding, and still returned a
+    // ref asserting it — the one trust link this module owns, reported as
+    // established when it was not.
+    if (!registry.bind(agentId, nativeId)) {
+      return { agentId, nativeId: null, backend: "mngr", reason: "bind-failed" };
+    }
     return { agentId, nativeId, backend: "mngr" };
+  }
+
+  /** `registry.touch` returns false when no record exists for this agentId
+   *  (I4). Not fatal — a touch only advances `lastActiveAt` — but it means
+   *  the principal this turn ran for is absent from the registry, which
+   *  every other invariant here depends on, so it must not vanish
+   *  silently. */
+  function touchOrWarn(agentId: string): void {
+    if (!registry.touch(agentId)) {
+      console.warn(
+        `[rhumb] WARNING: mngr backend could not update lastActiveAt for agentId ${agentId}: ` +
+          "no such record in the agent registry. The turn still ran, but this principal is not " +
+          "tracked — its agentId->nativeId binding is missing, so it cannot be listed or stopped.",
+      );
+    }
+  }
+
+  /** `registry.markStopped` returns false when no record exists (I4).
+   *  Unlike `touch`, swallowing this would be a correctness lie: `stop()`
+   *  resolving normally tells the caller the principal is now retired, and
+   *  the backend already throws rather than claim that when the CLI call
+   *  fails (I3b). A record that cannot be marked is the same class of
+   *  failure and gets the same treatment. */
+  function markStoppedOrThrow(agentId: string): void {
+    if (!registry.markStopped(agentId)) {
+      throw new Error(
+        `mngr: cannot mark agentId ${agentId} stopped: no such record in the agent registry`,
+      );
+    }
+  }
+
+  /** Waits for a NEW assistant reply to appear in the transcript (C1).
+   *
+   *  `mngr message` returns on SUBMISSION, not completion — it writes to
+   *  the agent's stdin and there is no wait-for-reply flag (verified
+   *  against 0.2.17; Phase 0's Q3 table). So at the instant it exits 0, the
+   *  transcript typically holds only the operator's own `user_message`.
+   *  Reading the transcript once and reporting whatever is there is what
+   *  produced the C1 defect: a turn completing with `mngr message`'s CLI
+   *  banner (or an empty string) presented to the operator as the model's
+   *  answer, `isError: false`.
+   *
+   *  Polling `mngr transcript --format jsonl` rather than streaming `mngr
+   *  event --follow`: `--follow` would give lower latency, but it needs a
+   *  long-lived child process with incremental stdout, which `ExecFn` — a
+   *  buffer-the-whole-output, resolve-once seam shared by every other call
+   *  site — cannot express. Polling reuses `fetchTranscript` exactly as it
+   *  already is, keeps the fake-exec unit tests honest (no streaming to
+   *  simulate), and is sufficient because slice 1 emits no incremental
+   *  events anyway: one `session` event, then one terminal event. Revisit
+   *  when incremental streaming is actually wired.
+   *
+   *  Returns `null` on timeout, which the caller reports honestly rather
+   *  than dressing up as an answer. */
+  async function waitForNewAssistantReply(
+    nativeId: string,
+    before: TranscriptMessage[],
+  ): Promise<TranscriptMessage | null> {
+    const deadline = Date.now() + replyTimeoutMs;
+    for (;;) {
+      const after = await fetchTranscript(nativeId);
+      const reply = newAssistantReply(before, after);
+      if (reply) return reply;
+      if (Date.now() >= deadline) return null;
+      await sleep(replyPollIntervalMs);
+    }
   }
 
   /** Snapshot of a live agent's transcript, or `null` when it cannot be read
    *  (non-zero exit). Individual unparseable or unrecognised lines are
-   *  skipped, never thrown — see parseTranscriptLine. */
+   *  skipped, never thrown — see parseTranscriptLine.
+   *
+   *  One non-zero exit is NOT an unreadable transcript: mngr reports a
+   *  brand-new agent that has not emitted anything yet as an ERROR (exit 1,
+   *  `{"event":"error", …,"message":"No common transcript found for agent
+   *  'X'. The agent may not have produced any transcript events yet."}`),
+   *  not as an empty result. Verified against 0.2.17 on the pre-send read of
+   *  a fresh agent's very first turn.
+   *
+   *  Collapsing that into `null` was actively harmful: `null` means
+   *  UNKNOWABLE, which disables the delivery check and the new-vs-stale
+   *  reply comparison for the whole turn — so the FIRST turn of EVERY mngr
+   *  agent reported a bare CLI error to the operator while the model's real
+   *  answer sat in the transcript, unread. Mapping it to `[]` is not a
+   *  guess: mngr is asserting the agent has produced no events, i.e. there
+   *  is no prior history for a "new" reply to be confused with, which is
+   *  exactly what an empty baseline encodes. The match is deliberately
+   *  narrow (that one error message) so any OTHER failure — a real
+   *  unreadable transcript, a dead agent, a timeout — still returns `null`
+   *  and still disables both checks. */
   async function fetchTranscript(nativeId: string): Promise<TranscriptMessage[] | null> {
     const res = await exec(argvTranscript(nativeId));
-    if (res.code !== 0) return null;
+    if (res.code !== 0) return isNoTranscriptYetError(res.stdout) ? [] : null;
     const messages: TranscriptMessage[] = [];
     for (const line of res.stdout.split("\n")) {
       const trimmed = line.trim();
@@ -647,27 +878,33 @@ export function createMngrBackend(deps: {
       // plain success path below).
       const before = await fetchTranscript(nativeId);
       const res = await exec(argvSend(nativeId, prompt));
-      const after = await fetchTranscript(nativeId);
-      const delivered = before !== null && after !== null && after.length > before.length;
-      const reply = newAssistantReply(before, after);
 
       if (res.code !== 0) {
-        if (delivered) {
+        // A non-zero exit is NOT proof of non-delivery — reconcile against
+        // the transcript first. This is not a rare path: against mngr
+        // 0.2.17 it is the NORMAL one. `mngr message` sits for 90s and then
+        // exits non-zero with "Timeout waiting for message submission
+        // signal" on turns whose transcript timestamps show the prompt
+        // delivered and answered within ~2s.
+        const after = await fetchTranscript(nativeId);
+        const delivered = before !== null && after !== null && after.length > before.length;
+        if (delivered && before !== null) {
+          // Submission is PROVEN (the transcript grew), so this turn is in
+          // exactly the same state as a clean exit 0: waiting on the model.
+          // Wait for the answer the same way, rather than reporting a
+          // half-finished turn just because the CLI's own exit code was
+          // grumpy about a signal it never saw. touch() first: submission
+          // is proven even if the answer never arrives.
+          touchOrWarn(ref.agentId);
+          const reply = newAssistantReply(before, after) ?? (await waitForNewAssistantReply(nativeId, before));
           if (reply) {
-            // Delivered despite the non-zero exit, and a NEW assistant
-            // reply is already present: report what the transcript
-            // actually shows, not the CLI's exit code.
-            registry.touch(ref.agentId);
+            // Report what the transcript actually shows, not the exit code.
             onEvent({ type: "result", result: reply.text, isError: false });
             return { ...ref, nativeId };
           }
-          // The transcript grew (the prompt was submitted) but no NEW
-          // assistant reply is present yet — the turn is not actually
-          // answered. Do NOT synthesise a result from the operator's own
-          // prompt (a `user_message` entry); report this honestly rather
-          // than claiming success. Still touch(): submission was proven,
-          // even though the answer wasn't.
-          registry.touch(ref.agentId);
+          // Submitted, but no NEW assistant reply ever landed. Do NOT
+          // synthesise a result from the operator's own prompt (a
+          // `user_message` entry); report this honestly.
           onEvent({
             type: "error",
             message: `mngr: message delivered but not yet answered (${res.stderr.trim() || `exit ${res.code}`})`,
@@ -678,14 +915,46 @@ export function createMngrBackend(deps: {
         return { ...ref, nativeId };
       }
 
-      registry.touch(ref.agentId);
-      // Fallback note: if the transcript is unreadable, has no NEW
-      // assistant entry yet, or `before` itself was unreadable, this falls
-      // back to `mngr message`'s own stdout. Phase 0 never characterised
-      // that stdout as carrying the assistant's reply — it may be empty, a
-      // banner, or something else entirely — so this is a best-effort
-      // fallback, not a verified contract.
-      onEvent({ type: "result", result: reply?.text ?? res.stdout.trim(), isError: false });
+      // Exit 0 proves SUBMISSION, never completion (C1). `mngr message`
+      // writes to the agent's stdin and returns; there is no
+      // wait-for-reply flag. So this is where the turn actually waits for
+      // the model — by polling the transcript for an assistant entry that
+      // was not already there before the prompt was sent.
+      touchOrWarn(ref.agentId);
+
+      if (before === null) {
+        // No trustworthy baseline: the PRE-send transcript read failed, so
+        // "new" cannot be distinguished from "already there", and polling
+        // could only ever surface a PREVIOUS turn's answer as this turn's
+        // (the exact stale-reply failure `newAssistantReply` guards
+        // against). Report the honest outcome immediately instead of
+        // waiting out the timeout to reach the same conclusion.
+        onEvent({
+          type: "error",
+          message:
+            "mngr: message delivered but not yet answered (the pre-send transcript could not be read, " +
+            "so a new assistant reply cannot be told apart from prior history)",
+        });
+        return { ...ref, nativeId };
+      }
+
+      const reply = await waitForNewAssistantReply(nativeId, before);
+      if (reply) {
+        onEvent({ type: "result", result: reply.text, isError: false });
+        return { ...ref, nativeId };
+      }
+
+      // Timed out with no NEW assistant entry. `res.stdout` is deliberately
+      // NOT used as a fallback on this (or any) path: Phase 0 never
+      // characterised `mngr message`'s stdout as carrying the assistant's
+      // reply — it is a submission banner, or empty — and emitting it as
+      // `{ type: "result", isError: false }` presented mngr's own CLI
+      // chatter to the operator as the model's answer. Report the same
+      // honest shape the non-zero-exit path already produces.
+      onEvent({
+        type: "error",
+        message: `mngr: message delivered but not yet answered within ${replyTimeoutMs}ms (no new assistant reply appeared in the transcript)`,
+      });
       return { ...ref, nativeId };
     },
 
@@ -704,7 +973,7 @@ export function createMngrBackend(deps: {
 
     async stop(ref) {
       if (!ref.nativeId) {
-        registry.markStopped(ref.agentId);
+        markStoppedOrThrow(ref.agentId);
         return;
       }
       const res = await exec(argvStop(ref.nativeId));
@@ -715,7 +984,7 @@ export function createMngrBackend(deps: {
         // instead of swallowing it.
         throw new Error(`mngr: failed to stop ${ref.nativeId}: ${res.stderr.trim() || `exit ${res.code}`}`);
       }
-      registry.markStopped(ref.agentId);
+      markStoppedOrThrow(ref.agentId);
     },
 
     async transcript(ref) {

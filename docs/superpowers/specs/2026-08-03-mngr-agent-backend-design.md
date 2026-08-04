@@ -141,7 +141,7 @@ security conclusion is made structural rather than conventional.
 | Method | Implementation |
 | --- | --- |
 | `ensure` | `mngr list` → if no agent for this `agentId`, `mngr create` with Rhumb-built env; persist `nativeId` |
-| `send` | Write prompt to the agent; tail transcript JSONL; translate lines → `AgentEvent` (reusing the existing `blockToMessages` logic) |
+| `send` | `mngr message` to submit the prompt, then POLL `mngr transcript --format jsonl` until a NEW assistant entry appears; translate that entry → `AgentEvent`. (Corrected, M5: `blockToMessages` is NOT reused — mngr exposes its own agent-agnostic transcript format, so `parseTranscriptLine` maps mngr's `user_message`/`assistant_message` events directly and Rhumb never reads Claude's raw JSONL. `mngr message` returns on *submission*, not completion, which is why this polls rather than reading once.) |
 | `list` | `mngr list` JSON output, joined against Rhumb's principal records |
 | `stop` | mngr stop/kill for that `nativeId` |
 | `transcript` | Reuse the existing JSONL reader |
@@ -171,8 +171,14 @@ its keep. No migration of live dogfood data.
 
 ### Wiring
 
-`POST /messages` keeps its current shape (`agent-host/src/server.ts`); the
-`sessionId` field now carries the `agentId`. No client or dashboard-host change.
+`POST /messages` keeps its current shape (`agent-host/src/server.ts`). No client
+or dashboard-host change. (Corrected, M5: in the mngr backend the `sessionId`
+field carries the **`nativeId`** — the mngr agent id — not the `agentId`.
+`send()` emits `{ type: "session", sessionId: nativeId }`, and a client resumes
+by handing that value back. The `agentId` stays server-side, resolved from the
+registry by `createMngrAgentIdResolver`; it is never on the wire. Under the
+`sdk` backend the two are the same value, since that path keeps
+`agentId === nativeId === session_id`.)
 
 `SessionManager` becomes a delegator: its model/workspace/permissionMode/options
 building moves verbatim into `backends/sdk.ts`. `SessionManager.run()` retains its

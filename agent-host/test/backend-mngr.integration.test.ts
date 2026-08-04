@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -19,7 +19,22 @@ import type { AgentEvent } from "../src/types.js";
 import type { AgentBackend } from "../src/backends/types.js";
 
 const has = (bin: string) => spawnSync("command", ["-v", bin], { shell: true }).status === 0;
-const available = has("mngr") && has("tmux") && has("git");
+
+/** Binary presence is NOT sufficient to run this suite (I6). Two reasons an
+ *  explicit opt-in is required on top of it:
+ *   1. it calls `tmux kill-server` (see the ambient-credential test, where
+ *      that call is mandatory for the assertion to mean anything) — which
+ *      kills ALL of the developer's unrelated tmux sessions, not just
+ *      mngr's;
+ *   2. it spawns real agents and takes minutes, so on any machine that
+ *      happens to have mngr installed a plain `npm test` silently became a
+ *      multi-minute, side-effecting run.
+ *  With `RHUMB_LIVE_MNGR=1` unset the suite reports as skipped rather than
+ *  quietly passing, so the default `npm test` is fast and side-effect-free.
+ *  Run it deliberately:
+ *    RHUMB_LIVE_MNGR=1 npx vitest run test/backend-mngr.integration.test.ts */
+const optedIn = process.env.RHUMB_LIVE_MNGR === "1";
+const available = optedIn && has("mngr") && has("tmux") && has("git");
 
 /** Real `mngr list --format json` parsed. Distinct from mngr.ts's own
  *  internal `listAgents` — this is the test's independent verification
@@ -125,56 +140,55 @@ function rawEnvDumpForPid(pid: number): string {
 }
 
 describe.skipIf(!available)("mngr backend (live, localhost)", () => {
-  // mngr's `create` resolves its SOURCE repo from the invoking process's
-  // CURRENT WORKING DIRECTORY (argvCreate in mngr.ts passes no explicit
-  // source path, and createRealExec's execFile call passes no `cwd` — it
-  // inherits process.cwd()). AgentSpec.workspace is NOT consulted for this
-  // at all. To keep every `mngr create` in this suite forking from a
-  // disposable temp repo — never from the Rhumb checkout this test file
-  // lives in — the whole test-worker process is chdir'd into a fresh temp
-  // git repo for the duration of the suite. (Verified this works under
+  // Before C2, `mngr create` resolved its SOURCE from the invoking
+  // process's CURRENT WORKING DIRECTORY ("defaults to git root if
+  // omitted"), and `AgentSpec.workspace` was not consulted at all — so on
+  // the deployment box every agent forked a worktree of the RHUMB CHECKOUT.
+  // This suite used to paper over that by chdir-ing the whole test worker
+  // into a disposable temp GIT repo, which is precisely why no test caught
+  // it. `argvCreate` now passes `--from :<workspace> --transfer none
+  // --no-ensure-clean`, so the workspace is what the agent runs in, and the
+  // assertions below verify that against real mngr.
+  //
+  // `workspaceDir` is deliberately NOT a git repo: Rhumb's `workspace/` is
+  // shared mutable state (data-sources, surfaces, ontology, uploads), not a
+  // branch to fork, and the non-git case is the one Phase 0 flagged as
+  // needing verification. The worker still chdir's — but into a plain,
+  // NON-git temp dir, so that if `--from` ever regressed away, mngr's git-
+  // root default would find no repo and fail loudly instead of quietly
+  // forking whatever checkout the tests happen to run from. (Verified under
   // vitest's default `forks` pool, per vitest.config.ts; `process.chdir`
-  // throws unconditionally under the `threads` pool, which this repo does
-  // not use.)
-  // `repoDir` is the git repo `mngr create` forks from (via cwd, see above)
-  // — it MUST stay exactly as committed, or `mngr create` refuses with
-  // "Working tree has uncommitted changes". `stateDir` is a SEPARATE
-  // directory (a sibling, not a subdirectory of `repoDir`) for this test's
-  // own bookkeeping — the AgentRegistry index files — so writing them can
-  // never dirty the repo mngr is about to fork. (This bit us once while
-  // developing this test: pointing the registry's indexPath inside
-  // `repoDir` made every `mngr create` fail on an untracked
-  // `agents-*.json`.)
-  let repoDir: string;
+  // throws unconditionally under `threads`, which this repo does not use.)
+  //
+  // `stateDir` is a SEPARATE sibling directory for this test's own
+  // bookkeeping (the AgentRegistry index files), kept out of the workspace
+  // so the workspace's contents stay exactly what the assertions expect.
+  let baseDir: string;
+  let workspaceDir: string;
   let stateDir: string;
   let originalCwd: string;
   const createdAgentNames: string[] = [];
 
   beforeAll(() => {
     originalCwd = process.cwd();
-    const base = mkdtempSync(join(tmpdir(), "rhumb-live-"));
-    repoDir = join(base, "repo");
-    stateDir = join(base, "state");
-    mkdirSync(repoDir);
+    baseDir = mkdtempSync(join(tmpdir(), "rhumb-live-"));
+    workspaceDir = join(baseDir, "workspace");
+    stateDir = join(baseDir, "state");
+    mkdirSync(workspaceDir);
     mkdirSync(stateDir);
-    execFileSync("git", ["init", "-q"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.email", "rhumb-live-test@example.com"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.name", "rhumb-live-test"], { cwd: repoDir });
-    writeFileSync(join(repoDir, "README.md"), "Disposable workspace for agent-host's live mngr integration test.\n");
-    // Phase 0: `mngr create` refuses to run when a path is ignored ONLY by
-    // the user's global gitignore (it warns remote provisioning would
-    // fail). `.claude/` must be ignored by the REPO's own .gitignore.
-    writeFileSync(join(repoDir, ".gitignore"), ".claude/\n");
-    execFileSync("git", ["add", "-A"], { cwd: repoDir });
-    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir });
-    process.chdir(repoDir);
+    // A marker the spawned agent can only see if it is genuinely running
+    // IN the workspace rather than in a copy or a worktree of some repo.
+    writeFileSync(
+      join(workspaceDir, "rhumb-workspace-marker.txt"),
+      "Disposable workspace for agent-host's live mngr integration test.\n",
+    );
+    process.chdir(baseDir);
   });
 
   afterAll(() => {
     for (const name of createdAgentNames.reverse()) destroyMngrAgent(name);
     process.chdir(originalCwd);
-    rmSync(repoDir, { recursive: true, force: true });
-    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(baseDir, { recursive: true, force: true });
   });
 
   function makeRegistry(indexFile: string): AgentRegistry {
@@ -194,7 +208,7 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
       exec: createRealExec(),
       registry,
       credentialEnv,
-      spec: { model: "claude-opus-4-8", workspace: repoDir, permissionMode: "acceptEdits", extraOptions: {} },
+      spec: { model: "claude-opus-4-8", workspace: workspaceDir, permissionMode: "acceptEdits", extraOptions: {} },
       extraBlankedVars,
     });
   }
@@ -212,7 +226,7 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
       resolveAgentId: createMngrAgentIdResolver(registry, { inFlight }),
       releaseAgentId: (agentId) => inFlight.delete(agentId),
       model: "claude-opus-4-8",
-      workspace: repoDir,
+      workspace: workspaceDir,
       permissionMode: "acceptEdits",
       extraOptions: {},
     });
@@ -250,6 +264,25 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
       const last = events.at(-1);
       expect(last?.type === "result" || last?.type === "error").toBe(true);
 
+      // C1: `mngr message` returns on SUBMISSION, not completion, so before
+      // the fix the turn completed with `mngr message`'s own stdout — a
+      // banner or an empty string — reported as the assistant's answer with
+      // isError: false. Whatever this turn produced, it must not be that:
+      // a `result` here can only come from a real NEW assistant_message the
+      // poll found in the transcript. With the fixture credential that
+      // reply is the CLI's own auth complaint, which is still a genuine
+      // assistant message; a `result` must therefore be non-empty, must not
+      // echo the operator's prompt, and must not be mngr's chatter.
+      if (last?.type === "result") {
+        const result = (last as { result: string }).result;
+        expect(result.trim().length).toBeGreaterThan(0);
+        expect(result).not.toBe("Reply with exactly the word: pong");
+        expect(result).not.toMatch(/Docker provider|Creating agent state|Starting agent/);
+      } else {
+        // The only honest alternative: delivered but not yet answered.
+        expect((last as { message: string }).message).toMatch(/not yet answered|mngr:/);
+      }
+
       const records = registry.list();
       expect(records).toHaveLength(1);
       const record = records[0];
@@ -266,6 +299,28 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
       const match = liveAgents.find((a) => a.id === nativeId);
       expect(match, `expected mngr list to contain agent ${nativeId}`).toBeDefined();
       expect((match?.labels as Record<string, unknown> | undefined)?.rhumb_agent_id).toBe(boundAgentId);
+
+      // C2, live: the agent runs IN `AgentSpec.workspace`, not in a
+      // worktree of whatever repo the host process's cwd resolved to. mngr
+      // reports the directory it actually gave the agent as `work_dir`.
+      // realpath both sides: macOS tmpdir is /var/... symlinked to
+      // /private/var/..., and mngr reports the resolved form.
+      expect(realpathSync(String(match?.work_dir))).toBe(realpathSync(workspaceDir));
+      // ...and no git branch was cut for it. Pre-C2 every principal left a
+      // permanent `mngr/<name>` branch AND worktree inside the operator's
+      // Rhumb checkout, since nothing in src/ ever calls stop() or
+      // `mngr destroy -b`.
+      expect(match?.initial_branch ?? null).toBeNull();
+
+      // The strongest form of the same claim, taken to the OS: the live
+      // `claude` process's own MNGR_AGENT_WORK_DIR, and a file that only
+      // exists because the agent is running in the real workspace rather
+      // than a copy of it.
+      const pid = await waitForClaudePid(nativeId);
+      expect(realpathSync(String(getEnvVarFromPid(pid, "MNGR_AGENT_WORK_DIR")))).toBe(
+        realpathSync(workspaceDir),
+      );
+      expect(existsSync(join(workspaceDir, "rhumb-workspace-marker.txt"))).toBe(true);
     },
   );
 
@@ -403,7 +458,7 @@ describe.skipIf(!available)("mngr backend (live, localhost)", () => {
         // that this assertion doesn't need.)
         const ref = await decoyBackend.ensure(rec.agentId, {
           model: "m",
-          workspace: repoDir,
+          workspace: workspaceDir,
           permissionMode: "acceptEdits",
           extraOptions: {},
         });
