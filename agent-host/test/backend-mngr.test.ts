@@ -408,6 +408,61 @@ describe("mngr backend", () => {
     expect(calls.some((c) => c.includes("create"))).toBe(true);
   });
 
+  it("send() with nativeId: null re-creates a dead bound agent instead of erroring (fix round 4, B1)", async () => {
+    // The test above proves ensureAgent's respawn logic is correct in
+    // isolation. This one proves the ACTUAL entry point production code
+    // uses — send(), not ensure() — actually reaches that logic. Before
+    // fix round 4, SessionManager's mngr resolver could hand back a
+    // non-null nativeId for a bound principal (round 3, A1's own fix), and
+    // send() only calls ensureAgent when nativeId is falsy — so a bound
+    // principal whose mngr agent died (box reboot, tmux kill) would skip
+    // ensureAgent entirely and error against a dead id instead of
+    // respawning. The resolver now always hands back nativeId: null (see
+    // createMngrAgentIdResolver's doc comment in index.ts), which is what
+    // this test simulates by calling send() with nativeId: null directly
+    // even though the registry already has a (now-dead) bound nativeId.
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-dead");
+    let created = false;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        if (argv[0] === "list") {
+          const agents = created
+            ? [{ id: "agent-reborn", labels: { rhumb_agent_id: rec.agentId } }]
+            : [{ id: "agent-someone-else" }];
+          return { code: 0, stdout: JSON.stringify({ agents }), stderr: "" };
+        }
+        if (argv[0] === "create") {
+          created = true;
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        if (argv[0] === "transcript") return { code: 0, stdout: "", stderr: "" };
+        if (argv[0] === "message") return { code: 0, stdout: "ok", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    const events: AgentEvent[] = [];
+    const out = await backend.send(
+      { agentId: rec.agentId, nativeId: null, backend: "mngr" },
+      "hello",
+      (e) => events.push(e),
+    );
+
+    expect(out.nativeId).toBe("agent-reborn");
+    expect(registry.get(rec.agentId)?.nativeId).toBe("agent-reborn");
+    expect(calls.some((c) => c.includes("create"))).toBe(true);
+    expect(events.some((e) => e.type === "session" && e.sessionId === "agent-reborn")).toBe(true);
+    const last = events.at(-1);
+    expect(last?.type).toBe("result");
+  });
+
   it("keeps the existing agent when liveness cannot be determined", async () => {
     const calls: string[][] = [];
     const registry = makeRegistry();

@@ -173,6 +173,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   // agents as principals.
   let backend: AgentBackend | undefined;
   let resolveAgentId: ((sessionId: string | undefined) => ResolvedAgentIdentity) | undefined;
+  let releaseAgentId: ((agentId: string) => void) | undefined;
   if (deps.config.agentBackend === "mngr") {
     // Fails at boot on the CLI/bash prerequisites (assertMngrPrerequisites,
     // exec.ts) per commits 462acd6 / fb30c3d (validate eagerly, fail
@@ -216,13 +217,31 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // C1: without this, every mngr turn arrives with agentId "" (no
     // principal is ever minted) and fails VALID_MNGR_NAME on every single
     // message. See createMngrAgentIdResolver's doc comment.
-    resolveAgentId = createMngrAgentIdResolver(registry);
+    //
+    // In-memory, process-local record of which principals are currently
+    // mid-turn (fix round 4, B2). Lives here — not in the registry, which
+    // is on-disk and shared, and not in the resolver itself, which is a
+    // pure function recreated fresh on every call — because "in flight" is
+    // inherently transient, request-scoped state: it must reset if the
+    // process restarts (a principal cannot still be "in flight" from a
+    // turn that died with the old process), and it must be visible to
+    // BOTH the resolver (to exclude an in-flight principal from
+    // reuse-before-mint) and the release callback (to clear it once the
+    // turn completes) — a plain closed-over Set is the minimal thing that
+    // satisfies both without threading it through the registry's on-disk
+    // schema.
+    const inFlightMngrAgentIds = new Set<string>();
+    resolveAgentId = createMngrAgentIdResolver(registry, { inFlight: inFlightMngrAgentIds });
+    releaseAgentId = (agentId) => {
+      inFlightMngrAgentIds.delete(agentId);
+    };
   }
 
   const manager = new SessionManager({
     query: deps.query,
     backend,
     resolveAgentId,
+    releaseAgentId,
     model: deps.config.provider.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
@@ -286,91 +305,115 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   return app;
 }
 
-/** Mints or resolves the durable Rhumb principal a backend with a real
- *  lifecycle (mngr) needs, AND the `nativeId` to trust for it — see the doc
- *  comment on `SessionManager`'s `resolveAgentId` option (sessionManager.ts)
- *  for why `nativeId` must be derived here, from the registry, rather than
- *  echoed from the wire (fix round 3, A1). `SessionManager` never imports
- *  `AgentRegistry` itself; this closure is how `buildApp` supplies the
- *  behaviour without that import.
+/** Resolves the durable Rhumb principal a backend with a real lifecycle
+ *  (mngr) needs. `SessionManager` never imports `AgentRegistry` itself;
+ *  this closure is how `buildApp` supplies the behaviour without that
+ *  import.
  *
  *  Exported (not just used inline) so `test/index-agentid.test.ts` can drive
  *  it directly against a real, tmp-dir-backed `AgentRegistry` — no mngr, no
  *  network, no SessionManager or backend involved.
  *
- *  Three cases, in order:
- *   1. An incoming `sessionId` already bound as some principal's
- *      `nativeId` — i.e. the mngr agent id the CLIENT was handed as
- *      `sessionId` on a PREVIOUS turn, via the backend's `session` event:
- *      resolves back to that SAME `agentId`. `nativeId` is the record's own
- *      `nativeId` field — EXCEPT when the record's `status` is `"stopped"`,
- *      where this returns `nativeId: null` instead of echoing the stale
- *      bound value. `registry.markStopped` does not clear `nativeId`, and
- *      mngr.ts's `send()` only calls `ensureAgent` — the ONLY place that
- *      actually refuses a stopped principal — when `nativeId` is falsy;
- *      forcing `null` here is what keeps that refusal reachable for a
- *      principal that was bound and only stopped afterward (fix round 3,
- *      A1: the stopped-principal-can-still-be-messaged consequence).
- *   2. An incoming `sessionId` that is itself already a known `agentId`
- *      (defensive — no current caller takes this path, but it's cheap to
- *      honour): resolves the SAME way as case 1 (record's own `nativeId`,
- *      `null` if stopped) — NOT by echoing `sessionId` itself back as
- *      `nativeId` (fix round 3, Minor 2: an earlier version did exactly
- *      that, producing a `nativeId` mngr never had — a guaranteed failure
- *      on a path where minting or ensuring would have worked instead).
- *   3. No incoming `sessionId`, or one that matches neither a bound
- *      `nativeId` nor a known `agentId` (a stale or foreign id — e.g. one
- *      that was never bound at all, or belongs to a different Rhumb
- *      deployment entirely): resolve to a principal with `nativeId: null`,
- *      which routes the turn through `ensureAgent` rather than trusting an
- *      unverified id directly (fix round 3, A1: this is what stops an
- *      arbitrary client-supplied `sessionId` from being run as `mngr
- *      message <that id>` against whatever agent happens to own it on the
- *      box, including one that never went through this backend's `--env`
- *      credential scrub at all).
+ *  **`nativeId` is ALWAYS `null` (fix round 4, B1).** Earlier drafts tried
+ *  to derive `nativeId` from the registry record (round 3, A1) so an
+ *  unverified wire value could never be trusted directly. That fixed the
+ *  ownership bypass, but it left one consequence unfixed: `mngr.ts`'s
+ *  `send()` only calls `ensureAgent` — which is where the ACTUAL liveness
+ *  check, dead-agent respawn, and stopped-principal refusal all live —
+ *  when `nativeId` is falsy. Handing back a non-null `nativeId` for a
+ *  bound principal, even one correctly read from the registry, still
+ *  pre-empted `ensureAgent` on every turn after the first, so a principal
+ *  that died after being bound (box reboot, tmux kill) would error instead
+ *  of respawning, and a principal stopped after being bound could still be
+ *  messaged. `ensureAgent` already handles a bound principal correctly —
+ *  `liveIds()` → return the existing `nativeId` if live → else
+ *  resolve-by-label → re-create (mngr.ts) — it was simply never reached.
+ *  The resolver does not need to perform a liveness check itself; it only
+ *  needs to stop pre-empting the one that already exists, by always
+ *  routing the turn back through `ensureAgent`. The cost is one extra
+ *  `mngr list` exec per turn, which is acceptable. The per-record
+ *  `nativeId`/`status` lookup this function used to do for that purpose is
+ *  gone — it would be dead logic now that the return value never depends
+ *  on it.
  *
- *      Before minting a NEW principal for this case, reuse the newest
- *      still-ACTIVE, still-UNBOUND (`nativeId === null`) mngr principal
- *      instead, if one exists (fix round 3, A2). Without this, every retry
- *      after a turn that failed before a `session` event ever fired
- *      (`create-failed`, `create-unconfirmed`, `create-not-found`,
- *      `invalid-name`, `stopped`, `bound-elsewhere` — see
- *      `ensureFailureMessage` in mngr.ts) mints ANOTHER principal, since
- *      none of those failure reasons ever reach the client as a `sessionId`
- *      to resolve back to. The worst case is `create-unconfirmed`, where
- *      `mngr create` genuinely SUCCEEDED but the immediately-following
- *      label lookup was merely unknowable: each blind retry would create
- *      ANOTHER real mngr agent, branch, and tmux window, while mngr.ts's
- *      own resolve-before-create recovery (`resolveNativeIdByLabel`,
- *      checked first thing inside `ensureAgent`) can never fire, because no
- *      later turn ever carries that first attempt's `agentId` to look up.
- *      Reusing the newest unbound principal instead makes every retry
- *      converge on the SAME `agentId`, which is exactly what lets that
- *      resolve-before-create step adopt whatever `mngr create` actually did
- *      on a later call, instead of spawning a duplicate. */
+ *  Two cases decide `agentId` (the wire-echo/ownership-bypass fix from
+ *  round 3, A1, still applies to agentId — an unrecognised or foreign
+ *  `sessionId` still never becomes a nativeId, it just also can't become
+ *  one now that nativeId is unconditionally null):
+ *   1. An incoming `sessionId` already bound as some principal's
+ *      `nativeId` (the mngr agent id the CLIENT was handed on a PREVIOUS
+ *      turn's `session` event), OR one that is itself already a known
+ *      `agentId` (defensive; fix round 3, Minor 2): resolves to that SAME
+ *      `agentId`.
+ *   2. No incoming `sessionId`, or one that matches neither (a stale or
+ *      foreign id): resolves via `resolveOrMintAgentId` below — reuse the
+ *      newest still-ACTIVE, still-UNBOUND, NOT-currently-in-flight mngr
+ *      principal (fix round 3, A2), or mint a new one.
+ *
+ *  **In-flight tracking (fix round 4, B2).** Every `agentId` this function
+ *  hands back — in EITHER case above — is added to `inFlight` before
+ *  returning, and `buildApp` wires a matching `releaseAgentId` callback
+ *  (see there) that removes it once the turn completes. This is what keeps
+ *  A2's reuse-before-mint from colliding two concurrent NEW conversations
+ *  onto one principal: both arrive as `sessionId: undefined`, and the
+ *  window during which a freshly-minted principal stays unbound is not
+ *  tight — it spans a real `mngr create` (tens of seconds per Phase 0). Two
+ *  such turns overlapping would otherwise both resolve to the SAME unbound
+ *  principal, both call `ensureAgent` for it, and land both prompts (and
+ *  both replies) in ONE transcript — exactly the 1:1 agentId<->nativeId
+ *  binding `bindIfUnclaimed` in mngr.ts exists to protect, reopened through
+ *  the reuse path A2 introduced. Marking a principal in-flight the moment
+ *  it is handed out, and excluding in-flight principals from the reuse
+ *  candidate pool, means a second concurrent turn mints its own instead. */
 export function createMngrAgentIdResolver(
   registry: AgentRegistry,
-  mintDisplayName: () => string = () => `rhumb-${randomUUID().slice(0, 8)}`,
+  opts?: {
+    /** Defaults to a fresh, always-valid-for-VALID_MNGR_NAME name. Injected
+     *  in tests that need a deterministic or distinguishable name. */
+    mintDisplayName?: () => string;
+    /** Process-local record of principals currently mid-turn — see the
+     *  B2 section of this function's doc comment. Defaults to a private
+     *  `Set` when omitted (each call to `createMngrAgentIdResolver` then
+     *  tracks its own in-flight state), but `buildApp` always supplies one
+     *  it shares with a `releaseAgentId` callback, since in-flight tracking
+     *  is only meaningful when hand-out and release share the same Set. */
+    inFlight?: Set<string>;
+  },
 ): (sessionId: string | undefined) => { agentId: string; nativeId: string | null } {
-  const nativeIdFor = (record: { nativeId: string | null; status: string }): string | null =>
-    record.status === "stopped" ? null : record.nativeId;
+  const mintDisplayName = opts?.mintDisplayName ?? (() => `rhumb-${randomUUID().slice(0, 8)}`);
+  const inFlight = opts?.inFlight ?? new Set<string>();
 
-  return (sessionId) => {
-    if (sessionId) {
-      const bound = registry.list().find((r) => r.nativeId === sessionId);
-      if (bound) return { agentId: bound.agentId, nativeId: nativeIdFor(bound) };
-      const direct = registry.get(sessionId);
-      if (direct) return { agentId: direct.agentId, nativeId: nativeIdFor(direct) };
-    }
-
-    // A2: reuse the newest still-unbound principal before minting a new one.
+  // A2 (reuse before mint) + B2 (never reuse an in-flight principal).
+  const resolveOrMintAgentId = (): string => {
     const unbound = registry
       .list()
-      .filter((r) => r.backend === "mngr" && r.status === "active" && r.nativeId === null)
-      .sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1))[0];
-    if (unbound) return { agentId: unbound.agentId, nativeId: null };
+      .filter(
+        (r) => r.backend === "mngr" && r.status === "active" && r.nativeId === null && !inFlight.has(r.agentId),
+      )
+      // Newest first. Must return 0 on a tie — a comparator that only ever
+      // returns -1/1 is non-conforming (fix round 4, Minor: the previous
+      // version did exactly that).
+      .sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0))[0];
+    return unbound ? unbound.agentId : registry.create(mintDisplayName(), "mngr").agentId;
+  };
 
-    return { agentId: registry.create(mintDisplayName(), "mngr").agentId, nativeId: null };
+  return (sessionId) => {
+    let agentId: string;
+    if (sessionId) {
+      const bound = registry.list().find((r) => r.nativeId === sessionId);
+      if (bound) {
+        agentId = bound.agentId;
+      } else {
+        const direct = registry.get(sessionId);
+        agentId = direct ? direct.agentId : resolveOrMintAgentId();
+      }
+    } else {
+      agentId = resolveOrMintAgentId();
+    }
+    // B2: mark this principal in-flight for the whole turn, regardless of
+    // which case produced it — see the doc comment above.
+    inFlight.add(agentId);
+    return { agentId, nativeId: null };
   };
 }
 

@@ -20,6 +20,7 @@ export interface ResolvedAgentIdentity {
 export class SessionManager {
   private readonly backend: AgentBackend;
   private readonly resolveAgentId?: (sessionId: string | undefined) => ResolvedAgentIdentity;
+  private readonly releaseAgentId?: (agentId: string) => void;
 
   constructor(opts: {
     query?: QueryFn;
@@ -66,6 +67,23 @@ export class SessionManager {
      *  injects it here; `SessionManager` deliberately never imports the
      *  registry module itself, so it stays backend- and registry-agnostic. */
     resolveAgentId?: (sessionId: string | undefined) => ResolvedAgentIdentity;
+    /** Called once `backend.send(...)` settles — success OR throw — with
+     *  the `agentId` this turn resolved to. Paired with `resolveAgentId`:
+     *  index.ts's mngr resolver marks a principal "in flight" the moment it
+     *  hands it out, so a concurrent turn cannot reuse it via
+     *  reuse-before-mint (fix round 3, A2) and collide two conversations
+     *  onto one agent/transcript (fix round 4, B2). This is how that
+     *  in-flight mark gets cleared. Called from a `finally`, specifically
+     *  so a thrown `send()` still releases the principal — an unreleased
+     *  principal after a crashed turn would otherwise stay permanently
+     *  ineligible for reuse, silently growing `agents.json` on every
+     *  crash, which is the same class of leak A2 fixed for ordinary
+     *  failures.
+     *
+     *  Omitted for the SDK path (and whenever `resolveAgentId` is also
+     *  omitted), and behaviour there is exactly as before this option
+     *  existed: nothing is called, nothing tracked. */
+    releaseAgentId?: (agentId: string) => void;
   }) {
     if (opts.backend) {
       this.backend = opts.backend;
@@ -82,6 +100,7 @@ export class SessionManager {
       });
     }
     this.resolveAgentId = opts.resolveAgentId;
+    this.releaseAgentId = opts.releaseAgentId;
   }
 
   async run(
@@ -105,7 +124,14 @@ export class SessionManager {
       nativeId: resolved.nativeId,
       backend: this.backend.id,
     };
-    const out = await this.backend.send(ref, prompt, onEvent);
-    return out.nativeId ?? "";
+    try {
+      const out = await this.backend.send(ref, prompt, onEvent);
+      return out.nativeId ?? "";
+    } finally {
+      // Runs on the success path too, not just on throw: a principal must
+      // stop being "in flight" the moment ITS turn is done, regardless of
+      // outcome — see the releaseAgentId doc comment above (fix round 4, B2).
+      this.releaseAgentId?.(resolved.agentId);
+    }
   }
 }
