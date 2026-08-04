@@ -9,6 +9,7 @@ export type QueryFn = (args: {
 
 export class SessionManager {
   private readonly backend: AgentBackend;
+  private readonly resolveAgentId?: (sessionId: string | undefined) => string;
 
   constructor(opts: {
     query?: QueryFn;
@@ -18,6 +19,24 @@ export class SessionManager {
     workspace: string;
     permissionMode?: string;
     extraOptions?: Record<string, unknown>;
+    /** Resolves an incoming wire `sessionId` (which may be `undefined`, on
+     *  a brand-new turn) into the durable Rhumb `agentId` a backend needs.
+     *
+     *  Omitted for the SDK backend, and behaviour there is byte-identical
+     *  to before this existed: `agentId` falls back to `sessionId ?? ""`,
+     *  the SDK's own session_id doubling as both the Rhumb principal and
+     *  the backend handle, with no registry involved and no principal ever
+     *  minted (see the SDK-path comment in `run`).
+     *
+     *  Backends with a real principal lifecycle (mngr) need one, since
+     *  their `agentId` and native handle are genuinely different values —
+     *  without this, every mngr turn arrives with `agentId: ""`, which
+     *  fails `VALID_MNGR_NAME` and no principal is ever created (fix
+     *  round 1, C1). `index.ts` builds this closure over its own
+     *  `AgentRegistry` and injects it here; `SessionManager` deliberately
+     *  never imports the registry module itself, so it stays backend- and
+     *  registry-agnostic. */
+    resolveAgentId?: (sessionId: string | undefined) => string;
   }) {
     if (opts.backend) {
       this.backend = opts.backend;
@@ -33,6 +52,7 @@ export class SessionManager {
         },
       });
     }
+    this.resolveAgentId = opts.resolveAgentId;
   }
 
   async run(
@@ -40,10 +60,14 @@ export class SessionManager {
     sessionId: string | undefined,
     onEvent: (e: AgentEvent) => void,
   ): Promise<string> {
-    // Slice 1 keeps the wire protocol: the caller's sessionId is both the
-    // Rhumb principal and the backend handle for the SDK path.
+    // Slice 1 keeps the wire protocol: for the SDK path (no resolver
+    // injected) the caller's sessionId is both the Rhumb principal and the
+    // backend handle, exactly as before `resolveAgentId` existed. A backend
+    // that needs a distinct durable principal (mngr) supplies a resolver
+    // that mints or looks one up instead.
+    const agentId = this.resolveAgentId ? this.resolveAgentId(sessionId) : (sessionId ?? "");
     const ref: AgentRef = {
-      agentId: sessionId ?? "",
+      agentId,
       nativeId: sessionId ?? null,
       backend: this.backend.id,
     };

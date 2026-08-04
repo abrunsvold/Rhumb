@@ -623,6 +623,175 @@ describe("mngr backend", () => {
     expect(envFlagCount).toBe(PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length + 1);
   });
 
+  it("create carries model/permission-mode/allowedTools/disallowedTools/append-system-prompt after -- (I7a)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const spec = {
+      model: "claude-opus-4-8",
+      workspace: "/ws",
+      permissionMode: "acceptEdits",
+      extraOptions: {
+        allowedTools: ["Read", "mcp__ontology__query"],
+        disallowedTools: ["AskUserQuestion"],
+        systemPrompt: { type: "preset", preset: "claude_code", append: "operator approval required" },
+      },
+    };
+    const backend = createMngrBackend({
+      exec: recordingExec(calls),
+      registry,
+      credentialEnv: {},
+      spec,
+    });
+
+    await backend.ensure(rec.agentId, spec);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const sepIndex = createArgv.indexOf("--");
+    expect(sepIndex).toBeGreaterThan(-1);
+    // Every credential --env flag stays BEFORE the separator, untouched.
+    expect(createArgv.slice(0, sepIndex).filter((a) => a === "--env")).toHaveLength(
+      PROVIDER_CREDENTIAL_VARS.length + STRIPPED_ENV_VARS.length,
+    );
+    const agentArgs = createArgv.slice(sepIndex + 1);
+    expect(agentArgs).toEqual([
+      "--model",
+      "claude-opus-4-8",
+      "--permission-mode",
+      "acceptEdits",
+      "--allowedTools",
+      "Read,mcp__ontology__query",
+      "--disallowedTools",
+      "AskUserQuestion",
+      "--append-system-prompt",
+      "operator approval required",
+    ]);
+  });
+
+  it("create omits --allowedTools/--disallowedTools/--append-system-prompt when extraOptions doesn't carry them (I7a)", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const spec = { model: "m", workspace: "/ws", permissionMode: "plan", extraOptions: {} };
+    const backend = createMngrBackend({ exec: recordingExec(calls), registry, credentialEnv: {}, spec });
+
+    await backend.ensure(rec.agentId, spec);
+
+    const createArgv = calls.find((c) => c[0] === "create");
+    if (!createArgv) throw new Error("expected a create call");
+    const agentArgs = createArgv.slice(createArgv.indexOf("--") + 1);
+    expect(agentArgs).toEqual(["--model", "m", "--permission-mode", "plan"]);
+  });
+
+  it("refuses to construct when spec.extraOptions.mcpServers is non-empty, naming the server (I7b)", () => {
+    const registry = makeRegistry();
+    expect(() =>
+      createMngrBackend({
+        exec: recordingExec([]),
+        registry,
+        credentialEnv: {},
+        spec: {
+          model: "m",
+          workspace: "/ws",
+          permissionMode: "acceptEdits",
+          extraOptions: { mcpServers: { ontology: {} } },
+        },
+      }),
+    ).toThrow(/mcp/i);
+    try {
+      createMngrBackend({
+        exec: recordingExec([]),
+        registry,
+        credentialEnv: {},
+        spec: {
+          model: "m",
+          workspace: "/ws",
+          permissionMode: "acceptEdits",
+          extraOptions: { mcpServers: { ontology: {} } },
+        },
+      });
+      throw new Error("expected construction to throw");
+    } catch (e) {
+      expect((e as Error).message).toContain("ontology");
+    }
+  });
+
+  it("refuses to construct when spec.extraOptions.canUseTool is present (I7b)", () => {
+    const registry = makeRegistry();
+    expect(() =>
+      createMngrBackend({
+        exec: recordingExec([]),
+        registry,
+        credentialEnv: {},
+        spec: {
+          model: "m",
+          workspace: "/ws",
+          permissionMode: "acceptEdits",
+          extraOptions: { canUseTool: async () => ({ behavior: "allow" }) },
+        },
+      }),
+    ).toThrow(/canUseTool|approval/i);
+  });
+
+  it("does not refuse construction when mcpServers is present but empty (I7b)", () => {
+    const registry = makeRegistry();
+    expect(() =>
+      createMngrBackend({
+        exec: recordingExec([]),
+        registry,
+        credentialEnv: {},
+        spec: { model: "m", workspace: "/ws", permissionMode: "acceptEdits", extraOptions: { mcpServers: {} } },
+      }),
+    ).not.toThrow();
+  });
+
+  it("create never passes credentialEnv via exec's opts.env (I1)", async () => {
+    const seenOpts: Array<{ env?: Record<string, string> } | undefined> = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    const backend = createMngrBackend({
+      exec: async (argv, opts) => {
+        seenOpts.push(opts);
+        if (argv[0] === "create") return { code: 0, stdout: "", stderr: "" };
+        if (argv[0] === "list") {
+          return { code: 0, stdout: JSON.stringify({ agents: [{ id: "agent-x", labels: { rhumb_agent_id: rec.agentId } }] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: { ANTHROPIC_API_KEY: "sk-should-not-leak-into-process-env" },
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+
+    expect(seenOpts.length).toBeGreaterThan(0);
+    for (const opts of seenOpts) expect(opts).toBeUndefined();
+  });
+
+  it("send never passes credentialEnv via exec's opts.env (I1)", async () => {
+    const seenOpts: Array<{ env?: Record<string, string> } | undefined> = [];
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+    const backend = createMngrBackend({
+      exec: async (argv, opts) => {
+        seenOpts.push(opts);
+        if (argv[0] === "transcript") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+      registry,
+      credentialEnv: { ANTHROPIC_API_KEY: "sk-should-not-leak-into-process-env" },
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hi", () => {});
+
+    expect(seenOpts.length).toBeGreaterThan(0);
+    for (const opts of seenOpts) expect(opts).toBeUndefined();
+  });
+
   it("refuses to create with a flag-shaped agent name (I6)", async () => {
     const calls: string[][] = [];
     const registry = makeRegistry();

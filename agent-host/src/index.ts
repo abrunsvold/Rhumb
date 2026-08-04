@@ -12,7 +12,7 @@ import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
 import { PROVIDER_CREDENTIAL_VARS } from "./provider.js";
-import { createAgentRegistry } from "./agents.js";
+import { createAgentRegistry, type AgentRegistry } from "./agents.js";
 import { createMngrBackend } from "./backends/mngr.js";
 import { createRealExec, assertMngrPrerequisites } from "./backends/exec.js";
 import type { AgentBackend } from "./backends/types.js";
@@ -172,7 +172,17 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   // whose tool policy is the point, and slice 1 does not model unattended
   // agents as principals.
   let backend: AgentBackend | undefined;
+  let resolveAgentId: ((sessionId: string | undefined) => string) | undefined;
   if (deps.config.agentBackend === "mngr") {
+    // Fails at boot on two independent grounds, both eager per commits
+    // 462acd6 / fb30c3d: the CLI/bash prerequisites (assertMngrPrerequisites,
+    // exec.ts) and — inside createMngrBackend — whatever of sessionExtraOptions
+    // cannot cross the mngr CLI boundary (assertCarryableSpec, mngr.ts, I7).
+    // As wired today sessionExtraOptions.mcpServers always carries at least
+    // the ontology server (set unconditionally above, not only when infra is
+    // configured), so RHUMB_AGENT_BACKEND=mngr refuses to boot on every box
+    // until a bridge for in-process MCP servers exists — intended, not a bug
+    // in this change: an ungated agent is worse than an unavailable one.
     assertMngrPrerequisites();
     const registry = createAgentRegistry({
       indexPath: joinPath(deps.config.workspace, "agents.json"),
@@ -191,16 +201,23 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       },
       // sanitizedEnv (env.ts) strips every ambient RHUMB_* var for the SDK
       // path via a dynamic wildcard scan; mngr.ts can only blank a fixed
-      // list, so the wildcard is computed here, where the real ambient
-      // environment is available, and threaded through as the additive
-      // extraBlankedVars dep (see mngr.ts's credentialEnvFlags doc comment).
+      // list, so the wildcard is computed here — over THIS process's own
+      // process.env, not the mngr tmux server's, which can differ (I2,
+      // deferred; see mngr.ts's credentialEnvFlags doc comment for the
+      // asymmetry and the tmux kill-server operator requirement it
+      // implies) — and threaded through as the additive extraBlankedVars dep.
       extraBlankedVars: Object.keys(process.env).filter((k) => k.startsWith("RHUMB_")),
     });
+    // C1: without this, every mngr turn arrives with agentId "" (no
+    // principal is ever minted) and fails VALID_MNGR_NAME on every single
+    // message. See createMngrAgentIdResolver's doc comment.
+    resolveAgentId = createMngrAgentIdResolver(registry);
   }
 
   const manager = new SessionManager({
     query: deps.query,
     backend,
+    resolveAgentId,
     model: deps.config.provider.model,
     workspace: deps.config.workspace,
     permissionMode: deps.config.permissionMode,
@@ -262,6 +279,52 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   }
 
   return app;
+}
+
+/** Mints or resolves the durable Rhumb `agentId` a backend with a real
+ *  principal lifecycle (mngr) needs — see the doc comment on
+ *  `SessionManager`'s `resolveAgentId` option (sessionManager.ts) for why
+ *  this exists at all (fix round 1, C1: without it, every mngr turn arrives
+ *  with `agentId: ""`, fails `VALID_MNGR_NAME`, and no principal is ever
+ *  created). `SessionManager` never imports `AgentRegistry` itself; this
+ *  closure is how `buildApp` supplies the behaviour without that import.
+ *
+ *  Exported (not just used inline) so `test/index-agentid.test.ts` can drive
+ *  it directly against a real, tmp-dir-backed `AgentRegistry` — no mngr, no
+ *  network, no SessionManager or backend involved.
+ *
+ *  Three cases, in order:
+ *   1. No incoming `sessionId` (a brand-new turn): mint a fresh principal
+ *      via `registry.create` and return its `agentId`. The generated
+ *      display `name` is deliberately NOT the registry's own
+ *      `rhumb-<uuid>` `agentId` — it only has to satisfy mngr.ts's
+ *      `VALID_MNGR_NAME`, since it becomes the literal `mngr create <name>`
+ *      argument, while the label mngr.ts stamps every agent with is keyed
+ *      on `agentId` (see RHUMB_AGENT_ID_LABEL there).
+ *   2. An incoming `sessionId` already bound as some principal's
+ *      `nativeId` — i.e. the mngr agent id the CLIENT was handed as
+ *      `sessionId` on a PREVIOUS turn, via the backend's `session` event:
+ *      resolves back to that SAME `agentId`, so `ensureAgent` adopts the
+ *      existing mngr agent instead of minting a second principal for what
+ *      is really a continuing conversation.
+ *   3. An incoming `sessionId` that is itself already a known `agentId`
+ *      (defensive — no current caller takes this path, but it's cheap to
+ *      honour): passed through unchanged.
+ *  Anything else (a stale or foreign id) is treated the same as case 1 —
+ *  mints a fresh principal rather than erroring, since a turn must always
+ *  be able to proceed. */
+export function createMngrAgentIdResolver(
+  registry: AgentRegistry,
+  mintDisplayName: () => string = () => `rhumb-${randomUUID().slice(0, 8)}`,
+): (sessionId: string | undefined) => string {
+  return (sessionId) => {
+    if (sessionId) {
+      const bound = registry.list().find((r) => r.nativeId === sessionId);
+      if (bound) return bound.agentId;
+      if (registry.get(sessionId)) return sessionId;
+    }
+    return registry.create(mintDisplayName(), "mngr").agentId;
+  };
 }
 
 // Wrap the SDK's query so it matches our narrowed QueryFn signature. The env we

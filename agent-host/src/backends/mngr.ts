@@ -10,22 +10,33 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** Invokes the mngr CLI. `opts.env`, when provided, is the credential
- *  overlay this backend wants layered onto the child process's environment —
- *  it is NOT a complete environment. A real implementation (Task 5) MUST
- *  MERGE `opts.env` over its own base environment (at minimum inheriting
- *  `PATH`/`HOME`, since `mngr` itself shells out to `git`/`tmux`/`jq` and
- *  needs to find them and the user's config); it must never REPLACE the
- *  child's environment with `opts.env` alone, or `mngr` cannot run at all.
+/** Invokes the mngr CLI. `opts.env`, when provided, is meant as a credential
+ *  overlay layered onto the child process's environment — it is NOT a
+ *  complete environment. A real implementation MUST MERGE `opts.env` over
+ *  its own base environment (at minimum inheriting `PATH`/`HOME`, since
+ *  `mngr` itself shells out to `git`/`tmux`/`jq` and needs to find them and
+ *  the user's config); it must never REPLACE the child's environment with
+ *  `opts.env` alone, or `mngr` cannot run at all. `createRealExec` (exec.ts)
+ *  implements this merge.
  *
- *  Note that the credential guarantee this backend provides does NOT depend
- *  on `opts.env` — it comes from the explicit `--env` flags baked into
- *  argvCreate's argv (see credentialEnvFlags), which override whatever the
- *  mngr tmux server was started with regardless of how `opts.env` is
- *  implemented (docs/dogfood/2026-08-03-mngr-phase0.md, Q2). `opts.env` is
- *  passed through here only so a future exec implementation has the
- *  selected credentials on hand if the `mngr` process itself needs them
- *  (e.g. to reach a remote host) — it is not a security boundary. */
+ *  This module (mngr.ts) itself no longer PASSES `credentialEnv` via
+ *  `opts.env` at any call site (fix round 1, I1) — the credential guarantee
+ *  comes entirely from the explicit `--env` flags baked into argvCreate's
+ *  argv (see credentialEnvFlags), which override whatever the mngr tmux
+ *  server was started with regardless of `opts.env`
+ *  (docs/dogfood/2026-08-03-mngr-phase0.md, Q2). The local `mngr` CLI process
+ *  does not need the credential itself for the local provider, and handing
+ *  it the raw value is actively harmful on the invocation that STARTS the
+ *  tmux server: that value would sit in the daemon's own long-lived
+ *  environment (readable via `tmux showenv`, inherited by any later
+ *  non-Rhumb agent on that server) for as long as the server runs — far
+ *  longer than the one `mngr` process it was meant for. `opts.env` therefore
+ *  is NOT a general-purpose channel for secrets in this backend; it remains
+ *  part of `ExecFn`'s contract only because some future call site (a remote
+ *  host, a different provider) may legitimately need to hand `mngr` itself
+ *  a value it cannot get any other way — evaluate that need in this module,
+ *  where the tmux-server persistence risk above is visible, before adding a
+ *  new `opts.env` call site. */
 export type ExecFn = (
   argv: string[],
   opts?: { env?: Record<string, string> },
@@ -48,6 +59,7 @@ const argvCreate = (
   agentId: string,
   credentialEnv: Record<string, string>,
   extraBlankedVars: readonly string[],
+  spec: AgentSpec,
 ): string[] => [
   "create",
   name,
@@ -57,6 +69,11 @@ const argvCreate = (
   "--label",
   `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
   ...credentialEnvFlags(credentialEnv, extraBlankedVars),
+  // Per `mngr create --help`: "Arguments after -- are passed directly to
+  // the agent command" — see agentArgsFor's doc comment for what crosses
+  // and what deliberately doesn't.
+  "--",
+  ...agentArgsFor(spec),
 ];
 const argvSend = (nativeId: string, prompt: string): string[] => ["message", nativeId, "-m", prompt];
 const argvStop = (nativeId: string): string[] => ["stop", nativeId];
@@ -82,9 +99,31 @@ const argvTranscript = (nativeId: string): string[] => ["transcript", nativeId, 
  *  every `RHUMB_*` var — is a wildcard, not a fixed list, and this module
  *  has no access to the ambient environment of whatever process starts (or
  *  already started) the tmux server; it only knows the two static lists
- *  above. `src/index.ts` closes that gap: it computes the `RHUMB_*` keys of
- *  `process.env` at the exec seam, where the real environment actually is,
- *  and passes them in here. This parameter is purely additive — when a
+ *  above. `src/index.ts` NARROWS that gap (does not close it — see below):
+ *  it computes the `RHUMB_*` keys of ITS OWN `process.env` (the agent-host
+ *  process) at the exec seam and passes them in here.
+ *
+ *  That is a weaker guarantee than `sanitizedEnv`'s, and worth stating
+ *  precisely: this blanks the `RHUMB_*` vars the agent-host PROCESS
+ *  happens to carry right now, not necessarily every `RHUMB_*` var the
+ *  mngr tmux SERVER's own environment actually holds — the two can differ
+ *  whenever the tmux server predates the current agent-host process's
+ *  environment (e.g. it survived a restart of the host process with a
+ *  changed `RHUMB_*` var, or a human started it directly). Phase 0 hit
+ *  exactly this asymmetry testing ambient credential leakage: a
+ *  pre-existing tmux server silently made a leakage test measure nothing
+ *  until `tmux kill-server` cleared it first
+ *  (docs/dogfood/2026-08-03-mngr-phase0.md, Q2). Operational consequence:
+ *  an operator who changes which `RHUMB_*` vars are set and needs that
+ *  change to reach mngr-spawned agents must kill the mngr tmux server so
+ *  it restarts under the new environment — restarting the agent-host
+ *  process alone is not sufficient if the tmux server survives it. Logged
+ *  as a known gap for final review (I2), not fixed here: closing it fully
+ *  would mean reading the tmux server's OWN environment (e.g. via `tmux
+ *  showenv -g`) rather than this process's, which is a larger change than
+ *  this parameter's scope.
+ *
+ *  Within that scope, `extraBlankedVars` is still purely additive — when a
  *  caller omits it, behaviour (including the exact `--env` flag count) is
  *  unchanged from before this parameter existed. */
 function credentialEnvFlags(
@@ -108,6 +147,96 @@ function credentialEnvFlags(
     emitted.add(key);
   }
   return flags;
+}
+
+/** Agent CLI args that DO have a `claude` CLI equivalent and can therefore
+ *  cross the mngr boundary via `mngr create ... -- <agent args>` (fix
+ *  round 1, I7). Verified directly against the flags the bundled CLI
+ *  defines (`node_modules/@anthropic-ai/claude-agent-sdk/cli.js`):
+ *  `--model <model>`, `--permission-mode <mode>` (same choices as
+ *  VALID_PERMISSION_MODES in config.ts), `--allowedTools/--allowed-tools
+ *  <tools...>` ("Comma or space-separated list of tool names"),
+ *  `--disallowedTools/--disallowed-tools <tools...>` (same), and
+ *  `--append-system-prompt <prompt>`.
+ *
+ *  What deliberately does NOT appear here: `spec.extraOptions.mcpServers`
+ *  and `spec.extraOptions.canUseTool`. Both are in-process JS with no CLI
+ *  equivalent — live `createSdkMcpServer(...)` objects closing over
+ *  `PendingActions` / the Proxmox client / pg-admin
+ *  (src/infra/server.ts:81, src/ontology/server.ts:9), and an async
+ *  callback awaiting an in-memory operator-approval promise
+ *  (src/infra/server.ts:22). The CLI's `--mcp-config` only loads EXTERNAL
+ *  servers from a JSON file; there is no way to hand it a live JS closure.
+ *  `assertCarryableSpec` refuses to construct this backend at all when
+ *  either is present, rather than silently dropping them here — see its
+ *  doc comment. */
+function agentArgsFor(spec: AgentSpec): string[] {
+  const args: string[] = ["--model", spec.model, "--permission-mode", spec.permissionMode];
+  const extra = spec.extraOptions ?? {};
+
+  const allowedTools = asStringList(extra.allowedTools);
+  if (allowedTools.length > 0) args.push("--allowedTools", allowedTools.join(","));
+
+  const disallowedTools = asStringList(extra.disallowedTools);
+  if (disallowedTools.length > 0) args.push("--disallowedTools", disallowedTools.join(","));
+
+  const append = asSystemPromptAppend(extra.systemPrompt);
+  if (append) args.push("--append-system-prompt", append);
+
+  return args;
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** `spec.extraOptions.systemPrompt` is `{ type: "preset", preset: "...",
+ *  append: "..." }` (see src/index.ts's sessionExtraOptions) when present.
+ *  Only the `append` string has a CLI equivalent (`--append-system-prompt`
+ *  appends to the CLI's OWN default preset, which is the closest available
+ *  match); the preset selector itself isn't user-configurable via a flag,
+ *  so it is intentionally not inspected here. */
+function asSystemPromptAppend(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const append = (value as { append?: unknown }).append;
+  return typeof append === "string" && append.length > 0 ? append : null;
+}
+
+/** Refuses to construct the mngr backend when `spec.extraOptions` carries
+ *  something that cannot cross the mngr CLI boundary (see `agentArgsFor`'s
+ *  doc comment for exactly what and why). Checked once, synchronously, at
+ *  construction — so `RHUMB_AGENT_BACKEND=mngr` fails at BOOT, alongside
+ *  `assertMngrPrerequisites` (exec.ts), rather than on the operator's first
+ *  turn. Precedent: commits 462acd6 (validate eagerly) and fb30c3d (fail
+ *  closed).
+ *
+ *  This is a REFUSAL, not a warning, and deliberately not downgradable: an
+ *  mngr agent running without the ontology/infra MCP servers or the
+ *  operator-approval gate would be ungated, not merely degraded, and an
+ *  ungated agent is worse than an unavailable one. Bridging either gap is
+ *  out of scope for this backend (see agentArgsFor). */
+function assertCarryableSpec(spec: AgentSpec): void {
+  const extra = spec.extraOptions ?? {};
+  const mcpServers = extra.mcpServers;
+  const mcpServerNames =
+    mcpServers && typeof mcpServers === "object" ? Object.keys(mcpServers as object) : [];
+  const hasCanUseTool = extra.canUseTool !== undefined;
+
+  if (mcpServerNames.length === 0 && !hasCanUseTool) return;
+
+  const parts: string[] = [];
+  if (mcpServerNames.length > 0) {
+    parts.push(`in-process MCP server(s) (${mcpServerNames.join(", ")})`);
+  }
+  if (hasCanUseTool) {
+    parts.push("the operator-approval gate (canUseTool)");
+  }
+  throw new Error(
+    `RHUMB_AGENT_BACKEND=mngr cannot carry ${parts.join(" or ")} across the mngr CLI boundary: ` +
+      "the CLI's --mcp-config only loads external servers from JSON, and there is no CLI " +
+      "equivalent for an in-process approval callback. Running anyway would drop this gating " +
+      "silently, so the mngr backend refuses to construct rather than run ungated.",
+  );
 }
 
 /** Conservative allowlist for the name mngr create's argv position 1. Names
@@ -234,10 +363,15 @@ export function createMngrBackend(deps: {
    *  appended to (and deduplicated against) the PROVIDER_CREDENTIAL_VARS /
    *  STRIPPED_ENV_VARS blanking — see `credentialEnvFlags`. Optional and
    *  purely additive: omitting it reproduces today's behaviour exactly.
-   *  `src/index.ts` passes the `RHUMB_*` keys of `process.env` here. */
+   *  `src/index.ts` passes the `RHUMB_*` keys of ITS OWN `process.env`
+   *  here — the agent-host process's environment, not necessarily the
+   *  mngr tmux server's (they can differ; see `credentialEnvFlags`'s doc
+   *  comment, I2, for the asymmetry and the `tmux kill-server` operator
+   *  requirement it implies). */
   extraBlankedVars?: readonly string[];
 }): AgentBackend {
-  const { exec, registry, credentialEnv, extraBlankedVars = [] } = deps;
+  const { exec, registry, credentialEnv, extraBlankedVars = [], spec } = deps;
+  assertCarryableSpec(spec);
 
   /** Parsed `mngr list --format json` agents, or `null` when the listing
    *  cannot be trusted (non-zero exit, or output that doesn't match the
@@ -414,7 +548,7 @@ export function createMngrBackend(deps: {
       return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
     }
 
-    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars), { env: credentialEnv });
+    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars, spec));
     if (res.code !== 0) {
       // A genuine create failure (mngr's own exit code says so). Leave the
       // principal unbound; send() reports it as an error event rather than
@@ -484,7 +618,7 @@ export function createMngrBackend(deps: {
       // was already present in `before` (a PREVIOUS turn's reply, on the
       // plain success path below).
       const before = await fetchTranscript(nativeId);
-      const res = await exec(argvSend(nativeId, prompt), { env: credentialEnv });
+      const res = await exec(argvSend(nativeId, prompt));
       const after = await fetchTranscript(nativeId);
       const delivered = before !== null && after !== null && after.length > before.length;
       const reply = newAssistantReply(before, after);

@@ -1,6 +1,13 @@
 import { execFile, spawnSync } from "node:child_process";
 import type { ExecFn } from "./mngr.js";
 
+/** Phase 0 documented a 90s wedge class: `mngr message` can hang waiting for
+ *  a submission signal it never receives (docs/dogfood/2026-08-03-mngr-phase0.md,
+ *  Q1). Without a timeout that hangs the turn — and the SSE stream the
+ *  operator is watching — forever. 120s gives the documented 90s case
+ *  headroom while still guaranteeing every mngr call eventually resolves. */
+const EXEC_TIMEOUT_MS = 120_000;
+
 /** Real mngr invocation.
  *
  *  `opts.env` is a credential OVERLAY, not a complete environment (see the
@@ -14,19 +21,29 @@ import type { ExecFn } from "./mngr.js";
  *  `argvCreate`/`credentialEnvFlags` bake into the argv (mngr.ts), which
  *  override whatever the mngr tmux server was started with regardless of
  *  what this function merges in (docs/dogfood/2026-08-03-mngr-phase0.md,
- *  Q2). `opts.env` merged here is just what the `mngr` CLI process itself
- *  sees — it is not a security boundary.
+ *  Q2). As of fix round 1 (I1), mngr.ts no longer passes `credentialEnv`
+ *  via `opts.env` at any call site — see the doc comment on `ExecFn` for
+ *  why that mattered (the tmux daemon persisting a raw credential for its
+ *  whole lifetime). `opts.env`, when a future caller does pass it, is just
+ *  what the `mngr` CLI process itself sees — it is not a security boundary.
  *
  *  Uses `execFile` with an argv ARRAY and never `shell: true`: the
  *  backend's injection-safety (see VALID_MNGR_NAME in mngr.ts) depends on
- *  nothing being shell-interpolated. */
+ *  nothing being shell-interpolated.
+ *
+ *  Carries a timeout (M1) — see EXEC_TIMEOUT_MS — so a wedged `mngr`
+ *  invocation cannot hang a turn forever. */
 export function createRealExec(): ExecFn {
   return (argv, opts) =>
     new Promise((resolve) => {
       execFile(
         "mngr",
         argv,
-        { env: { ...process.env, ...opts?.env }, maxBuffer: 32 * 1024 * 1024 },
+        {
+          env: { ...process.env, ...opts?.env },
+          maxBuffer: 32 * 1024 * 1024,
+          timeout: EXEC_TIMEOUT_MS,
+        },
         (err, stdout, stderr) => {
           const code =
             err && typeof (err as { code?: unknown }).code === "number"
@@ -34,7 +51,11 @@ export function createRealExec(): ExecFn {
               : err
                 ? 1
                 : 0;
-          resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+          const timedOut = Boolean(err && (err as { killed?: boolean }).killed);
+          const stderrText =
+            String(stderr) +
+            (timedOut ? `\n[rhumb] mngr call timed out after ${EXEC_TIMEOUT_MS}ms and was killed` : "");
+          resolve({ code, stdout: String(stdout), stderr: stderrText });
         },
       );
     });
@@ -43,30 +64,35 @@ export function createRealExec(): ExecFn {
 /** Fail fast at boot rather than on the operator's first turn. Precedent:
  *  commit 462acd6 (validate eagerly) and fb30c3d (fail closed).
  *
- *  Checks three things: `mngr` and `tmux` on PATH, and — beyond what the
- *  brief called for — that whatever `bash` resolves to on PATH is major
- *  version 4 or newer. Phase 0 found mngr 0.2.17's
+ *  Checks mngr's own documented dependencies — `git`, `tmux`, `jq` (I3; the
+ *  deploy target is a Debian LXC where `jq` in particular is often absent)
+ *  — plus one undocumented one Phase 0 found the hard way: whatever `bash`
+ *  resolves to on PATH must be major version 4 or newer. mngr 0.2.17's
  *  `stream_transcript.sh` uses `declare -A` (bash 4+ associative arrays),
- *  which is not in mngr's documented dependencies (`git`, `tmux`, `jq`).
- *  macOS ships bash 3.2.57 at `/bin/bash`. The failure mode is not a clean
- *  error: the script crash-loops in the agent's tmux pane, Claude never
- *  starts, and `mngr message` fails with a 90-second timeout that looks
- *  exactly like a hang. Catching this at boot turns a silent, misleading
- *  hang into an actionable error naming the real fix.
+ *  and macOS ships bash 3.2.57 at `/bin/bash`. The failure mode is not a
+ *  clean error: the script crash-loops in the agent's tmux pane, Claude
+ *  never starts, and `mngr message` fails with a 90-second timeout that
+ *  looks exactly like a hang. Catching this at boot turns a silent,
+ *  misleading hang into an actionable error naming the real fix.
  *
  *  Both probes are injectable so unit tests never shell out to a real
- *  `mngr`, `tmux`, or `bash`. */
+ *  `mngr`/`tmux`/`git`/`jq`/`bash`. */
 export function assertMngrPrerequisites(
   lookup: (bin: string) => boolean = defaultLookup,
   bashMajorVersion: () => number | null = defaultBashMajorVersion,
 ): void {
   const problems: string[] = [];
 
-  const missing = ["mngr", "tmux"].filter((b) => !lookup(b));
+  const missing = ["mngr", "tmux", "git", "jq"].filter((b) => !lookup(b));
   if (missing.length > 0) {
     problems.push(
-      `requires ${missing.join(" and ")} on PATH. Install with: ` +
-        `brew install tmux && uv tool install imbue-mngr && uv tool install imbue-mngr-claude`,
+      `requires ${missing.join(", ")} on PATH. Install (I4: the previous hint here named a ` +
+        `command that does NOT work — \`uv tool install imbue-mngr-claude\` on its own creates ` +
+        `a SEPARATE tool env and does not add the \`claude\` agent type to \`imbue-mngr\`; it ` +
+        `must be installed via --with, as below). macOS: ` +
+        "`brew install tmux git jq && uv tool install imbue-mngr --with imbue-mngr-claude`. " +
+        "Debian/Ubuntu: `apt-get install -y tmux git jq && uv tool install imbue-mngr --with " +
+        "imbue-mngr-claude`.",
     );
   }
 
@@ -77,7 +103,8 @@ export function assertMngrPrerequisites(
       `requires bash 4+ on PATH (found ${found}) — mngr's transcript streaming uses bash 4 ` +
         `associative arrays, and macOS ships bash 3.2 at /bin/bash. Fix: brew install bash ` +
         `(installs bash 5 at /opt/homebrew/bin/bash, ahead of /bin on PATH, without touching ` +
-        `/bin/bash or your login shell).`,
+        `/bin/bash or your login shell); Debian/Ubuntu ships bash 5 already, so this should only ` +
+        `fire there if PATH has been overridden.`,
     );
   }
 
@@ -90,6 +117,17 @@ function defaultLookup(bin: string): boolean {
   return spawnSync("command", ["-v", bin], { shell: true }).status === 0;
 }
 
+/** Pure parse of the bash-version probe's raw result (I5) — the only part
+ *  of `defaultBashMajorVersion` that can actually be wrong, and therefore
+ *  the only part worth unit-testing directly. The `spawnSync` call itself
+ *  is exactly what injecting `bashMajorVersion` in
+ *  `assertMngrPrerequisites` exists to avoid exercising in a unit test. */
+export function parseBashMajor(status: number | null, stdout: string): number | null {
+  if (status !== 0 || !stdout) return null;
+  const n = Number.parseInt(stdout.trim(), 10);
+  return Number.isInteger(n) ? n : null;
+}
+
 /** Probes the MAJOR version of whatever `bash` resolves to on PATH — the
  *  same resolution mngr's `#!/usr/bin/env bash` scripts use. Returns `null`
  *  when the version cannot be determined (bash missing, or unparsable
@@ -97,7 +135,5 @@ function defaultLookup(bin: string): boolean {
  *  pass — an unknown version is not a verified-good one. */
 function defaultBashMajorVersion(): number | null {
   const result = spawnSync("bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" });
-  if (result.status !== 0 || !result.stdout) return null;
-  const n = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isInteger(n) ? n : null;
+  return parseBashMajor(result.status, result.stdout ?? "");
 }
