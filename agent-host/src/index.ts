@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import { loadConfig, type Config } from "./config.js";
 import { RHUMB_PROMPT_APPEND } from "./prompt.js";
-import { SessionManager, type QueryFn } from "./sessionManager.js";
+import { SessionManager, type QueryFn, type ResolvedAgentIdentity } from "./sessionManager.js";
 import { createServer } from "./server.js";
 import { createSessionService } from "./sessions.js";
 import { sanitizedEnv } from "./env.js";
@@ -172,7 +172,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   // whose tool policy is the point, and slice 1 does not model unattended
   // agents as principals.
   let backend: AgentBackend | undefined;
-  let resolveAgentId: ((sessionId: string | undefined) => string) | undefined;
+  let resolveAgentId: ((sessionId: string | undefined) => ResolvedAgentIdentity) | undefined;
   if (deps.config.agentBackend === "mngr") {
     // Fails at boot on the CLI/bash prerequisites (assertMngrPrerequisites,
     // exec.ts) per commits 462acd6 / fb30c3d (validate eagerly, fail
@@ -286,49 +286,91 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   return app;
 }
 
-/** Mints or resolves the durable Rhumb `agentId` a backend with a real
- *  principal lifecycle (mngr) needs — see the doc comment on
- *  `SessionManager`'s `resolveAgentId` option (sessionManager.ts) for why
- *  this exists at all (fix round 1, C1: without it, every mngr turn arrives
- *  with `agentId: ""`, fails `VALID_MNGR_NAME`, and no principal is ever
- *  created). `SessionManager` never imports `AgentRegistry` itself; this
- *  closure is how `buildApp` supplies the behaviour without that import.
+/** Mints or resolves the durable Rhumb principal a backend with a real
+ *  lifecycle (mngr) needs, AND the `nativeId` to trust for it — see the doc
+ *  comment on `SessionManager`'s `resolveAgentId` option (sessionManager.ts)
+ *  for why `nativeId` must be derived here, from the registry, rather than
+ *  echoed from the wire (fix round 3, A1). `SessionManager` never imports
+ *  `AgentRegistry` itself; this closure is how `buildApp` supplies the
+ *  behaviour without that import.
  *
  *  Exported (not just used inline) so `test/index-agentid.test.ts` can drive
  *  it directly against a real, tmp-dir-backed `AgentRegistry` — no mngr, no
  *  network, no SessionManager or backend involved.
  *
  *  Three cases, in order:
- *   1. No incoming `sessionId` (a brand-new turn): mint a fresh principal
- *      via `registry.create` and return its `agentId`. The generated
- *      display `name` is deliberately NOT the registry's own
- *      `rhumb-<uuid>` `agentId` — it only has to satisfy mngr.ts's
- *      `VALID_MNGR_NAME`, since it becomes the literal `mngr create <name>`
- *      argument, while the label mngr.ts stamps every agent with is keyed
- *      on `agentId` (see RHUMB_AGENT_ID_LABEL there).
- *   2. An incoming `sessionId` already bound as some principal's
+ *   1. An incoming `sessionId` already bound as some principal's
  *      `nativeId` — i.e. the mngr agent id the CLIENT was handed as
  *      `sessionId` on a PREVIOUS turn, via the backend's `session` event:
- *      resolves back to that SAME `agentId`, so `ensureAgent` adopts the
- *      existing mngr agent instead of minting a second principal for what
- *      is really a continuing conversation.
- *   3. An incoming `sessionId` that is itself already a known `agentId`
+ *      resolves back to that SAME `agentId`. `nativeId` is the record's own
+ *      `nativeId` field — EXCEPT when the record's `status` is `"stopped"`,
+ *      where this returns `nativeId: null` instead of echoing the stale
+ *      bound value. `registry.markStopped` does not clear `nativeId`, and
+ *      mngr.ts's `send()` only calls `ensureAgent` — the ONLY place that
+ *      actually refuses a stopped principal — when `nativeId` is falsy;
+ *      forcing `null` here is what keeps that refusal reachable for a
+ *      principal that was bound and only stopped afterward (fix round 3,
+ *      A1: the stopped-principal-can-still-be-messaged consequence).
+ *   2. An incoming `sessionId` that is itself already a known `agentId`
  *      (defensive — no current caller takes this path, but it's cheap to
- *      honour): passed through unchanged.
- *  Anything else (a stale or foreign id) is treated the same as case 1 —
- *  mints a fresh principal rather than erroring, since a turn must always
- *  be able to proceed. */
+ *      honour): resolves the SAME way as case 1 (record's own `nativeId`,
+ *      `null` if stopped) — NOT by echoing `sessionId` itself back as
+ *      `nativeId` (fix round 3, Minor 2: an earlier version did exactly
+ *      that, producing a `nativeId` mngr never had — a guaranteed failure
+ *      on a path where minting or ensuring would have worked instead).
+ *   3. No incoming `sessionId`, or one that matches neither a bound
+ *      `nativeId` nor a known `agentId` (a stale or foreign id — e.g. one
+ *      that was never bound at all, or belongs to a different Rhumb
+ *      deployment entirely): resolve to a principal with `nativeId: null`,
+ *      which routes the turn through `ensureAgent` rather than trusting an
+ *      unverified id directly (fix round 3, A1: this is what stops an
+ *      arbitrary client-supplied `sessionId` from being run as `mngr
+ *      message <that id>` against whatever agent happens to own it on the
+ *      box, including one that never went through this backend's `--env`
+ *      credential scrub at all).
+ *
+ *      Before minting a NEW principal for this case, reuse the newest
+ *      still-ACTIVE, still-UNBOUND (`nativeId === null`) mngr principal
+ *      instead, if one exists (fix round 3, A2). Without this, every retry
+ *      after a turn that failed before a `session` event ever fired
+ *      (`create-failed`, `create-unconfirmed`, `create-not-found`,
+ *      `invalid-name`, `stopped`, `bound-elsewhere` — see
+ *      `ensureFailureMessage` in mngr.ts) mints ANOTHER principal, since
+ *      none of those failure reasons ever reach the client as a `sessionId`
+ *      to resolve back to. The worst case is `create-unconfirmed`, where
+ *      `mngr create` genuinely SUCCEEDED but the immediately-following
+ *      label lookup was merely unknowable: each blind retry would create
+ *      ANOTHER real mngr agent, branch, and tmux window, while mngr.ts's
+ *      own resolve-before-create recovery (`resolveNativeIdByLabel`,
+ *      checked first thing inside `ensureAgent`) can never fire, because no
+ *      later turn ever carries that first attempt's `agentId` to look up.
+ *      Reusing the newest unbound principal instead makes every retry
+ *      converge on the SAME `agentId`, which is exactly what lets that
+ *      resolve-before-create step adopt whatever `mngr create` actually did
+ *      on a later call, instead of spawning a duplicate. */
 export function createMngrAgentIdResolver(
   registry: AgentRegistry,
   mintDisplayName: () => string = () => `rhumb-${randomUUID().slice(0, 8)}`,
-): (sessionId: string | undefined) => string {
+): (sessionId: string | undefined) => { agentId: string; nativeId: string | null } {
+  const nativeIdFor = (record: { nativeId: string | null; status: string }): string | null =>
+    record.status === "stopped" ? null : record.nativeId;
+
   return (sessionId) => {
     if (sessionId) {
       const bound = registry.list().find((r) => r.nativeId === sessionId);
-      if (bound) return bound.agentId;
-      if (registry.get(sessionId)) return sessionId;
+      if (bound) return { agentId: bound.agentId, nativeId: nativeIdFor(bound) };
+      const direct = registry.get(sessionId);
+      if (direct) return { agentId: direct.agentId, nativeId: nativeIdFor(direct) };
     }
-    return registry.create(mintDisplayName(), "mngr").agentId;
+
+    // A2: reuse the newest still-unbound principal before minting a new one.
+    const unbound = registry
+      .list()
+      .filter((r) => r.backend === "mngr" && r.status === "active" && r.nativeId === null)
+      .sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1))[0];
+    if (unbound) return { agentId: unbound.agentId, nativeId: null };
+
+    return { agentId: registry.create(mintDisplayName(), "mngr").agentId, nativeId: null };
   };
 }
 

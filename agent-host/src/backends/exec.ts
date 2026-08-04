@@ -32,7 +32,10 @@ const EXEC_TIMEOUT_MS = 120_000;
  *  nothing being shell-interpolated.
  *
  *  Carries a timeout (M1) — see EXEC_TIMEOUT_MS — so a wedged `mngr`
- *  invocation cannot hang a turn forever. */
+ *  invocation cannot hang a turn forever. A `maxBuffer` overflow is
+ *  reported distinctly from a timeout in the returned `stderr` (fix
+ *  round 3, Minor 3) even though Node signals both by killing the child
+ *  and setting `err.killed`. */
 export function createRealExec(): ExecFn {
   return (argv, opts) =>
     new Promise((resolve) => {
@@ -51,10 +54,22 @@ export function createRealExec(): ExecFn {
               : err
                 ? 1
                 : 0;
-          const timedOut = Boolean(err && (err as { killed?: boolean }).killed);
+          // `err.killed` is true for BOTH causes execFile can kill the
+          // child for — the `timeout` option elapsing, and `maxBuffer`
+          // being exceeded (Node sets `err.code ===
+          // "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"` for the latter; a real
+          // timeout does not use that code). Fix round 3, Minor 3:
+          // reporting a >32MB transcript/output as "timed out after
+          // 120000ms" would be actively misleading in logs/audit — the
+          // process didn't hang, its output was too large — so these are
+          // distinguished rather than collapsed into one message.
+          const killedByMaxBuffer =
+            Boolean(err) && (err as { code?: unknown }).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+          const timedOut = Boolean(err && (err as { killed?: boolean }).killed) && !killedByMaxBuffer;
           const stderrText =
             String(stderr) +
-            (timedOut ? `\n[rhumb] mngr call timed out after ${EXEC_TIMEOUT_MS}ms and was killed` : "");
+            (timedOut ? `\n[rhumb] mngr call timed out after ${EXEC_TIMEOUT_MS}ms and was killed` : "") +
+            (killedByMaxBuffer ? "\n[rhumb] mngr call exceeded the 32MB output buffer and was killed" : "");
           resolve({ code, stdout: String(stdout), stderr: stderrText });
         },
       );
