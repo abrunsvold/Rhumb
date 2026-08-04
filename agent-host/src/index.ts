@@ -174,15 +174,20 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   let backend: AgentBackend | undefined;
   let resolveAgentId: ((sessionId: string | undefined) => string) | undefined;
   if (deps.config.agentBackend === "mngr") {
-    // Fails at boot on two independent grounds, both eager per commits
-    // 462acd6 / fb30c3d: the CLI/bash prerequisites (assertMngrPrerequisites,
-    // exec.ts) and — inside createMngrBackend — whatever of sessionExtraOptions
-    // cannot cross the mngr CLI boundary (assertCarryableSpec, mngr.ts, I7).
-    // As wired today sessionExtraOptions.mcpServers always carries at least
-    // the ontology server (set unconditionally above, not only when infra is
-    // configured), so RHUMB_AGENT_BACKEND=mngr refuses to boot on every box
-    // until a bridge for in-process MCP servers exists — intended, not a bug
-    // in this change: an ungated agent is worse than an unavailable one.
+    // Fails at boot on the CLI/bash prerequisites (assertMngrPrerequisites,
+    // exec.ts) per commits 462acd6 / fb30c3d (validate eagerly, fail
+    // closed). Whatever of sessionExtraOptions cannot cross the mngr CLI
+    // boundary (in-process MCP servers, canUseTool) does NOT block boot —
+    // createMngrBackend (mngr.ts, I7) only WARNS about those, once, since
+    // Phase 0's corrected analysis (fix round 2) found that dropping them
+    // is a capability REDUCTION, not a gate bypass: the tools canUseTool
+    // gates are served BY the dropped MCP server, so with it gone there is
+    // nothing left to gate. sessionExtraOptions.mcpServers carries at least
+    // the ontology server on every box (set unconditionally above, not only
+    // when infra is configured), so that warning fires whenever
+    // RHUMB_AGENT_BACKEND=mngr is selected today — see
+    // warnAboutUncarriableSpec's doc comment in mngr.ts for the full
+    // reasoning.
     assertMngrPrerequisites();
     const registry = createAgentRegistry({
       indexPath: joinPath(deps.config.workspace, "agents.json"),

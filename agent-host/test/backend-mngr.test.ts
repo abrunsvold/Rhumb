@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -684,24 +684,102 @@ describe("mngr backend", () => {
     expect(agentArgs).toEqual(["--model", "m", "--permission-mode", "plan"]);
   });
 
-  it("refuses to construct when spec.extraOptions.mcpServers is non-empty, naming the server (I7b)", () => {
-    const registry = makeRegistry();
-    expect(() =>
-      createMngrBackend({
-        exec: recordingExec([]),
-        registry,
-        credentialEnv: {},
-        spec: {
-          model: "m",
-          workspace: "/ws",
-          permissionMode: "acceptEdits",
-          extraOptions: { mcpServers: { ontology: {} } },
-        },
-      }),
-    ).toThrow(/mcp/i);
+  it("warns (does NOT refuse) when spec.extraOptions.mcpServers is non-empty, naming the server (I7b, fix round 2)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      createMngrBackend({
-        exec: recordingExec([]),
+      const registry = makeRegistry();
+      let backend: ReturnType<typeof createMngrBackend> | undefined;
+      expect(() => {
+        backend = createMngrBackend({
+          exec: recordingExec([]),
+          registry,
+          credentialEnv: {},
+          spec: {
+            model: "m",
+            workspace: "/ws",
+            permissionMode: "acceptEdits",
+            extraOptions: { mcpServers: { ontology: {} } },
+          },
+        });
+      }).not.toThrow();
+      expect(backend).toBeDefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls[0][0] as string;
+      expect(message).toContain("[rhumb]");
+      expect(message).toContain("ontology");
+      expect(message).toMatch(/mcp/i);
+      // Fix round 2's corrected framing: a capability reduction, not a gate
+      // bypass — the warning must not still claim "ungated".
+      expect(message).not.toMatch(/\bungated\b/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns (does NOT refuse) when spec.extraOptions.canUseTool is present, framed as unreachable tools not a bypassed gate (I7b, fix round 2)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const registry = makeRegistry();
+      let backend: ReturnType<typeof createMngrBackend> | undefined;
+      expect(() => {
+        backend = createMngrBackend({
+          exec: recordingExec([]),
+          registry,
+          credentialEnv: {},
+          spec: {
+            model: "m",
+            workspace: "/ws",
+            permissionMode: "acceptEdits",
+            extraOptions: { canUseTool: async () => ({ behavior: "allow" }) },
+          },
+        });
+      }).not.toThrow();
+      expect(backend).toBeDefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls[0][0] as string;
+      expect(message).toContain("[rhumb]");
+      expect(message).toMatch(/canUseTool/);
+      // The whole point of the fix round 2 correction: gated infra
+      // operations are UNREACHABLE from a mngr agent, not merely ungated —
+      // the message must draw that distinction explicitly, not just avoid
+      // the word "ungated" (it may legitimately use it to contrast against).
+      expect(message).toMatch(/unreachable/i);
+      expect(message).toMatch(/not merely ungated/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn when mcpServers is present but empty and canUseTool is absent (I7b)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const registry = makeRegistry();
+      expect(() =>
+        createMngrBackend({
+          exec: recordingExec([]),
+          registry,
+          credentialEnv: {},
+          spec: { model: "m", workspace: "/ws", permissionMode: "acceptEdits", extraOptions: { mcpServers: {} } },
+        }),
+      ).not.toThrow();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns exactly once at construction even though ensure/send run multiple turns (I7b)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const registry = makeRegistry();
+      const rec = registry.create("probe", "mngr");
+      const backend = createMngrBackend({
+        exec: async (argv) => {
+          if (argv[0] === "list") {
+            return { code: 0, stdout: JSON.stringify({ agents: [{ id: "agent-x", labels: { rhumb_agent_id: rec.agentId } }] }), stderr: "" };
+          }
+          return { code: 0, stdout: "", stderr: "" };
+        },
         registry,
         credentialEnv: {},
         spec: {
@@ -711,39 +789,13 @@ describe("mngr backend", () => {
           extraOptions: { mcpServers: { ontology: {} } },
         },
       });
-      throw new Error("expected construction to throw");
-    } catch (e) {
-      expect((e as Error).message).toContain("ontology");
+      warn.mockClear(); // construction itself already warned once; isolate what happens after
+      await backend.ensure(rec.agentId, CONFORMANCE_SPEC);
+      await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "hi", () => {});
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
-  });
-
-  it("refuses to construct when spec.extraOptions.canUseTool is present (I7b)", () => {
-    const registry = makeRegistry();
-    expect(() =>
-      createMngrBackend({
-        exec: recordingExec([]),
-        registry,
-        credentialEnv: {},
-        spec: {
-          model: "m",
-          workspace: "/ws",
-          permissionMode: "acceptEdits",
-          extraOptions: { canUseTool: async () => ({ behavior: "allow" }) },
-        },
-      }),
-    ).toThrow(/canUseTool|approval/i);
-  });
-
-  it("does not refuse construction when mcpServers is present but empty (I7b)", () => {
-    const registry = makeRegistry();
-    expect(() =>
-      createMngrBackend({
-        exec: recordingExec([]),
-        registry,
-        credentialEnv: {},
-        spec: { model: "m", workspace: "/ws", permissionMode: "acceptEdits", extraOptions: { mcpServers: {} } },
-      }),
-    ).not.toThrow();
   });
 
   it("create never passes credentialEnv via exec's opts.env (I1)", async () => {

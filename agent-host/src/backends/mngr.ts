@@ -167,9 +167,10 @@ function credentialEnvFlags(
  *  callback awaiting an in-memory operator-approval promise
  *  (src/infra/server.ts:22). The CLI's `--mcp-config` only loads EXTERNAL
  *  servers from a JSON file; there is no way to hand it a live JS closure.
- *  `assertCarryableSpec` refuses to construct this backend at all when
- *  either is present, rather than silently dropping them here — see its
- *  doc comment. */
+ *  `warnAboutUncarriableSpec` warns, once at construction, when either is
+ *  present rather than silently dropping them here — see its doc comment
+ *  for why running WITHOUT them is a capability reduction rather than a
+ *  gate bypass, and so a warning rather than a refusal (fix round 2). */
 function agentArgsFor(spec: AgentSpec): string[] {
   const args: string[] = ["--model", spec.model, "--permission-mode", spec.permissionMode];
   const extra = spec.extraOptions ?? {};
@@ -202,20 +203,39 @@ function asSystemPromptAppend(value: unknown): string | null {
   return typeof append === "string" && append.length > 0 ? append : null;
 }
 
-/** Refuses to construct the mngr backend when `spec.extraOptions` carries
- *  something that cannot cross the mngr CLI boundary (see `agentArgsFor`'s
- *  doc comment for exactly what and why). Checked once, synchronously, at
- *  construction — so `RHUMB_AGENT_BACKEND=mngr` fails at BOOT, alongside
- *  `assertMngrPrerequisites` (exec.ts), rather than on the operator's first
- *  turn. Precedent: commits 462acd6 (validate eagerly) and fb30c3d (fail
- *  closed).
+/** Warns, once at construction, when `spec.extraOptions` carries something
+ *  that cannot cross the mngr CLI boundary (see `agentArgsFor`'s doc
+ *  comment for exactly what and why) — MCP servers and the `canUseTool`
+ *  approval callback. Checked once, synchronously, at construction, so the
+ *  warning lands at BOOT next to the other startup lines
+ *  (`assertMngrPrerequisites`, exec.ts; `warnIfClientCertVarsPresent`,
+ *  index.ts) rather than repeating on every turn. Fix round 1 made this a
+ *  hard refusal; fix round 2 corrected that — see below.
  *
- *  This is a REFUSAL, not a warning, and deliberately not downgradable: an
- *  mngr agent running without the ontology/infra MCP servers or the
- *  operator-approval gate would be ungated, not merely degraded, and an
- *  ungated agent is worse than an unavailable one. Bridging either gap is
- *  out of scope for this backend (see agentArgsFor). */
-function assertCarryableSpec(spec: AgentSpec): void {
+ *  **Why a warning, not a refusal (the fix round 2 correction):** dropping
+ *  these does NOT produce an ungated agent — it produces a strictly LESS
+ *  CAPABLE one, and the two are not the same failure mode:
+ *   - `makeCanUseTool` (src/infra/server.ts) only gates tool NAMES in
+ *     `GATED_TOOL_NAMES`, i.e. `mcp__infra__*`; every other tool it allows
+ *     unconditionally. Those gated tools are SERVED BY the infra MCP
+ *     server. If that server cannot cross to the mngr agent, the agent has
+ *     no such tools to call in the first place, so there is nothing left
+ *     for `canUseTool` to gate — dropping it alongside the server it
+ *     protects removes a capability, not a check on one that's still
+ *     present.
+ *   - Proxmox/Postgres credentials cannot leak around the missing MCP
+ *     server either: the `RHUMB_*` wildcard blanking (`extraBlankedVars`,
+ *     `credentialEnvFlags`) covers `RHUMB_PROXMOX_*` and friends, so a
+ *     mngr agent cannot reach infra through Bash as a substitute.
+ *   - Bash/file permissions reach parity through `--permission-mode`
+ *     (`agentArgsFor`), which DOES cross the boundary.
+ *  Net effect: a mngr agent has strictly FEWER capabilities than an SDK
+ *  agent given the same `spec` — never the SAME capabilities behind a
+ *  weaker (or absent) gate. Refusing to boot over a capability REDUCTION
+ *  was too strong; the operator needs to know about it, not be blocked by
+ *  it, so this warns instead — loudly, naming exactly what is dropped,
+ *  never silently. */
+function warnAboutUncarriableSpec(spec: AgentSpec): void {
   const extra = spec.extraOptions ?? {};
   const mcpServers = extra.mcpServers;
   const mcpServerNames =
@@ -226,16 +246,24 @@ function assertCarryableSpec(spec: AgentSpec): void {
 
   const parts: string[] = [];
   if (mcpServerNames.length > 0) {
-    parts.push(`in-process MCP server(s) (${mcpServerNames.join(", ")})`);
+    parts.push(`the in-process MCP server(s) (${mcpServerNames.join(", ")}), and every tool they provide,`);
   }
   if (hasCanUseTool) {
-    parts.push("the operator-approval gate (canUseTool)");
+    // Deliberately NOT phrased as "ungated" — the gated tools this callback
+    // protects are themselves unreachable from a mngr agent (see the doc
+    // comment above), so there is nothing left to gate, not a gate left
+    // open.
+    parts.push(
+      "the operator-approval gate (canUseTool), which is moot here rather than bypassed, since " +
+        "the infra tools it protects are unreachable, not merely ungated,",
+    );
   }
-  throw new Error(
-    `RHUMB_AGENT_BACKEND=mngr cannot carry ${parts.join(" or ")} across the mngr CLI boundary: ` +
-      "the CLI's --mcp-config only loads external servers from JSON, and there is no CLI " +
-      "equivalent for an in-process approval callback. Running anyway would drop this gating " +
-      "silently, so the mngr backend refuses to construct rather than run ungated.",
+  console.warn(
+    `[rhumb] WARNING: RHUMB_AGENT_BACKEND=mngr cannot carry ${parts.join(" or ")} across the mngr ` +
+      "CLI boundary (--mcp-config only loads external servers from JSON; there is no CLI " +
+      "equivalent for an in-process approval callback). This mngr agent will run WITHOUT them — " +
+      "strictly fewer capabilities than the SDK path would have for the same spec, never the " +
+      "same capabilities with a weaker gate.",
   );
 }
 
@@ -371,7 +399,7 @@ export function createMngrBackend(deps: {
   extraBlankedVars?: readonly string[];
 }): AgentBackend {
   const { exec, registry, credentialEnv, extraBlankedVars = [], spec } = deps;
-  assertCarryableSpec(spec);
+  warnAboutUncarriableSpec(spec);
 
   /** Parsed `mngr list --format json` agents, or `null` when the listing
    *  cannot be trusted (non-zero exit, or output that doesn't match the
