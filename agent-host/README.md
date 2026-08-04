@@ -47,7 +47,65 @@ gateway); `RHUMB_PORT` (default
 `alice@github`; **required** in the default identity mode — the host refuses to
 start without it), `RHUMB_INSECURE_DEV` (set to `1` to skip the identity
 allowlist and loopback-only bind; **local development only**, never on a box
-reachable by anyone else).
+reachable by anyone else); `RHUMB_AGENT_BACKEND` (default `sdk`; see
+[Agent execution backend](#agent-execution-backend) below).
+
+### Agent execution backend
+
+`RHUMB_AGENT_BACKEND` selects how agents run. Default: `sdk`.
+
+| Value | Behavior |
+| --- | --- |
+| `sdk` | Claude Code in-process via the Agent SDK. One agent, one workspace. The behavior Rhumb has always had. |
+| `mngr` | Agents are spawned through the [mngr](https://github.com/imbue-ai/mngr) CLI. Localhost only in this release. |
+
+`mngr` mode requires `mngr`, `tmux`, `git`, `jq`, and bash 4+ on `PATH`. The host
+checks eagerly at startup and refuses to boot without them, rather than failing
+on your first turn (macOS ships bash 3.2, which fails silently — see
+`assertMngrPrerequisites` in `src/backends/exec.ts` for why bash 4+ is checked
+too):
+
+    brew install tmux git jq bash
+    uv tool install imbue-mngr --with imbue-mngr-claude
+
+**Identity.** Rhumb mints and owns the durable agent principal (`agentId`),
+recorded in `workspace/agents.json`. A mngr agent id is stored alongside it as
+`nativeId` — a runtime binding only. mngr ids are plaintext and settable via
+`mngr create --id`, so Rhumb treats them as identifiers, never as credentials.
+Because a mngr fork mints a fresh id, a forked agent inherits nothing from its
+parent.
+
+**Adoption.** Every agent Rhumb creates through mngr is stamped with a
+`rhumb_agent_id` label at creation time. Rhumb only ever adopts an existing
+mngr agent by matching that label against the calling principal's own
+`agentId` — never by name, and never by trusting `mngr create`'s own stdout.
+This is what keeps adoption fail-closed: an agent a human created directly, or
+one another tool made, never carries the label, so it can never be adopted —
+only an agent Rhumb itself created (and therefore already credential-scrubbed,
+below) can ever match.
+
+**Credentials.** In `mngr` mode the spawned agent receives exactly the
+credential variables Rhumb injects and nothing from the ambient environment —
+the same guarantee described in [SECURITY.md](../SECURITY.md) for the SDK
+path. This matters more here than it sounds: mngr does **not** scrub the
+environment it hands a spawned agent by default — a spawned agent's env comes
+from whatever the mngr tmux server was originally started with, not from the
+environment of whichever process asked mngr to create it. Rhumb closes that
+gap by passing an explicit `--env` override for every credential variable on
+every `mngr create` call — the selected provider's values as given, and every
+other credential variable blanked — which overrides the tmux server's
+inherited environment regardless of what it originally started with.
+
+**Capability reduction, not a gate bypass.** A mngr agent does not receive
+Rhumb's in-process MCP servers (infra, ontology) or the operator-approval
+callback (`canUseTool`) — there is no CLI equivalent for a live JS closure or
+an in-process approval promise, only for external, file-based MCP config. The
+host warns about this once at startup rather than refusing to boot, because
+dropping them makes the agent strictly *less* capable, not less gated: the
+tools `canUseTool` protects are served *by* the dropped MCP servers, so with
+those servers gone there is nothing left for the gate to protect, and the
+same `RHUMB_*` credential blanking described above means the agent cannot
+reach infra through Bash as a substitute either.
 
 ## Security
 
