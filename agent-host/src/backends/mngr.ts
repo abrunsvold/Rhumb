@@ -61,6 +61,7 @@ const argvCreate = (
   credentialEnv: Record<string, string>,
   extraBlankedVars: readonly string[],
   spec: AgentSpec,
+  lineage: { parentAgentId: string | null; depth: number },
 ): string[] => [
   "create",
   name,
@@ -69,6 +70,16 @@ const argvCreate = (
   "-y",
   "--label",
   `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
+  // Spawn lineage travels as mngr labels, not env: the RHUMB_* wildcard
+  // blanking below (credentialEnvFlags) erases any RHUMB_* env var, so an
+  // env-based channel would be silently destroyed. Labels round-trip
+  // through `mngr list --format json` instead (verified against 0.2.17,
+  // docs/dogfood/2026-08-03-mngr-phase0.md). `rhumb_parent_id` is omitted
+  // entirely for a root agent rather than emitted empty, so a later audit
+  // can distinguish "no parent" from "label missing".
+  ...(lineage.parentAgentId ? ["--label", `rhumb_parent_id=${lineage.parentAgentId}`] : []),
+  "--label",
+  `rhumb_depth=${lineage.depth}`,
   ...workspaceFlags(spec.workspace),
   ...credentialEnvFlags(credentialEnv, extraBlankedVars),
   // Per `mngr create --help`: "Arguments after -- are passed directly to
@@ -875,7 +886,11 @@ export function createMngrBackend(deps: {
       return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
     }
 
-    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars, spec));
+    // The record's own lineage (recorded at registry.create time), never
+    // re-derived here — defaults to root when the record is absent (the
+    // invalid-name / unregistered-agentId edge cases above).
+    const lineage = { parentAgentId: existing?.parentAgentId ?? null, depth: existing?.depth ?? 0 };
+    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars, spec, lineage));
     if (res.code !== 0) {
       // A genuine create failure (mngr's own exit code says so). Leave the
       // principal unbound; send() reports it as an error event rather than

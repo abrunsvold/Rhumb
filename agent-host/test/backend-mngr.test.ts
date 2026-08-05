@@ -2109,4 +2109,34 @@ describe("send() waits for a TERMINAL assistant message", () => {
     expect(last.result).toBe(EMPTY_COMPLETION_RESULT);
     expect(last.result).not.toBe("");
   });
+
+  it("stamps lineage onto the mngr agent as labels, not as env", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const parent = registry.create("parent", "mngr");
+    const child = registry.create("child", "mngr", { parentAgentId: parent.agentId, depth: 1 });
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        if (argv.includes("list")) {
+          return { code: 0, stdout: JSON.stringify({ agents: [] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.ensure(child.agentId, CONFORMANCE_SPEC);
+
+    const create = calls.find((c) => c.includes("create")) ?? [];
+    const labels = create.filter((_, i) => create[i - 1] === "--label");
+    expect(labels).toContain(`rhumb_parent_id=${parent.agentId}`);
+    expect(labels).toContain("rhumb_depth=1");
+    // Lineage must NOT be smuggled through the environment, which the RHUMB_*
+    // blanking would erase.
+    const envArgs = create.filter((_, i) => create[i - 1] === "--env");
+    expect(envArgs.some((e) => e.startsWith("RHUMB_PARENT_ID="))).toBe(false);
+  });
 });
