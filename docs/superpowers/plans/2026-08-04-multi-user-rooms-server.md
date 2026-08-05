@@ -15,7 +15,7 @@
 - This is **plan 1 of 2**. It is server-side only. Client rendering, @ autocomplete, and the queue-depth indicator are plan 2. Task 12 adds client *types* only, because `AgentEvent` is hand-mirrored across packages by contract.
 - **One deviation from the spec's plan split, deliberate:** the spec assigns `AuditEntry.actor` (dashboard-host) to plan 1's sibling. It is folded in here (Task 11) because it is server-side, shares the header-derivation pattern, and has no client dependency.
 - Tests live in `<package>/test/*.test.ts`. Run with `npm test` from the package directory (`vitest run`).
-- Imports of local modules use the `.js` extension even from `.ts` sources (ESM + `moduleResolution: node16`). Follow the existing files exactly.
+- Imports of local modules use the `.js` extension even from `.ts` sources. Follow the existing files exactly.
 - `agent-host/src/types.ts` and `client/src/lib/types.ts` are hand-mirrored; both file headers say to change them together. Task 12 discharges this.
 - **Do not modify existing tests to make them pass.** If an existing test fails, the implementation is wrong. The one allowed exception is noted inline in Task 7.
 - Author strings are lowercased and trimmed, matching `createIdentityGuard`'s comparison.
