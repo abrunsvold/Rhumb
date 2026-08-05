@@ -82,5 +82,13 @@ export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
     case "queue":
     case "presence":
       return state;
+    default: {
+      // Still fails the build if a future AgentEvent variant goes unhandled —
+      // but never returns undefined at runtime, so a client older than the
+      // host ignores unknown events instead of crashing the tab.
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return state;
+    }
   }
 }
