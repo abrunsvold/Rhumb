@@ -6,6 +6,7 @@ import {
   createMngrBackend,
   isTerminalFinishReason,
   TERMINAL_FINISH_REASONS,
+  EMPTY_COMPLETION_RESULT,
   type ExecFn,
 } from "../src/backends/mngr.js";
 import { createAgentRegistry } from "../src/agents.js";
@@ -961,6 +962,7 @@ describe("mngr backend", () => {
               type: "assistant_message",
               role: "assistant",
               text: "stale reply from a previous turn",
+              finish_reason: "stop_sequence",
             })}\n`,
             stderr: "",
           };
@@ -1215,7 +1217,7 @@ describe("mngr backend", () => {
           transcriptCalls += 1;
           const priorTurn = [
             { type: "user_message", role: "user", content: "first question" },
-            { type: "assistant_message", role: "assistant", text: "first answer" },
+            { type: "assistant_message", role: "assistant", text: "first answer", finish_reason: "stop_sequence" },
           ];
           const thisTurn = [
             ...priorTurn,
@@ -1258,7 +1260,7 @@ describe("mngr backend", () => {
     // a PREVIOUS turn's answer is present.
     const staticTranscript = [
       { type: "user_message", role: "user", content: "first question" },
-      { type: "assistant_message", role: "assistant", text: "first answer" },
+      { type: "assistant_message", role: "assistant", text: "first answer", finish_reason: "stop_sequence" },
     ];
     const backend = createMngrBackend({
       exec: async (argv) => {
@@ -1507,6 +1509,7 @@ describe("mngr backend", () => {
               type: "assistant_message",
               role: "assistant",
               text: "stale reply from a previous turn",
+              finish_reason: "stop_sequence",
             })}\n`,
             stderr: "",
           };
@@ -2002,6 +2005,21 @@ describe("terminal finish_reason", () => {
     expect(isTerminalFinishReason("tool_use")).toBe(false);
     expect(isTerminalFinishReason("some_future_reason")).toBe(false);
   });
+
+  // mngr passes Claude's own Messages API `stop_reason` through verbatim as
+  // `finish_reason` (confirmed against mngr's source,
+  // common_transcript_convert.py:154,217 — see TERMINAL_FINISH_REASONS's doc
+  // comment). That value space includes `max_tokens` (a token-truncated
+  // turn) as well as `stop_sequence`/`end_turn`, and `tool_use` (a segment
+  // that ends in a tool call, i.e. the model is not done). A truncated
+  // answer is still a FINISHED turn — treating it as non-terminal would
+  // poll out the full reply timeout and then report "not yet answered"
+  // while a real, if truncated, answer already sits in the transcript.
+  it("treats max_tokens as terminal (a truncated answer is still a finished turn) and tool_use as non-terminal", () => {
+    expect(isTerminalFinishReason("max_tokens")).toBe(true);
+    expect(TERMINAL_FINISH_REASONS.has("max_tokens")).toBe(true);
+    expect(isTerminalFinishReason("tool_use")).toBe(false);
+  });
 });
 
 describe("send() waits for a TERMINAL assistant message", () => {
@@ -2086,8 +2104,9 @@ describe("send() waits for a TERMINAL assistant message", () => {
 
     const last = events.at(-1) as { type: string; result?: string };
     expect(last.type).toBe("result");
-    // Must be self-describing, not "".
-    expect(last.result).toMatch(/no output/i);
+    // Must be self-describing, not "" — and pinned to the exported constant
+    // so the contract survives a wording change rather than a regex guess.
+    expect(last.result).toBe(EMPTY_COMPLETION_RESULT);
     expect(last.result).not.toBe("");
   });
 });

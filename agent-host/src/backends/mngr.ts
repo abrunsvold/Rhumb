@@ -348,12 +348,40 @@ export interface TranscriptEntry extends TranscriptMessage {
   finishReason: string | null;
 }
 
-/** Reasons that mean "the model is done with this turn". `"stop_sequence"` is
- *  observed in docs/dogfood/2026-08-03-mngr-phase0.md; `"end_turn"` is expected
- *  but unverified, so both are accepted. Anything ELSE — including null and
- *  reasons we have never seen — is deliberately NON-terminal: treating an
- *  unknown reason as terminal would reintroduce the bug this exists to fix. */
-export const TERMINAL_FINISH_REASONS: ReadonlySet<string> = new Set(["stop_sequence", "end_turn"]);
+/** Reasons that mean "the model is done with this turn".
+ *
+ *  These are Claude's own Messages API `stop_reason` values, passed through
+ *  VERBATIM by mngr as `finish_reason` — confirmed by reading mngr's own
+ *  source (`~/.local/share/uv/tools/imbue-mngr/lib/python3.12/site-packages/
+ *  imbue/mngr_claude/resources/common_transcript_convert.py:154,217`:
+ *  `stop_reason = message.get("stop_reason")` then
+ *  `"finish_reason": stop_reason`). That means the full value space is
+ *  Claude's, not mngr's own vocabulary: `end_turn`, `tool_use`,
+ *  `max_tokens`, `stop_sequence`, and `null` are all reachable.
+ *
+ *  `"stop_sequence"` is observed live in docs/dogfood/2026-08-03-mngr-phase0.md;
+ *  `"end_turn"` is the ordinary "model finished talking" reason. Both are
+ *  terminal. `"max_tokens"` is ALSO terminal — a token-truncated answer is
+ *  still a finished turn (the model has stopped and will not add more);
+ *  treating it as non-terminal would poll for the rest of `replyTimeoutMs`
+ *  and then report "delivered but not yet answered" while a real, if
+ *  truncated, answer already sits in the transcript — the exact
+ *  hang-and-lose-the-answer failure this module exists to prevent, just via
+ *  a different reason string.
+ *
+ *  `"tool_use"` is DELIBERATELY excluded: it marks a segment that ends in a
+ *  tool call, i.e. the model is not done — exactly the narration-then-
+ *  tool-then-answer shape this task exists to see through.
+ *
+ *  Anything ELSE — including `null` and any reason string we have not seen
+ *  — is deliberately NON-terminal: treating an unrecognised reason as
+ *  terminal would reintroduce the bug this exists to fix, for any reason
+ *  string Claude's API adds in the future. */
+export const TERMINAL_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "stop_sequence",
+  "end_turn",
+  "max_tokens",
+]);
 
 export function isTerminalFinishReason(reason: string | null): boolean {
   return reason !== null && TERMINAL_FINISH_REASONS.has(reason);
@@ -363,6 +391,13 @@ export function isTerminalFinishReason(reason: string | null): boolean {
  *  from a real answer AND from a timeout — with a fleet, "finished with nothing
  *  to say" and "still working" must not look alike. */
 export const EMPTY_COMPLETION_RESULT = "(agent completed with no output)";
+
+/** The text to report for a terminal reply: the reply's own text, or
+ *  `EMPTY_COMPLETION_RESULT` if the model produced nothing. Shared by both
+ *  `send()` result-emission sites so they cannot drift apart. */
+function resultTextFor(reply: TranscriptEntry): string {
+  return reply.text.trim().length > 0 ? reply.text : EMPTY_COMPLETION_RESULT;
+}
 
 /** Maps one line of `mngr transcript --format jsonl` output to a
  *  TranscriptEntry. mngr's transcript is agent-agnostic and may carry
@@ -932,8 +967,7 @@ export function createMngrBackend(deps: {
           const reply = newAssistantReply(before, after) ?? (await waitForNewAssistantReply(nativeId, before));
           if (reply) {
             // Report what the transcript actually shows, not the exit code.
-            const text = reply.text.trim().length > 0 ? reply.text : EMPTY_COMPLETION_RESULT;
-            onEvent({ type: "result", result: text, isError: false });
+            onEvent({ type: "result", result: resultTextFor(reply), isError: false });
             return { ...ref, nativeId };
           }
           // Submitted, but no NEW assistant reply ever landed. Do NOT
@@ -974,8 +1008,7 @@ export function createMngrBackend(deps: {
 
       const reply = await waitForNewAssistantReply(nativeId, before);
       if (reply) {
-        const text = reply.text.trim().length > 0 ? reply.text : EMPTY_COMPLETION_RESULT;
-        onEvent({ type: "result", result: text, isError: false });
+        onEvent({ type: "result", result: resultTextFor(reply), isError: false });
         return { ...ref, nativeId };
       }
 
@@ -1027,8 +1060,9 @@ export function createMngrBackend(deps: {
       const entries = await fetchTranscript(ref.nativeId);
       if (entries === null) return null;
       // Strip the internal finishReason field before returning — the public
-      // TranscriptMessage shape is hand-mirrored in client/src/lib/types.ts
-      // and must not gain a field the client doesn't know about.
+      // TranscriptMessage shape is hand-mirrored in
+      // client/src/lib/agentEvents.ts and must not gain a field the client
+      // doesn't know about.
       return entries.map(({ finishReason: _ignored, ...m }) => m);
     },
   };
