@@ -567,6 +567,101 @@ describe("createTurnQueue", () => {
     await flush();
     expect(seen).toEqual([1, 0]);
   });
+
+  it("frees the pending bucket for the next room once a lane drains", async () => {
+    const seen: Array<[string, number]> = [];
+    const q = createTurnQueue({ onDepth: (k, d) => seen.push([k, d]) });
+
+    // Room A: drafts, gets its id, drains completely.
+    q.enqueue("", async () => {});
+    q.rekey("", "sA");
+    await flush();
+
+    // Room B is a different room that also starts as a draft. Its turns must
+    // land on their own lane, not be routed into room A's by a stale alias.
+    seen.length = 0;
+    q.enqueue("", async () => {});
+    await flush();
+
+    expect(seen.every(([k]) => k === "")).toBe(true);
+    expect(seen[seen.length - 1]).toEqual(["", 0]);
+  });
+
+  it("re-points aliases through a second rekey", async () => {
+    const seen: Array<[string, number]> = [];
+    const gate = deferred();
+    const q = createTurnQueue({ onDepth: (k, d) => seen.push([k, d]) });
+
+    q.enqueue("", async () => {
+      await gate.promise;
+    });
+    q.rekey("", "s1");
+    q.rekey("s1", "s2");
+    // Still the original lane, reached through the old key.
+    expect(q.depth("")).toBe(1);
+
+    gate.resolve();
+    await flush();
+    expect(seen[seen.length - 1]).toEqual(["s2", 0]);
+    expect(q.depth("")).toBe(0);
+  });
+
+  it("refuses to merge lanes when either is running", async () => {
+    const started: string[] = [];
+    const src = deferred();
+    const dst = deferred();
+    const q = createTurnQueue({ onDepth: () => {} });
+
+    q.enqueue("", async () => {
+      started.push("src-first");
+      await src.promise;
+    });
+    q.enqueue("", async () => {
+      started.push("src-queued");
+    });
+    q.enqueue("s1", async () => {
+      started.push("dst-first");
+      await dst.promise;
+    });
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    // Both lanes are live. Merging here would either strand a running flag
+    // forever or let two turns run at once, so the rekey must do nothing.
+    q.rekey("", "s1");
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    dst.resolve();
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    src.resolve();
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first", "src-queued"]);
+    expect(q.depth("")).toBe(0);
+    expect(q.depth("s1")).toBe(0);
+  });
+
+  it("keeps draining when a depth subscriber throws", async () => {
+    const started: string[] = [];
+    const q = createTurnQueue({
+      onDepth: () => {
+        throw new Error("subscriber blew up");
+      },
+    });
+
+    q.enqueue("s1", async () => {
+      started.push("one");
+    });
+    q.enqueue("s1", async () => {
+      started.push("two");
+    });
+    await flush();
+
+    expect(started).toEqual(["one", "two"]);
+    expect(q.depth("s1")).toBe(0);
+  });
 });
 ```
 
@@ -623,6 +718,37 @@ export function createTurnQueue(deps: {
 
   const depthOf = (lane: Lane): number => lane.items.length + (lane.running ? 1 : 0);
 
+  // `onDepth` is an SSE broadcast at the call site. A throwing subscriber is a
+  // broadcast failure, not a queue failure: swallowing it here keeps a thrown
+  // listener from stranding a queued turn or rejecting a void-ed drain.
+  function emitDepth(key: string, depth: number): void {
+    try {
+      deps.onDepth(key, depth);
+    } catch {
+      // Nothing to do — the lane's state is already correct.
+    }
+  }
+
+  // Aliases are single-hop, so when a lane moves, every alias that pointed at
+  // its old key must be re-pointed rather than left to chain.
+  function repointAliases(from: string, to: string): void {
+    for (const [a, b] of alias) {
+      if (b === from) alias.set(a, to);
+    }
+  }
+
+  // Every alias pointing at a dropped lane goes with it. "" is the SHARED
+  // pending bucket for every room whose session id has not arrived yet, so a
+  // surviving alias[""] would route the next new room's turns into the previous
+  // room's lane. server.ts does the same thing with `subscribers.delete("")`
+  // when the session event lands.
+  function dropLane(key: string): void {
+    lanes.delete(key);
+    for (const [from, to] of alias) {
+      if (to === key) alias.delete(from);
+    }
+  }
+
   async function drain(key: string): Promise<void> {
     const k = canon(key);
     const lane = lanes.get(k);
@@ -631,7 +757,7 @@ export function createTurnQueue(deps: {
     if (!next) {
       // Depth 0 was already emitted by the finally below; dropping the lane
       // here keeps the map from growing one entry per room forever.
-      lanes.delete(k);
+      dropLane(k);
       return;
     }
     lane.running = true;
@@ -642,7 +768,7 @@ export function createTurnQueue(deps: {
       // error already reached the room as an `error` event.
     } finally {
       lane.running = false;
-      deps.onDepth(canon(k), depthOf(lane));
+      emitDepth(canon(k), depthOf(lane));
       void drain(k);
     }
   }
@@ -653,7 +779,7 @@ export function createTurnQueue(deps: {
       const lane = laneFor(k);
       lane.items.push(run);
       const d = depthOf(lane);
-      deps.onDepth(k, d);
+      emitDepth(k, d);
       void drain(k);
       return d;
     },
@@ -665,11 +791,16 @@ export function createTurnQueue(deps: {
       const src = lanes.get(f);
       const dst = lanes.get(t);
       if (src && dst) {
-        // Defensive: `to` normally has no lane yet, because a session id is new
-        // the first time it arrives. If both exist, the source is older, so its
-        // items go first.
+        // Off the intended path: `to` normally has no lane yet, because a
+        // session id is new the first time it arrives. Merging is only safe
+        // when neither lane is executing — a running lane's `finally` holds
+        // its own Lane object, so folding a running lane into another either
+        // strands that running flag forever (wedging the lane) or lets two
+        // turns run at once, which is the transcript fork this module exists
+        // to prevent. When either is live, do nothing: both lanes keep
+        // draining correctly under their own keys.
+        if (src.running || dst.running) return;
         dst.items.unshift(...src.items);
-        dst.running = dst.running || src.running;
         lanes.delete(f);
       } else if (src) {
         // Move the same Lane object, so an in-flight drain keeps mutating the
@@ -677,6 +808,7 @@ export function createTurnQueue(deps: {
         lanes.set(t, src);
         lanes.delete(f);
       }
+      repointAliases(f, t);
       alias.set(from, t);
       alias.set(f, t);
       void drain(t);
@@ -693,7 +825,7 @@ export function createTurnQueue(deps: {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd agent-host && npx vitest run test/queue.test.ts`
-Expected: PASS, 6 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
