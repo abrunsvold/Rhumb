@@ -4,7 +4,8 @@ import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent, attachHeartbeat } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
-import { createIdentityGuard, requireShellHeader } from "./identity.js";
+import { createIdentityGuard, requireShellHeader, readActorLogin } from "./identity.js";
+import { stampAuthor } from "./envelope.js";
 import type { SessionService } from "./sessions.js";
 
 export interface IdentityDeps {
@@ -63,13 +64,16 @@ export function createServer(deps: {
   identity: IdentityDeps;
   workspace?: string;
   sessions?: SessionService;
+  sessionSubscribers?: Map<string, Set<Response>>;
+  now?: () => string;
 }): Express {
   const app = express();
 
   // session id -> SSE responses ("" is the pending bucket for new sessions).
-  const subscribers = new Map<string, Set<Response>>();
+  const subscribers = deps.sessionSubscribers ?? new Map<string, Set<Response>>();
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
+  const now = deps.now ?? (() => new Date().toISOString());
 
   // tailscale serve --set-path forwards the original URI, so requests routed
   // through the /agent mount arrive as e.g. /agent/messages. Normalize before
@@ -129,7 +133,17 @@ export function createServer(deps: {
     const turn: string | undefined =
       typeof turnId === "string" && turnId.length > 0 ? turnId : undefined;
 
+    // Server-derived, never from the body: the room must not be able to lie
+    // about who is speaking.
+    const author = readActorLogin(req, deps.identity.insecureDev);
+
     let targetId = inputId ?? "";
+
+    // The room sees the question the moment it is accepted. Only one client
+    // typed it, but everyone in the session is watching.
+    const message: AgentEvent = { type: "message", author, text: prompt, ts: now() };
+    for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, message);
+    if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, message);
 
     const onEvent = (e: AgentEvent) => {
       if (e.type === "session" && e.sessionId && e.sessionId !== targetId) {
@@ -150,7 +164,8 @@ export function createServer(deps: {
       }
     };
 
-    void deps.manager.run(prompt, inputId, onEvent);
+    // `prompt` stays raw for session titles; only the backend sees the envelope.
+    void deps.manager.run(stampAuthor(author, prompt), inputId, onEvent);
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });
   });

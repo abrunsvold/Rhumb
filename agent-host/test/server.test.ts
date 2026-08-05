@@ -305,4 +305,107 @@ describe("agent-host server", () => {
       expect((await request(app).post("/agent/messages").set(shellHeaders).send({ prompt: "hi" })).status).toBe(202);
     });
   });
+
+  it("broadcasts the human message to session subscribers before the turn runs", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      sessionSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
+      now: () => "2026-08-04T00:00:00Z",
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"message"');
+    expect(frames).toContain('"author":"dev@local"');
+    expect(frames).toContain('"text":"hi"');
+    expect(frames).toContain('"ts":"2026-08-04T00:00:00Z"');
+    // The message frame must precede the agent's own output.
+    expect(written.findIndex((f) => f.includes('"type":"message"')))
+      .toBeLessThan(written.findIndex((f) => f.includes('"type":"result"')));
+  });
+
+  it("uses the identity header as the message author", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      identity: { allowedUsers: ["op@example.com"], insecureDev: false },
+    });
+
+    await request(app)
+      .post("/messages")
+      .set("Tailscale-User-Login", "op@example.com")
+      .set("Sec-Rhumb-Control", "1")
+      .send({ sessionId: "s1", prompt: "hi" });
+
+    expect(written.join("")).toContain('"author":"op@example.com"');
+  });
+
+  it("ignores an author supplied in the request body", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app)
+      .post("/messages")
+      .send({ sessionId: "s1", prompt: "hi", author: "attacker@evil.com" });
+
+    const frames = written.join("");
+    expect(frames).toContain('"author":"dev@local"');
+    expect(frames).not.toContain("attacker@evil.com");
+  });
+
+  it("stamps the author into the prompt handed to the backend", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({
+      manager,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    expect(seen).toEqual(["[from: dev@local]\nhi"]);
+  });
+
+  it("titles the session from the raw prompt, without the envelope", async () => {
+    const titles: Array<[string, string]> = [];
+    const app = createServer({
+      manager: fakeManager([{ type: "session", sessionId: "s1" }]),
+      identity: { allowedUsers: [], insecureDev: true },
+      sessions: {
+        upsertFromTurn: (id: string, prompt: string) => titles.push([id, prompt]),
+        list: () => [],
+        rename: () => false,
+        archive: () => false,
+        readTranscript: () => null,
+      } as unknown as ReturnType<typeof createSessionService>,
+    });
+
+    await request(app).post("/messages").send({ prompt: "fix the header" });
+    expect(titles).toEqual([["s1", "fix the header"]]);
+  });
 });
