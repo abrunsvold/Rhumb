@@ -11,4 +11,7 @@ export interface TranscriptMessage {
   text: string;
   toolName?: string;
   toolInput?: unknown;
+  // Sender login, recovered from the `[from: ...]` envelope on user turns.
+  // Absent for agent output and for transcripts written before rooms existed.
+  author?: string;
 }

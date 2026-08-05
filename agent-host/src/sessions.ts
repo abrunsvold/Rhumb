@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import type { TranscriptMessage } from "./types.js";
+import { parseEnvelope } from "./envelope.js";
 
 export interface SessionMeta {
   id: string;
@@ -51,6 +52,12 @@ export function encodeProjectDir(cwd: string): string {
   return cwd.replace(/[/.]/g, "-");
 }
 
+// User turns arrive enveloped with their sender; agent output never is.
+function userMessage(text: string): TranscriptMessage {
+  const { author, text: body } = parseEnvelope(text);
+  return author ? { kind: "user", text: body, author } : { kind: "user", text: body };
+}
+
 function blockToMessages(record: Record<string, unknown>): TranscriptMessage[] {
   const type = record.type;
   if ((type !== "user" && type !== "assistant") || record.isSidechain === true) return [];
@@ -58,7 +65,7 @@ function blockToMessages(record: Record<string, unknown>): TranscriptMessage[] {
   const content = message?.content;
   const out: TranscriptMessage[] = [];
   if (typeof content === "string") {
-    if (type === "user" && content.length > 0) out.push({ kind: "user", text: content });
+    if (type === "user" && content.length > 0) out.push(userMessage(content));
     if (type === "assistant" && content.length > 0) out.push({ kind: "text", text: content });
     return out;
   }
@@ -67,7 +74,7 @@ function blockToMessages(record: Record<string, unknown>): TranscriptMessage[] {
     if (typeof block !== "object" || block === null) continue;
     const b = block as Record<string, unknown>;
     if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
-      out.push({ kind: type === "user" ? "user" : "text", text: b.text });
+      out.push(type === "user" ? userMessage(b.text) : { kind: "text", text: b.text });
     } else if (type === "assistant" && b.type === "tool_use" && typeof b.name === "string") {
       out.push({ kind: "tool", text: b.name, toolName: b.name, toolInput: b.input });
     }
