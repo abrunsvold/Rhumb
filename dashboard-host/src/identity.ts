@@ -25,3 +25,17 @@ export function requireShellHeader(): RequestHandler {
     res.status(403).json({ error: "shell only" });
   };
 }
+
+// In dev mode there is no `tailscale serve` and therefore no identity header,
+// but an approval still needs an actor. One fixed sentinel is clearer than a
+// per-request guess. Mirrors agent-host/src/identity.ts.
+export const DEV_ACTOR = "dev@local";
+
+export function readActorLogin(
+  req: { get(name: string): string | undefined },
+  insecureDev: boolean,
+): string {
+  const login = req.get("tailscale-user-login")?.trim().toLowerCase() ?? "";
+  if (login) return login;
+  return insecureDev ? DEV_ACTOR : "";
+}

@@ -32,4 +32,7 @@ export interface AuditEntry {
   rowCount?: number;
   error?: string;
   auth?: "approval" | "trust";
+  // Who approved this write. Set only when auth === "approval": a trust-path
+  // execution has no human in the loop, so an actor there would be a lie.
+  actor?: string;
 }

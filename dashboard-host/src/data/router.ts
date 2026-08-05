@@ -14,6 +14,7 @@ export interface DataRouterDeps {
   now: () => string;
   pendingGuard: RequestHandler;
   resolveToken: (token: string) => string | null;
+  actorOf?: (req: Request) => string;
 }
 
 export function createDataRouter(deps: DataRouterDeps): Router {
@@ -94,7 +95,7 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     if (decision !== "approve" && decision !== "deny") return void res.status(400).json({ error: "bad decision" });
     const pending = deps.queue.list().find((w) => w.pendingId === req.params.id);
     try {
-      await deps.queue.resolve(req.params.id, decision);
+      await deps.queue.resolve(req.params.id, decision, deps.actorOf?.(req) ?? "");
     } catch (err) {
       console.error(`[data] resolve failed for ${req.params.id}:`, err);
       return void res.status(500).json({ error: "resolve failed" });

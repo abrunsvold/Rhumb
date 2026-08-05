@@ -15,11 +15,13 @@ export async function executeWrite(
   op: DataOp,
   surfaceId: string | null,
   auth: "approval" | "trust",
+  actor?: string,
 ): Promise<{ rowCount: number }> {
   try {
     const result = await deps.getExecutor(source).run(buildSql(op));
     appendAudit(deps.auditPath, {
       ts: deps.now(), source, surfaceId, op, decision: "executed", rowCount: result.rowCount, auth,
+      ...(auth === "approval" && actor ? { actor } : {}),
     });
     return { rowCount: result.rowCount };
   } catch (err) {
@@ -64,15 +66,16 @@ export class PendingQueue {
     return [...this.pending.values()].filter((w) => this.status.get(w.pendingId)?.status === "pending");
   }
 
-  async resolve(pendingId: string, decision: "approve" | "deny"): Promise<void> {
+  async resolve(pendingId: string, decision: "approve" | "deny", actor?: string): Promise<void> {
     const w = this.pending.get(pendingId);
     if (!w || this.status.get(pendingId)?.status !== "pending") return;
     if (decision === "approve") {
-      const result = await executeWrite(this.deps, w.source, w.op, w.surfaceId, "approval");
+      const result = await executeWrite(this.deps, w.source, w.op, w.surfaceId, "approval", actor);
       this.status.set(pendingId, { status: "executed", result });
     } else {
       appendAudit(this.deps.auditPath, {
         ts: this.deps.now(), source: w.source, surfaceId: w.surfaceId, op: w.op, decision: "denied",
+        ...(actor ? { actor } : {}),
       });
       this.status.set(pendingId, { status: "denied" });
     }
