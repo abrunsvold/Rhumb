@@ -91,3 +91,20 @@ describe("user messages and slash commands", () => {
     expect(s.slashCommands).toEqual(["/compact", "/cost", "/review"]);
   });
 });
+
+describe("room events", () => {
+  it("leaves state untouched for message, queue, and presence in plan 1", () => {
+    const state = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
+    expect(
+      reduceAgent(state, {
+        type: "message",
+        author: "op@example.com",
+        text: "hi",
+        ts: "2026-08-04T00:00:00Z",
+      }),
+    ).toBe(state);
+    expect(reduceAgent(state, { type: "queue", depth: 2 })).toBe(state);
+    expect(reduceAgent(state, { type: "presence", logins: ["op@example.com"] })).toBe(state);
+  });
+
+});

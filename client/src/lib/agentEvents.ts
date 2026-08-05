@@ -10,6 +10,8 @@ export interface TranscriptMessage {
   // yet — reducer reshaping to assign ids is out of scope here — so
   // consumers fall back to index (`m.id ?? i`), matching current behavior.
   id?: string;
+  // Sender login for user messages in a shared room. Rendering lands in plan 2.
+  author?: string;
 }
 
 export interface AgentState {
@@ -74,5 +76,11 @@ export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
       if (extracted.length === 0) return state;
       return { ...state, messages: [...state.messages, ...extracted] };
     }
+    // Plan 1 mirrors the wire contract so the packages stay in sync and the
+    // switch stays exhaustive. Rendering these is plan 2.
+    case "message":
+    case "queue":
+    case "presence":
+      return state;
   }
 }
