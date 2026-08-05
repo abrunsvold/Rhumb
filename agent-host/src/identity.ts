@@ -25,3 +25,21 @@ export function requireShellHeader(): RequestHandler {
     res.status(403).json({ error: "shell only" });
   };
 }
+
+// In dev mode there is no `tailscale serve` and therefore no identity header,
+// but a room still needs an author for every turn. One fixed sentinel is
+// clearer than a per-request guess.
+export const DEV_ACTOR = "dev@local";
+
+// Derives who is acting from the same header `createIdentityGuard` authenticates
+// against, which is why it cannot be forged: serve injects it and strips any
+// caller-supplied Tailscale-* headers. Callers never accept an author from the
+// request body.
+export function readActorLogin(
+  req: { get(name: string): string | undefined },
+  insecureDev: boolean,
+): string {
+  const login = req.get("tailscale-user-login")?.trim().toLowerCase() ?? "";
+  if (login) return login;
+  return insecureDev ? DEV_ACTOR : "";
+}
