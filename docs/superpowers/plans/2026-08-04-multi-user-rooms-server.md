@@ -1926,14 +1926,10 @@ describe("room events", () => {
     expect(reduceAgent(state, { type: "presence", logins: ["op@example.com"] })).toBe(state);
   });
 
-  it("carries an author on a transcript message", () => {
-    const msg: TranscriptMessage = { kind: "user", text: "hi", author: "op@example.com" };
-    expect(msg.author).toBe("op@example.com");
-  });
 });
 ```
 
-Add `TranscriptMessage` to the existing type import from `../src/lib/agentEvents` if it is not already imported.
+`TranscriptMessage.author` needs no test of its own: it is a compile-time addition, and a runtime assertion on a literal object would assert nothing. The reducer test above already fails to compile if either the union or the field is missing.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1978,7 +1974,7 @@ and add pass-through cases at the end of the `reduceAgent` switch, after `case "
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd client && npm test`
-Expected: PASS — 2 new tests plus every pre-existing test.
+Expected: PASS — 1 new test plus every pre-existing test.
 
 - [ ] **Step 5: Commit**
 
