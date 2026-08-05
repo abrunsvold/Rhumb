@@ -62,6 +62,32 @@ export function fleetGatedToolNames(): string[] {
  *  publish and that the gate genuinely matches it. */
 const FLEET_SPAWN_TOOL = "mcp__fleet__spawn";
 
+/** The tool names an SDK MCP server will actually publish, read off the live
+ *  `McpServer` instance and prefixed the way the SDK does
+ *  (`mcp__<server>__<tool>` — `cli.js` derives exactly that from the
+ *  connected server's name).
+ *
+ *  `_registeredTools` is the SDK's own internal map (the same field its
+ *  request handler reads, and the same one `test/fleet-server.test.ts` reads
+ *  for the identical purpose) — there is no public accessor. If it is ever
+ *  absent or reshaped by an SDK upgrade this THROWS rather than assuming the
+ *  constants are right: an unverifiable registration is not a verified one,
+ *  the same posture `assertMngrPrerequisites` takes toward an undetectable
+ *  bash version. The cost of being wrong the other way is an ungated spawn. */
+function registeredFleetToolNames(server: { name: string; instance?: unknown }): string[] {
+  const tools = (server.instance as { _registeredTools?: unknown } | undefined)?._registeredTools;
+  if (!tools || typeof tools !== "object") {
+    throw new Error(
+      "fleet wiring: cannot read the fleet MCP server's registered tools " +
+        "(@anthropic-ai/claude-agent-sdk's internal `_registeredTools` is missing or reshaped, " +
+        "likely an SDK upgrade). The boot check that keeps mcp__fleet__spawn gated cannot be " +
+        "performed, so the fleet refuses to start; update registeredFleetToolNames in index.ts, " +
+        "or unset RHUMB_FLEET_ENABLED to boot without the fleet.",
+    );
+  }
+  return Object.keys(tools as Record<string, unknown>).map((t) => `mcp__${server.name}__${t}`);
+}
+
 /** The `mcpServers` key to register the fleet server under — read off the
  *  server the SDK actually constructed, never written as a literal here.
  *
@@ -74,17 +100,27 @@ const FLEET_SPAWN_TOOL = "mcp__fleet__spawn";
  *  deferred this as "not exploitable while nothing consumes the constants";
  *  this file consumes them, so it is.
  *
- *  Binding it in two directions:
+ *  Binding it in three directions:
  *   1. the key IS the name the server was constructed with, so the key can
  *      never drift from the construction site;
  *   2. this throws at BOOT (not at spawn time, and not only in a test) if
  *      any name in `FLEET_TOOL_NAMES` does not carry that server's prefix,
  *      or if a gated name is not one of them — i.e. if a rename on either
- *      side has left the gate pointing at a tool that does not exist.
+ *      side has left the gate pointing at a tool that does not exist;
+ *   3. the names are checked against what the server ACTUALLY REGISTERED,
+ *      not just against each other. Checks 1-2 only compare constants: rename
+ *      the tool literal inside `createFleetServer` (`tool("spawn", …)` →
+ *      `tool("dispatch", …)`) and leave `FLEET_TOOL_NAMES` alone, and both
+ *      pass while the SDK publishes `mcp__fleet__dispatch` — a name in
+ *      neither `allowedTools` nor the gated set, so `makeFleetCanUseTool`
+ *      falls through to ALLOW. Same hole as the server-name axis, one level
+ *      down. `registeredFleetToolNames` closes it by reading the real
+ *      registration.
  *
  *  Fails closed by refusing to boot: an ungated `spawn` is worse than a
- *  host that will not start. */
-export function fleetServerKey(server: { name: string }): string {
+ *  host that will not start, and the fleet is opt-in
+ *  (`RHUMB_FLEET_ENABLED`), so the escape hatch is one env var away. */
+export function fleetServerKey(server: { name: string; instance?: unknown }): string {
   const prefix = `mcp__${server.name}__`;
   if (!GATED_FLEET_TOOL_NAMES.has(FLEET_SPAWN_TOOL)) {
     throw new Error(
@@ -109,6 +145,29 @@ export function fleetServerKey(server: { name: string }): string {
     throw new Error(
       `fleet wiring: gated tool name(s) ${unknown.join(", ")} are not among the fleet's own tools ` +
         `(${FLEET_TOOL_NAMES.join(", ")}) — the gate would match nothing.`,
+    );
+  }
+
+  // Direction 3: what the server really registered, prefixed the way the SDK
+  // will publish it.
+  const registered = registeredFleetToolNames(server);
+  const missing = (FLEET_TOOL_NAMES as readonly string[]).filter((n) => !registered.includes(n));
+  const surprise = registered.filter((n) => !(FLEET_TOOL_NAMES as readonly string[]).includes(n));
+  if (missing.length > 0 || surprise.length > 0) {
+    throw new Error(
+      `fleet wiring: the fleet MCP server publishes [${registered.join(", ") || "nothing"}] but ` +
+        `FLEET_TOOL_NAMES says [${FLEET_TOOL_NAMES.join(", ")}]` +
+        (missing.length > 0 ? `; named-but-not-registered: ${missing.join(", ")}` : "") +
+        (surprise.length > 0 ? `; registered-but-unnamed: ${surprise.join(", ")}` : "") +
+        ". A tool was renamed or added without updating the constants, so a published tool would " +
+        "be neither allow-listed nor gated — i.e. it would run with no operator approval.",
+    );
+  }
+  const ungated = [...GATED_FLEET_TOOL_NAMES].filter((n) => !registered.includes(n));
+  if (ungated.length > 0) {
+    throw new Error(
+      `fleet wiring: gated tool name(s) ${ungated.join(", ")} are not registered on the server ` +
+        `(it publishes [${registered.join(", ") || "nothing"}]) — the gate would match nothing.`,
     );
   }
   return server.name;
@@ -493,6 +552,17 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // path the operator's conversation is not a principal at all and `null`
     // is the honest answer, not a placeholder. `depth` stays 0 either way —
     // an operator conversation is a root whether or not it has a principal.
+    //
+    // IN THIS SLICE THE NON-NULL BRANCH IS UNREACHABLE, and the code is kept
+    // deliberately anyway. `foregroundAgentId` is only assigned on the mngr
+    // path — and on that path the fleet MCP server cannot cross the mngr CLI
+    // boundary, so the model cannot call `mcp__fleet__spawn` at all. Where
+    // the fleet IS reachable (sdk foreground), there is no principal to
+    // name. So every audited spawn today records `parentAgentId: null`, and
+    // it is null for the correct reason. The wiring stays because the first
+    // backend that carries in-process MCP servers to a mngr agent makes it
+    // live, and a lineage field that was hardcoded null would silently stay
+    // wrong at exactly that moment.
     const fleetServer = createFleetServer(auditedOps, () => ({
       parentAgentId: foregroundAgentId(),
       depth: 0,
@@ -695,16 +765,35 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   }
   app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));
 
+  // The RESOLVED fleet state, not the operator's request for one: enabled but
+  // missing mngr prerequisites is `false` here. Published the same way the
+  // watchdog is so `main()` can report what is actually true — a startup line
+  // that says "ENABLED" immediately after "fleet tools unavailable" is worse
+  // than no line at all.
+  app.locals.fleetAvailable = fleetAvailable;
+
   if (deps.config.watchdogMinutes) {
     // A second manager over the same query fn, differing only in tool policy:
     // mutation is structurally impossible (see watchdogDisallowedTools).
+    //
+    // The unattended session's permission callback is chosen EXPLICITLY, never
+    // inherited: spreading `sessionExtraOptions` would hand it whatever the
+    // interactive path happens to use, which since the fleet block is a gate
+    // whose non-fleet fall-through answers `allow` for everything. That is a
+    // deliberate, announced trade for the OPERATOR'S session (see
+    // makeFleetCanUseTool); it is not one anybody chose for an unattended one.
+    // So the inherited key is dropped here and re-set only when a
+    // watchdog-specific gate exists — leaving a watchdog on a non-infra box
+    // with exactly the permission policy it had before the fleet existed.
+    const watchdogInherited: Record<string, unknown> = { ...sessionExtraOptions };
+    delete watchdogInherited.canUseTool;
     const watchdogManager = new SessionManager({
       query: deps.query,
       model: deps.config.provider.model,
       workspace: deps.config.workspace,
       permissionMode: deps.config.permissionMode,
       extraOptions: {
-        ...sessionExtraOptions,
+        ...watchdogInherited,
         // The fleet is never carried into an UNATTENDED session — belt
         // (drop the server, so the tools do not exist) and braces (name them
         // disallowed anyway). Two independent reasons: spawning background
@@ -716,7 +805,9 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         ...(watchdogMcpServers ? { mcpServers: watchdogMcpServers } : {}),
         disallowedTools: [...watchdogDisallowedTools(), ...FLEET_TOOL_NAMES],
         // Parked gate: proposals queue for approval instead of blocking the
-        // unattended turn. Only present when infra is configured at all.
+        // unattended turn. Only present when infra is configured at all — and
+        // when it is not, the key stays ABSENT (not `undefined`), so the SDK
+        // sees no callback at all rather than one that answers `allow`.
         ...(watchdogCanUseTool ? { canUseTool: watchdogCanUseTool } : {}),
       },
     });
@@ -917,12 +1008,20 @@ export function main(): void {
   // Positive confirmation of a capability that is OFF by default: buildApp
   // warns when the fleet is enabled but unusable, and this says when it is
   // live. An operator should never have to guess whether the model on this
-  // host can create agents.
-  if (config.fleetEnabled) {
+  // host can create agents. Gated on what buildApp actually WIRED (enabled
+  // but missing mngr prerequisites is not "enabled"), and the approval claim
+  // is qualified rather than asserted when the permission mode makes the gate
+  // inert — the warning above it already says so, and the two lines must not
+  // contradict each other.
+  if (app.locals.fleetAvailable) {
     const c = config.fleetCaps;
+    const gate =
+      config.permissionMode === "bypassPermissions"
+        ? "spawns are NOT gated in this permission mode (see the warning above) but are audited"
+        : "every spawn requires operator approval";
     console.log(
       `[rhumb] fleet: model-directed spawning ENABLED (max ${c.maxPerSpawn}/spawn, ` +
-        `${c.maxConcurrent} concurrent, depth ${c.maxDepth}); every spawn requires operator approval`,
+        `${c.maxConcurrent} concurrent, depth ${c.maxDepth}); ${gate}`,
     );
   }
   const onListen = () => {

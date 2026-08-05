@@ -33,8 +33,8 @@ describe("fleetServerKey (registration key <-> gated names binding)", () => {
   });
 
   it("every gated name is a tool the constructed server really registers", () => {
-    // Same private-field read `test/fleet-server.test.ts` uses — this is the
-    // only channel to what the SDK will publish.
+    // Same private-field read `fleetServerKey` and `test/fleet-server.test.ts`
+    // use — this is the only channel to what the SDK will publish.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const registered = Object.keys((server.instance as any)._registeredTools).map(
       (name) => `mcp__${fleetServerKey(server)}__${name}`,
@@ -43,11 +43,42 @@ describe("fleetServerKey (registration key <-> gated names binding)", () => {
     expect([...FLEET_TOOL_NAMES].sort()).toEqual(registered.sort());
   });
 
-  it("refuses to produce a key when the server name and the gated names disagree", () => {
-    // Exactly the drift the guard exists for: someone renames the MCP server
-    // (or the constants) and leaves the other side alone.
-    expect(() => fleetServerKey({ name: "swarm" })).toThrow(/renamed|never produce/);
-    expect(() => fleetServerKey({ name: "" })).toThrow();
+  it("refuses to produce a key when the SERVER NAME and the gated names disagree", () => {
+    // Someone renames the MCP server (or the constants) and leaves the other
+    // side alone.
+    expect(() => fleetServerKey({ name: "swarm", instance: server.instance })).toThrow(
+      /renamed|never produce/,
+    );
+    expect(() => fleetServerKey({ name: "", instance: server.instance })).toThrow();
+  });
+
+  // F1-residual: the axis the constants-only check could not see. Renaming
+  // `tool("spawn", …)` to `tool("dispatch", …)` inside createFleetServer and
+  // leaving FLEET_TOOL_NAMES alone passes every constant-to-constant check,
+  // while the SDK publishes a tool that is in neither allowedTools nor the
+  // gated set — i.e. an ungated spawn on a green boot.
+  it("refuses to produce a key when the REGISTERED TOOL NAMES disagree with the constants", () => {
+    const renamedTool = {
+      name: "fleet",
+      instance: { _registeredTools: { dispatch: {}, check: {}, collect: {} } },
+    };
+    expect(() => fleetServerKey(renamedTool)).toThrow(/registered-but-unnamed|named-but-not-registered/);
+
+    // An ADDED tool is just as bad: published, but neither allow-listed nor
+    // gated.
+    const extraTool = {
+      name: "fleet",
+      instance: { _registeredTools: { spawn: {}, check: {}, collect: {}, nuke: {} } },
+    };
+    expect(() => fleetServerKey(extraTool)).toThrow(/registered-but-unnamed/);
+  });
+
+  it("refuses to produce a key when the registration cannot be read at all", () => {
+    // An SDK upgrade that reshapes `_registeredTools`: unverifiable is not
+    // verified, so the fleet refuses to start rather than trusting the
+    // constants.
+    expect(() => fleetServerKey({ name: "fleet" })).toThrow(/_registeredTools/);
+    expect(() => fleetServerKey({ name: "fleet", instance: {} })).toThrow(/_registeredTools/);
   });
 });
 
