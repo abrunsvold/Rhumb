@@ -21,6 +21,18 @@ describe("loadFleetCaps", () => {
     expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_CONCURRENT: "0" })).toThrow(/RHUMB_FLEET_MAX_CONCURRENT/);
     expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_DEPTH: "-1" })).toThrow(/RHUMB_FLEET_MAX_DEPTH/);
   });
+
+  it("rejects malformed-but-parseInt-truncatable values instead of silently truncating (F1)", () => {
+    // "3.7" would parseInt to 3, "1e3" would parseInt to 1 (not 1000!),
+    // "5abc" would parseInt to 5, "+5" would parseInt to 5. All of these must
+    // throw, naming the offending variable, rather than silently accepting a
+    // truncated/misleading number.
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_PER_SPAWN: "3.7" })).toThrow(/RHUMB_FLEET_MAX_PER_SPAWN/);
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_PER_SPAWN: "1e3" })).toThrow(/RHUMB_FLEET_MAX_PER_SPAWN/);
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_PER_SPAWN: "5abc" })).toThrow(/RHUMB_FLEET_MAX_PER_SPAWN/);
+    // Deliberate choice: a leading "+" is rejected — only bare digits are accepted.
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_PER_SPAWN: "+5" })).toThrow(/RHUMB_FLEET_MAX_PER_SPAWN/);
+  });
 });
 
 describe("checkCaps — boundaries", () => {

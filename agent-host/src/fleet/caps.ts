@@ -9,11 +9,23 @@ export interface FleetCaps {
 
 const DEFAULTS: FleetCaps = { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 };
 
+// Strict: the whole trimmed value must be one or more ASCII digits. This
+// rejects "3.7" (truncation), "1e3" (parseInt stops at "e", silently giving
+// 1 instead of 1000), "5abc" (trailing garbage), and a leading "+" (not
+// accepted — callers must write bare digits). Number.parseInt alone accepts
+// all of these and *silently truncates toward a smaller cap*, which is safe
+// (never bypasses a limit) but is a real operator footgun: a typo'd env var
+// produces a wrongly-small cap with no diagnostic pointing at the typo.
+const DIGITS_ONLY = /^\d+$/;
+
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name]?.trim();
   if (!raw) return fallback;
+  if (!DIGITS_ONLY.test(raw)) {
+    throw new Error(`${name} must be a positive integer, got "${raw}".`);
+  }
   const n = Number.parseInt(raw, 10);
-  if (!Number.isInteger(n) || n < 1) {
+  if (n < 1) {
     throw new Error(`${name} must be a positive integer, got "${raw}".`);
   }
   return n;
@@ -62,5 +74,13 @@ export function capBreachMessage(b: CapBreach): string {
       return `fleet: would bring ${b.actual} agents live, limit ${b.limit} concurrent`;
     case "depth":
       return `fleet: spawn would reach depth ${b.actual}, limit ${b.limit}`;
+    default: {
+      // Exhaustiveness guard: if CapBreach["cap"] gains a variant and this
+      // switch isn't updated, this line fails to compile (no noImplicitReturns
+      // in tsconfig, so an unhandled case would otherwise return `undefined`
+      // silently at runtime instead of a string).
+      const _exhaustive: never = b.cap;
+      throw new Error(`capBreachMessage: unhandled cap "${_exhaustive}"`);
+    }
   }
 }
