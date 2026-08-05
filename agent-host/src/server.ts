@@ -125,12 +125,26 @@ export function createServer(deps: {
     deps.queue ??
     createTurnQueue({
       onDepth: (lane, depth) => {
-        for (const r of subscribers.get(roomKey(lane)) ?? []) {
-          writeSseEvent(r, { type: "queue", depth });
-        }
+        // Room target must be resolved before any cleanup below, which can
+        // remove the very laneSession entry roomKey(lane) would otherwise use.
+        const room = roomKey(lane);
         // Depth zero means the lane is empty and idle: no queued turn can still
         // need this mapping, and the queue is about to drop the lane itself.
-        if (depth === 0) forgetLaneSession(lane);
+        // Cleanup runs before the broadcast loop (not after) so a throwing
+        // subscriber can never skip it and leave laneSession stale.
+        if (depth === 0) {
+          forgetLaneSession(lane);
+          // forgetLaneSession matches by session-id VALUE. When adoptSession's
+          // rekey was refused (both lanes running), laneSession still holds
+          // lane -> id but the queue never aliased `lane`, so this lane's own
+          // drain-to-zero never matches by value. Delete the lane's own key
+          // too, so that orphaned entry doesn't survive to misroute the next
+          // draft room.
+          laneSession.delete(lane);
+        }
+        for (const r of subscribers.get(room) ?? []) {
+          writeSseEvent(r, { type: "queue", depth });
+        }
       },
     });
 
@@ -252,7 +266,20 @@ export function createServer(deps: {
       // contract guarantees only that `run` RETURNS it. Adopting the return value
       // too means a backend that stays quiet cannot leave the next queued turn to
       // start a second session — the exact fork this queue exists to prevent.
-      adoptSession(await deps.manager.run(stampAuthor(author, prompt), resume, onEvent));
+      try {
+        adoptSession(await deps.manager.run(stampAuthor(author, prompt), resume, onEvent));
+      } catch (err) {
+        // queue.ts swallows this rejection by design (a failed turn must
+        // advance the lane, never wedge it) but the room still needs to know
+        // the turn died, or the sender's spinner never stops. Broadcast to the
+        // same two buckets `onEvent` writes to, then return so the queue moves
+        // on to the next turn.
+        const message = err instanceof Error ? err.message : String(err);
+        const errorEvent: AgentEvent = { type: "error", message };
+        for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, errorEvent);
+        if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, errorEvent);
+        return;
+      }
     });
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });

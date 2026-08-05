@@ -450,6 +450,68 @@ describe("agent-host server", () => {
     expect(b.status).toBe(202);
   });
 
+  it("broadcasts an error event when a turn rejects, and the next queued turn still runs", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        started.push(prompt);
+        if (started.length === 1) {
+          await firstGate;
+          throw new Error("boom");
+        }
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({ manager, sessionSubscribers, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none"]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"error"');
+    expect(frames).toContain('"message":"boom"');
+    // The queue advanced past the rejection: the second turn ran.
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("broadcasts a rejected turn's error to its /turns subscriber too", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const turnSubscribers = new Map<string, Set<import("express").Response>>();
+    turnSubscribers.set("t1", new Set([fakeRes]));
+
+    const manager = {
+      async run() {
+        throw new Error("turn exploded");
+      },
+    };
+
+    const app = createServer({ manager, turnSubscribers, identity: { allowedUsers: [], insecureDev: true } });
+
+    const res = await request(app).post("/messages").send({ turnId: "t1", prompt: "hi" });
+    expect(res.status).toBe(202);
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"error"');
+    expect(frames).toContain('"message":"turn exploded"');
+  });
+
   it("broadcasts queue depth and returns to zero when the lane drains", async () => {
     const written: string[] = [];
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
@@ -468,6 +530,9 @@ describe("agent-host server", () => {
     const frames = written.filter((f) => f.includes('"type":"queue"'));
     expect(frames.length).toBeGreaterThan(0);
     expect(frames[frames.length - 1]).toContain('"depth":0');
+    // A queue implementation that only ever emitted 0 would pass the assertion
+    // above alone; require a non-zero depth to have been broadcast first.
+    expect(frames.slice(0, -1).some((f) => !f.includes('"depth":0'))).toBe(true);
   });
 
   it("resumes the real session for a turn queued before the session id existed", async () => {
@@ -529,6 +594,62 @@ describe("agent-host server", () => {
     // Both are brand-new rooms. The second must not inherit the first room's
     // session through the shared "" draft bucket.
     expect(resumed).toEqual([undefined, undefined]);
+  });
+
+  it("does not leave a stale laneSession entry when rekey refuses to merge two running lanes", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((r) => { releaseB = r; });
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((r) => { releaseA = r; });
+
+    const manager = {
+      async run(_prompt: string, sessionId: string | undefined, onEvent: (e: AgentEvent) => void) {
+        resumed.push(sessionId);
+        if (sessionId === "sX") {
+          // Turn B: posted directly against the already-existing session "sX",
+          // and stays running (gated) so its lane is still live when A's
+          // adoptSession below tries to merge into it.
+          await gateB;
+          return "sX";
+        }
+        // Turn A: posted against the draft lane. Its session event names the
+        // id "sX" that another lane already owns and is currently running —
+        // adoptSession's rekey() call below must refuse to merge.
+        onEvent({ type: "session", sessionId: "sX" });
+        await gateA;
+        return "sX";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    // B starts and stays running on lane "sX" (gated on gateB).
+    await request(app).post("/messages").send({ sessionId: "sX", prompt: "b" });
+    // A starts on the draft "" lane and immediately adopts "sX" while B is
+    // still running: rekey("", "sX") refuses (both lanes running), but
+    // laneSession[""] = "sX" is still recorded.
+    await request(app).post("/messages").send({ prompt: "a" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual(["sX", undefined]);
+
+    // Let A finish. Its "" lane drains to zero while B (and "sX") is still
+    // running — the exact un-aliased-lane-drain case the fix cleans up.
+    releaseA();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // A brand-new draft-room turn must not resume the stale "sX" mapping left
+    // behind by the "" lane's drain.
+    await request(app).post("/messages").send({ prompt: "c" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    releaseB();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(resumed).toEqual(["sX", undefined, undefined]);
   });
 
   it("adopts the session id returned by a backend that emits no session event", async () => {

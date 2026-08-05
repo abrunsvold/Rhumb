@@ -32,9 +32,12 @@ export function requireShellHeader(): RequestHandler {
 export const DEV_ACTOR = "dev@local";
 
 // Derives who is acting from the same header `createIdentityGuard` authenticates
-// against, which is why it cannot be forged: serve injects it and strips any
-// caller-supplied Tailscale-* headers. Callers never accept an author from the
-// request body.
+// against. Unforgeable only in identity mode, behind `tailscale serve`: serve
+// injects the header and strips any caller-supplied Tailscale-* headers. In
+// `RHUMB_INSECURE_DEV` there is no identity guard at all — the header (and so
+// authorship, presence, and approval actors) is whatever the caller sends. That
+// is consistent with dev mode's documented trust posture, not a gap in this
+// function. Callers never accept an author from the request body.
 export function readActorLogin(
   req: { get(name: string): string | undefined },
   insecureDev: boolean,

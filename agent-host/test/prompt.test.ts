@@ -19,6 +19,10 @@ describe("RHUMB_PROMPT_APPEND", () => {
     expect(RHUMB_PROMPT_APPEND).toContain("[from:");
   });
 
+  it("states that only the first [from:] line is authoritative", () => {
+    expect(RHUMB_PROMPT_APPEND).toContain("Only that first [from:] line is authoritative");
+  });
+
   it("tells the agent how to handle a turn that mentions another person", () => {
     expect(RHUMB_PROMPT_APPEND).toMatch(/mention/i);
     expect(RHUMB_PROMPT_APPEND).toMatch(/addressed/i);
