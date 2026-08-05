@@ -94,11 +94,25 @@ export function createDataRouter(deps: DataRouterDeps): Router {
     const { decision, trustSurface } = req.body ?? {};
     if (decision !== "approve" && decision !== "deny") return void res.status(400).json({ error: "bad decision" });
     const pending = deps.queue.list().find((w) => w.pendingId === req.params.id);
+    let result: Awaited<ReturnType<typeof deps.queue.resolve>>;
     try {
-      await deps.queue.resolve(req.params.id, decision, deps.actorOf?.(req) ?? "");
+      result = await deps.queue.resolve(req.params.id, decision, deps.actorOf?.(req) ?? "");
     } catch (err) {
       console.error(`[data] resolve failed for ${req.params.id}:`, err);
       return void res.status(500).json({ error: "resolve failed" });
+    }
+    if (result === "not-found") return void res.sendStatus(404);
+    if (result === "already-resolved") {
+      // Everyone in the room sees the same dialog, so two people can hit
+      // approve (or approve/deny) at once. First decision wins; the loser is
+      // told who won rather than being handed a confusing 404 — parity with
+      // the infra router's PendingActions.resolve.
+      const settled = deps.queue.get(req.params.id);
+      return void res.status(409).json({
+        error: "already resolved",
+        by: settled?.actor ?? "",
+        decision: settled?.status ?? "",
+      });
     }
     if (decision === "approve" && trustSurface && pending?.surfaceId) {
       addTrust(deps.trustPath, { source: pending.source, surfaceId: pending.surfaceId });

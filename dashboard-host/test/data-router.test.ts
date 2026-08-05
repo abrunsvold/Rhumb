@@ -295,4 +295,116 @@ describe("data router", () => {
     const line = JSON.parse(readFileSync(join(dir, "audit.jsonl"), "utf8").trim());
     expect(line).toMatchObject({ decision: "executed", op: { kind: "delete" }, auth: "approval" });
   });
+
+  describe("concurrent resolution of one pending write", () => {
+    // A gated executor holds the write's `run()` in flight so two concurrent
+    // /resolve requests genuinely race against the same in-memory entry,
+    // reproducing the two-approvers-execute-twice bug the fix closes.
+    function gatedApp() {
+      let releaseRun!: () => void;
+      const gate = new Promise<void>((r) => { releaseRun = r; });
+      const runCalls: unknown[] = [];
+      const gatedExecutor: QueryExecutor = {
+        async run(sql) {
+          runCalls.push(sql);
+          await gate;
+          return { rows: [], rowCount: 1 };
+        },
+      };
+      const auditPath = join(dir, "audit.jsonl");
+      const queue = new PendingQueue({ getExecutor: () => gatedExecutor, auditPath, now: () => "T", id: () => "p1" });
+      const router = createDataRouter({
+        getSources: () => sources, getExecutor: () => gatedExecutor, queue,
+        trustPath: join(dir, "trust.json"), auditPath, now: () => "T",
+        pendingGuard: createControlTokenGuard(undefined),
+        resolveToken: () => "d1",
+      });
+      const a = express(); a.use(express.json()); a.use("/data", router);
+      return { a, auditPath, runCalls, release: () => releaseRun() };
+    }
+
+    it("executes exactly once and produces exactly one executed audit entry; the loser gets 409", async () => {
+      const { a, auditPath, runCalls, release } = gatedApp();
+      const w = await request(a).post("/data/ops/write")
+        .set("Referer", "http://h/surfaces/d1/x")
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      const id = w.body.pendingId;
+
+      // Both approvals reach the gated executor before either resolves.
+      const p1 = request(a).post(`/data/pending/${id}/resolve`).send({ decision: "approve" });
+      const p2 = request(a).post(`/data/pending/${id}/resolve`).send({ decision: "approve" });
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      release();
+      const [r1, r2] = await Promise.all([p1, p2]);
+
+      const statuses = [r1.status, r2.status].sort();
+      expect(statuses).toEqual([200, 409]);
+      const loser = r1.status === 409 ? r1 : r2;
+      expect(loser.body.error).toBe("already resolved");
+
+      expect(runCalls).toHaveLength(1); // the write ran exactly once
+
+      const lines = readFileSync(auditPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(lines.filter((l) => l.decision === "executed")).toHaveLength(1);
+    });
+
+    it("an approve/deny interleaving does not audit a denied write that already executed", async () => {
+      const { a, auditPath, release } = gatedApp();
+      const w = await request(a).post("/data/ops/write")
+        .set("Referer", "http://h/surfaces/d1/x")
+        .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+      const id = w.body.pendingId;
+
+      const pApprove = request(a).post(`/data/pending/${id}/resolve`).send({ decision: "approve" });
+      const pDeny = request(a).post(`/data/pending/${id}/resolve`).send({ decision: "deny" });
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      release();
+      const [rApprove, rDeny] = await Promise.all([pApprove, pDeny]);
+
+      expect(rApprove.status).toBe(200);
+      expect(rDeny.status).toBe(409);
+
+      const lines = readFileSync(auditPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(lines.filter((l) => l.decision === "executed")).toHaveLength(1);
+      expect(lines.filter((l) => l.decision === "denied")).toHaveLength(0);
+    });
+
+    it("an unknown pending id still 404s", async () => {
+      const { a } = gatedApp();
+      const res = await request(a).post("/data/pending/nope/resolve").send({ decision: "approve" });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  it("attributes a resolved write to the Tailscale-User-Login header (F5)", async () => {
+    const auditPath = join(dir, "audit.jsonl");
+    let n = 0;
+    const now = () => "T";
+    const getExecutor = () => executor;
+    const queue = new PendingQueue({ getExecutor, auditPath, now, id: () => `p${++n}` });
+    const router = createDataRouter({
+      getSources: () => sources, getExecutor, queue,
+      trustPath: join(dir, "trust.json"), auditPath, now,
+      pendingGuard: createControlTokenGuard(undefined),
+      resolveToken: () => "d1",
+      actorOf: (req) => req.get("tailscale-user-login") ?? "",
+    });
+    const a = express(); a.use(express.json()); a.use("/data", router);
+
+    const w = await request(a).post("/data/ops/write")
+      .set("Referer", "http://h/surfaces/d1/x")
+      .send({ op: { kind: "insert", table: "t", values: { a: 1 } } });
+    const res = await request(a)
+      .post(`/data/pending/${w.body.pendingId}/resolve`)
+      .set("Tailscale-User-Login", "op@example.com")
+      .send({ decision: "approve" });
+
+    expect(res.status).toBe(200);
+    const line = JSON.parse(readFileSync(auditPath, "utf8").trim());
+    expect(line).toMatchObject({ decision: "executed", auth: "approval", actor: "op@example.com" });
+  });
 });

@@ -34,9 +34,15 @@ export async function executeWrite(
 }
 
 type Status =
-  | { status: "pending" }
-  | { status: "executed"; result: { rowCount: number } }
-  | { status: "denied" };
+  | { status: "pending"; actor?: string }
+  // Set synchronously, before executeWrite's await, the instant an approve is
+  // accepted — see PendingQueue.resolve for why.
+  | { status: "executing"; actor?: string }
+  | { status: "executed"; result: { rowCount: number }; actor?: string }
+  | { status: "denied"; actor?: string }
+  | { status: "failed"; actor?: string };
+
+export type ResolveResult = "ok" | "not-found" | "already-resolved";
 
 type Listener = (kind: "added" | "resolved", w: PendingWrite) => void;
 
@@ -66,20 +72,40 @@ export class PendingQueue {
     return [...this.pending.values()].filter((w) => this.status.get(w.pendingId)?.status === "pending");
   }
 
-  async resolve(pendingId: string, decision: "approve" | "deny", actor?: string): Promise<void> {
+  async resolve(pendingId: string, decision: "approve" | "deny", actor?: string): Promise<ResolveResult> {
     const w = this.pending.get(pendingId);
-    if (!w || this.status.get(pendingId)?.status !== "pending") return;
+    if (!w) return "not-found";
+    if (this.status.get(pendingId)?.status !== "pending") return "already-resolved";
     if (decision === "approve") {
-      const result = await executeWrite(this.deps, w.source, w.op, w.surfaceId, "approval", actor);
-      this.status.set(pendingId, { status: "executed", result });
+      // Transition out of "pending" synchronously, before the await below —
+      // executeWrite does a real (awaited) DB round trip, and two concurrent
+      // resolves must not both pass the pending check above and both run the
+      // write. A second resolve arriving during the await now sees
+      // "executing" (not "pending") at its own synchronous guard check and
+      // bails as "already-resolved", mirroring agent-host's PendingActions,
+      // which sets `settled = true` before its own async work.
+      this.status.set(pendingId, { status: "executing" });
+      try {
+        const result = await executeWrite(this.deps, w.source, w.op, w.surfaceId, "approval", actor);
+        this.status.set(pendingId, { status: "executed", result, ...(actor ? { actor } : {}) });
+      } catch (err) {
+        // executeWrite already appended an "error" audit entry and rethrows.
+        // Land on a terminal "failed" state rather than reverting to
+        // "pending" (a later resolve must not re-run this write) or silently
+        // reporting "executed".
+        this.status.set(pendingId, { status: "failed", ...(actor ? { actor } : {}) });
+        for (const fn of this.listeners) fn("resolved", w);
+        throw err;
+      }
     } else {
+      this.status.set(pendingId, { status: "denied", ...(actor ? { actor } : {}) });
       appendAudit(this.deps.auditPath, {
         ts: this.deps.now(), source: w.source, surfaceId: w.surfaceId, op: w.op, decision: "denied",
         ...(actor ? { actor } : {}),
       });
-      this.status.set(pendingId, { status: "denied" });
     }
     for (const fn of this.listeners) fn("resolved", w);
+    return "ok";
   }
 
   subscribe(fn: Listener): () => void {
