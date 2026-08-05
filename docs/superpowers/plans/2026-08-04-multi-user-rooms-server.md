@@ -2179,7 +2179,29 @@ and add pass-through cases at the end of the `reduceAgent` switch, after `case "
     case "queue":
     case "presence":
       return state;
+    default: {
+      // Still fails the build if a future AgentEvent variant goes unhandled —
+      // but never returns undefined at runtime, so a client older than the
+      // host ignores unknown events instead of crashing the tab.
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return state;
+    }
 ```
+
+**Post-merge update (final-wave fix F1):** the whole-branch review found that this
+shape white-screens an *older* client against a *newer* host: a build that
+predates a future `AgentEvent` variant hits no case, `switch` falls through
+with no `default`, and `reduceAgent` returns `undefined`, which
+`AgentPanel.tsx` then dereferences with no error boundary. The trailing
+`default` block above (with the `never`-typed exhaustiveness assert) is the
+shipped fix — it keeps the build-time guarantee for genuinely new variants
+while guaranteeing a runtime-safe `state` return for any type this switch
+doesn't otherwise recognize. Note that `message`/`queue`/`presence` keep their
+own explicit `return state;` cases rather than falling through into `default`
+themselves — TypeScript does not narrow a case's type away when it shares its
+body with `default` via fallthrough, so folding them together does not
+type-check against a `never` assert.
 
 - [ ] **Step 4: Run test to verify it passes**
 

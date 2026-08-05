@@ -213,11 +213,20 @@ obvious once there is more than one of you.
 
 All three derive from the same header as message authorship.
 
-**Double-approval race.** `PendingActions` already keeps a `settled` flag per
-entry, so the first decision wins and the second is a no-op. The only change is
-that the loser's response names the winner ("already approved by
-anderson@example.com") instead of failing bare. Everyone sees the outcome
-through the existing listener to SSE path.
+**Double-approval race.** `PendingActions` (agent-host, infra approvals) already
+kept a `settled` flag per entry, so the first decision wins and the second is a
+no-op. `PendingQueue` (dashboard-host, gated database writes) did **not**: its
+`resolve` awaited the actual write before flipping the entry out of `pending`,
+so two concurrent approvals could both pass the guard and both execute —
+duplicate rows, two `executed` audit entries. The final whole-branch review
+(finding F3) fixed this to match: `PendingQueue.resolve` now flips the entry to
+an `executing` status synchronously, before the write's `await`, exactly like
+`PendingActions` setting `settled = true` before its own async work. Both
+routers now return the same shape for the loser: the first decision wins, and
+the second gets `409 { error: "already resolved", by, decision }` naming the
+winner, instead of failing bare or (pre-fix, on the data path) silently
+re-running the write. Everyone sees the outcome through the existing listener
+to SSE path.
 
 ## Error handling
 
@@ -230,6 +239,7 @@ through the existing listener to SSE path.
 | SSE disconnect mid-turn | Existing heartbeat and reconnect; presence dedupes by login |
 | Transcript line with no envelope | Replays unattributed |
 | Spoofed `[from: ...]` first line | Renders as the spoofed author on replay only; live attribution unaffected |
+| Host is newer than the client (an `AgentEvent` variant the client build predates) | Client's `reduceAgent` ignores the unknown event and returns state unchanged (finding F1) rather than crashing the tab; new variants are additive by contract, so this is the expected steady state during a rolling upgrade |
 
 The dropped-queue behaviour is accepted rather than fixed. It matches how
 blocking approvals already expire on boot, and persisting the queue would mean
