@@ -408,4 +408,99 @@ describe("agent-host server", () => {
     await request(app).post("/messages").send({ prompt: "fix the header" });
     expect(titles).toEqual([["s1", "fix the header"]]);
   });
+
+  it("runs concurrent turns on one session strictly in order", async () => {
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        started.push(prompt);
+        if (started.length === 1) await firstGate;
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(started).toEqual(["[from: dev@local]\none"]);
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("still returns 202 while a turn is in flight", async () => {
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        await new Promise((r) => setTimeout(r, 20));
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const a = await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    const b = await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    expect(a.status).toBe(202);
+    expect(b.status).toBe(202);
+  });
+
+  it("broadcasts queue depth and returns to zero when the lane drains", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      sessionSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.filter((f) => f.includes('"type":"queue"'));
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[frames.length - 1]).toContain('"depth":0');
+  });
+
+  it("resumes the real session for a turn queued before the session id existed", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(
+        _prompt: string,
+        sessionId: string | undefined,
+        onEvent: (e: AgentEvent) => void,
+      ) {
+        resumed.push(sessionId);
+        if (resumed.length === 1) {
+          onEvent({ type: "session", sessionId: "s-real" });
+          await firstGate;
+        }
+        return "s-real";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    // Both posted against a draft room, before any session id exists.
+    await request(app).post("/messages").send({ prompt: "one" });
+    await request(app).post("/messages").send({ prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    // The queued turn must continue the session the first turn created, not
+    // start a second one.
+    expect(resumed).toEqual([undefined, "s-real"]);
+  });
 });

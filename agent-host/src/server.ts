@@ -7,6 +7,7 @@ import { createControlTokenGuard } from "./auth.js";
 import { createIdentityGuard, requireShellHeader, readActorLogin } from "./identity.js";
 import { stampAuthor } from "./envelope.js";
 import type { SessionService } from "./sessions.js";
+import { createTurnQueue, type TurnQueue } from "./queue.js";
 
 export interface IdentityDeps {
   allowedUsers: string[];
@@ -66,6 +67,7 @@ export function createServer(deps: {
   sessions?: SessionService;
   sessionSubscribers?: Map<string, Set<Response>>;
   now?: () => string;
+  queue?: TurnQueue;
 }): Express {
   const app = express();
 
@@ -74,6 +76,22 @@ export function createServer(deps: {
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
   const now = deps.now ?? (() => new Date().toISOString());
+
+  // Lane key -> the session id turns on that lane should resume. Populated when
+  // the first turn in a draft room emits its `session` event, so a turn queued
+  // before the id existed continues that session instead of starting a new one.
+  const laneSession = new Map<string, string>();
+  const roomKey = (lane: string): string => laneSession.get(lane) ?? lane;
+
+  const queue =
+    deps.queue ??
+    createTurnQueue({
+      onDepth: (lane, depth) => {
+        for (const r of subscribers.get(roomKey(lane)) ?? []) {
+          writeSseEvent(r, { type: "queue", depth });
+        }
+      },
+    });
 
   // tailscale serve --set-path forwards the original URI, so requests routed
   // through the /agent mount arrive as e.g. /agent/messages. Normalize before
@@ -137,35 +155,44 @@ export function createServer(deps: {
     // about who is speaking.
     const author = readActorLogin(req, deps.identity.insecureDev);
 
-    let targetId = inputId ?? "";
+    const lane = inputId ?? "";
 
     // The room sees the question the moment it is accepted. Only one client
     // typed it, but everyone in the session is watching.
     const message: AgentEvent = { type: "message", author, text: prompt, ts: now() };
-    for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, message);
+    for (const r of subscribers.get(roomKey(lane)) ?? []) writeSseEvent(r, message);
     if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, message);
 
-    const onEvent = (e: AgentEvent) => {
-      if (e.type === "session" && e.sessionId && e.sessionId !== targetId) {
-        const pending = subscribers.get(targetId);
-        if (pending) {
-          const dest = subsFor(subscribers, e.sessionId);
-          for (const r of pending) dest.add(r);
-          if (targetId === "") subscribers.delete("");
-        }
-        targetId = e.sessionId;
-      }
-      if (e.type === "session" && e.sessionId) {
-        deps.sessions?.upsertFromTurn(e.sessionId, prompt);
-      }
-      for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
-      if (turn) {
-        for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, e);
-      }
-    };
+    queue.enqueue(lane, async () => {
+      // Resolved at run time, not enqueue time: a turn queued against a draft
+      // room must resume whatever session the turn ahead of it created.
+      const resume = inputId ?? laneSession.get(lane);
+      let targetId = resume ?? "";
 
-    // `prompt` stays raw for session titles; only the backend sees the envelope.
-    void deps.manager.run(stampAuthor(author, prompt), inputId, onEvent);
+      const onEvent = (e: AgentEvent) => {
+        if (e.type === "session" && e.sessionId && e.sessionId !== targetId) {
+          const pending = subscribers.get(targetId);
+          if (pending) {
+            const dest = subsFor(subscribers, e.sessionId);
+            for (const r of pending) dest.add(r);
+            if (targetId === "") subscribers.delete("");
+          }
+          laneSession.set(lane, e.sessionId);
+          queue.rekey(lane, e.sessionId);
+          targetId = e.sessionId;
+        }
+        if (e.type === "session" && e.sessionId) {
+          deps.sessions?.upsertFromTurn(e.sessionId, prompt);
+        }
+        for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
+        if (turn) {
+          for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, e);
+        }
+      };
+
+      // `prompt` stays raw for session titles; only the backend sees the envelope.
+      await deps.manager.run(stampAuthor(author, prompt), resume, onEvent);
+    });
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });
   });
