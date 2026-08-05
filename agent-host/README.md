@@ -230,6 +230,20 @@ what happens to be installed).
 - **`collect`** fetches results, optionally waiting up to a caller-supplied
   timeout for agents still working to finish.
 
+**Every fleet agent runs IN PLACE in `RHUMB_WORKSPACE` — all of them, at
+once, in the same directory.** There is no worktree, no branch, and no
+per-agent copy: Rhumb passes `--transfer none` to `mngr create` (see
+"Workspace" above and `workspaceFlags` in `src/backends/mngr.ts` for why).
+So an 8-task `spawn` puts **eight Claude Code processes in one working tree
+simultaneously**, and they share it with the **foreground** agent too — the
+conversation that spawned them keeps editing the same files while they run.
+Nothing coordinates those writes: two agents told to edit the same file will
+clobber each other, and a foreground agent running `git checkout` or `npm
+install` does it underneath all of them. Point the fleet at tasks that touch
+disjoint files, or accept that you are running a shared-mutable-state
+experiment. **Never enable the fleet with `RHUMB_WORKSPACE` pointing at a
+checkout you care about.**
+
 **Approval.** `spawn` requires operator approval — the same confirmation
 dialog and audit log the infra tools use — but it is asked **once per batch**
 (one decision covers every task in that `spawn` call), not once per agent.
@@ -260,12 +274,26 @@ is what stops nested fleets from spawning without bound.
 
 **Current limitations, stated plainly:**
 
-- **`check` reports `"unknown"` for every agent, and `collect` can never
-  return a result.** Real liveness/finish-reason wiring hasn't landed yet —
-  the host currently wires both to stubs that always return "unknown." Once
-  real liveness wiring lands, `check` will report real progress
-  (`working`/`done`/`blocked`/`stopped`/`failed`) and `collect` will be able
-  to return actual answers.
+- **`check` cannot observe a running agent, and `collect` can never return a
+  result.** Real liveness/finish-reason wiring hasn't landed yet — the host
+  wires both to honest `null` stubs, so `check` reports `"unknown"` for every
+  agent that was actually created and is actually running. Two statuses do
+  still come back, and neither is progress: an agent whose `ensure` failed
+  (no mngr agent was ever bound) reports `"working"` — forever, since nothing
+  will ever bind it — and one that was explicitly stopped reports
+  `"stopped"`. `collect` only produces a result for status `"done"`, which
+  nothing can currently reach, so it always returns `result: null`. Inspect
+  spawned agents with the mngr CLI directly (`mngr list`, `mngr transcript
+  <name>`) until this lands. The tool descriptions the model sees say the
+  same thing. Once real liveness wiring lands, `check` will report real
+  progress (`working`/`done`/`blocked`/`stopped`/`failed`) and `collect` will
+  be able to return actual answers.
+- **`placement` is local-only, and says so.** A task may omit `placement` or
+  pass `"local"`/`"localhost"`; any other value is refused for that task with
+  `{ok: false, error: "placement is local-only in this release"}` and no
+  agent is created for it. The rest of the batch still spawns. (Earlier
+  builds accepted any `placement` and silently ran the agent on localhost
+  anyway.)
 - **`liveCount` never reaps.** Nothing currently retires a fleet-spawned
   agent's record once it finishes, so every agent ever spawned on a given
   `agents.json` keeps counting toward `RHUMB_FLEET_MAX_CONCURRENT` forever.
@@ -277,6 +305,33 @@ is what stops nested fleets from spawning without bound.
 - **Every mngr turn costs at least ~90 seconds.** Creating an agent and
   getting its first reply is not fast. The fleet is meant for background
   work you can check on later, not for interactive back-and-forth.
+
+**Enabling the fleet changes the FOREGROUND agent's permission behaviour on
+a box without infra configured.** This is the surprise nobody expects from a
+*spawning* feature, so read it before turning the fleet on.
+
+Rhumb only installs a tool-permission callback (`canUseTool`) when the infra
+tools are configured. On a box without Proxmox/pg-admin config there is
+normally **no** callback at all, and the SDK decides every tool call from
+`RHUMB_PERMISSION_MODE` alone. Enabling the fleet installs one — it has to,
+because that callback is how `mcp__fleet__spawn` gets approved. But passing a
+`canUseTool` makes the SDK launch the CLI with `--permission-prompt-tool
+stdio` (the `if (canUseTool)` branch of the argv builder in
+`@anthropic-ai/claude-agent-sdk/sdk.mjs`), which routes **every** tool
+decision — `Bash`, `Write`, `Edit`, everything, not just fleet tools —
+through Rhumb's callback. Rhumb answers `allow` for all of them, because the
+SDK's `PermissionResult` has only `allow` and `deny`, with no
+"defer to the default policy" variant: the only alternative would be denying
+every ordinary tool, which breaks the host.
+
+The practical effect on such a box: under `RHUMB_PERMISSION_MODE=acceptEdits`
+(the default) or `default`, tool calls the SDK would have gated are no longer
+gated once `RHUMB_FLEET_ENABLED=1`. The host prints a warning naming this at
+boot. Unset `RHUMB_FLEET_ENABLED` to restore the previous behaviour. On a box
+where infra **is** configured this does not apply — the fleet gate chains to
+the existing infra gate, and that box keeps exactly the policy it had. The
+scheduled watchdog is unaffected either way: it explicitly drops the
+inherited callback.
 
 **`RHUMB_PERMISSION_MODE=bypassPermissions` makes the approval gate inert.**
 The SDK skips the tool-approval callback entirely in that mode, so

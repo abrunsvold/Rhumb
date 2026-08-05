@@ -18,6 +18,44 @@ export const GATED_FLEET_TOOL_NAMES: ReadonlySet<string> = new Set(["mcp__fleet_
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true as const });
 
+/** THE BUILD LIMITATION, SAID ONCE, IN THE MODEL'S OWN TOOL DESCRIPTIONS
+ *  (final review, I1).
+ *
+ *  `src/index.ts` wires `createFleetOps`'s `liveness`/`lastFinishReason` to
+ *  `async () => null` — honest stubs, because real wiring hasn't landed. The
+ *  consequence chain is exact and worth stating rather than discovering:
+ *  `statusFor` (ops.ts) returns "unknown" for every bound agent, and
+ *  `resultFor` short-circuits on `status !== "done"` — so `check` cannot
+ *  report progress and `collect` cannot return a result, for any agent, ever,
+ *  in this build.
+ *
+ *  Without this text the tool descriptions promised the opposite (`check`
+ *  advertised the full status vocabulary; `collect` described returning real
+ *  results), and the realistic first live run was: spawn a fleet, poll until
+ *  the model concludes nothing is happening, give up — leaving real Claude
+ *  Code processes running in tmux on the operator's box, unobserved and (see
+ *  the spawn note below) with the concurrency cap permanently consumed. A
+ *  model that is TOLD the tool is blind can say so to the operator on turn
+ *  one instead.
+ *
+ *  Phrased as a CURRENT-BUILD limitation, never as the permanent contract:
+ *  the tools stay registered and their real semantics stay documented, so
+ *  when real liveness lands the edit is to delete these two constants and the
+ *  current-build sentences that concatenate them into the descriptions below
+ *  — the surrounding text is already correct for that day.
+ *  `test/fleet-server.test.ts` asserts both descriptions carry the limitation,
+ *  so the tools cannot quietly start over-promising again. */
+const NO_LIVENESS_IN_THIS_BUILD =
+  " *** LIMITATION OF THIS BUILD: agent liveness is not wired up yet, so this tool " +
+  "CANNOT SEE the agents. Status comes back as \"unknown\" for every agent, always — it does " +
+  "NOT mean the agent is broken, and polling will never change it. ";
+
+const INSPECT_WITH_MNGR =
+  "Spawned agents really do run and really do work; they just cannot be observed through this " +
+  "tool in this build. Tell the operator to inspect them directly with the mngr CLI " +
+  "(`mngr list`, `mngr transcript <name>`), and do not sit in a polling loop waiting for a " +
+  "status that cannot arrive. ***";
+
 /**
  * The `spawn` tool's zod schema intentionally accepts ONLY `tasks` — no
  * `depth`, no `parentAgentId`, not even as optional fields. `SpawnContext`
@@ -44,13 +82,36 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           "or {ok:false, error} — check ok per task, since some tasks in a batch " +
           "can fail to dispatch while others succeed. A spawned agent's own ability " +
           "to spawn further agents is subject to the operator's depth cap (default: " +
-          "no nested fleets). Requires operator approval before it runs.",
+          "no nested fleets). Requires operator approval before it runs. " +
+          // Final review, I1: the same current-build honesty the check/collect
+          // descriptions carry, aimed at the decision the model makes BEFORE
+          // spawning. Nothing retires a spawned agent's record, so every agent
+          // ever spawned on a given `agents.json` counts against the
+          // concurrency cap forever (ops.ts `liveCount` falls back to
+          // `active.length` while `liveness` is stubbed). A model that spends
+          // the cap on exploratory spawns bricks the fleet for the operator,
+          // permanently, and cannot even observe what it spent it on.
+          "*** LIMITATION OF THIS BUILD: spawned agents are never reaped. Each one you " +
+          "create permanently consumes a slot of the operator's concurrency cap (default 8) " +
+          "for the lifetime of this workspace — destroying the agent does not give the slot " +
+          "back. And because check/collect cannot observe agents in this build (see those " +
+          "tools), you will not be able to tell what a spawned agent did. Spawn only what the " +
+          "operator actually asked for; do not spend the cap exploring, and tell the operator " +
+          "they will need to inspect the results with the mngr CLI themselves. ***",
         {
           tasks: z
             .array(
               z.object({
                 prompt: z.string(),
-                placement: z.string().optional(),
+                placement: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "Where to run this agent. LOCAL ONLY in this release: omit it, or pass " +
+                      '"local"/"localhost". Any other value is REJECTED for that task with ' +
+                      "ok:false — the task is not spawned. There is no way to run a fleet agent " +
+                      "on another machine in this release, so do not pass a hostname.",
+                  ),
               }),
             )
             .describe(
@@ -75,7 +136,9 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
       tool(
         "check",
         "Cheap status check for previously spawned agents: working | done | blocked | stopped | failed | unknown. " +
-          "Safe to call repeatedly while waiting for a fleet to finish.",
+          "Safe to call repeatedly while waiting for a fleet to finish." +
+          NO_LIVENESS_IN_THIS_BUILD +
+          INSPECT_WITH_MNGR,
         { agentIds: z.array(z.string()) },
         async (args) => {
           try {
@@ -90,7 +153,12 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
         "Fetch results from previously spawned agents. Optionally waits up to waitMs " +
           "for agents still working to finish. Getting PARTIAL results back when the wait " +
           "expires is normal, not an error — agents still working come back with " +
-          "status 'working' and a null result; call collect again later for those ids.",
+          "status 'working' and a null result; call collect again later for those ids." +
+          NO_LIVENESS_IN_THIS_BUILD +
+          "Because the result is only ever produced for an agent whose status is \"done\", collect " +
+          "returns NO RESULTS AT ALL in this build — every entry comes back with status " +
+          "\"unknown\" and result null, and waiting longer cannot change that. " +
+          INSPECT_WITH_MNGR,
         { agentIds: z.array(z.string()), waitMs: z.number().optional() },
         async (args) => {
           try {

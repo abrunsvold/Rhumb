@@ -196,6 +196,56 @@ describe("fleet server", () => {
     expect(result.content[0].text).toContain("liveness probe failed");
   });
 
+  // Final review, I1: the descriptions used to tell the MODEL something
+  // better than the truth — `check` advertised the full status vocabulary and
+  // `collect` described returning real results, while src/index.ts wires
+  // liveness/lastFinishReason to `async () => null`, so `check` can only
+  // report "unknown" and `collect` can never return a result. A model that
+  // believes the old text spawns a fleet, polls forever, and gives up —
+  // leaving real Claude Code processes running unobserved on the operator's
+  // box with the concurrency cap spent. These assertions keep the tools from
+  // quietly over-promising again; they are expected to be updated (not
+  // deleted) in the same change that lands real liveness.
+  it("check's description states that status is always \"unknown\" in this build and points at mngr", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const description = (server.instance as any)._registeredTools["check"].description as string;
+    expect(description).toContain("LIMITATION OF THIS BUILD");
+    expect(description).toContain('"unknown"');
+    expect(description).toContain("mngr");
+  });
+
+  it("collect's description states that it returns no results in this build and points at mngr", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const description = (server.instance as any)._registeredTools["collect"].description as string;
+    expect(description).toContain("LIMITATION OF THIS BUILD");
+    expect(description).toContain("NO RESULTS AT ALL");
+    expect(description).toContain("mngr");
+  });
+
+  it("spawn's description warns that spawned agents are never reaped and permanently consume the cap", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const description = (server.instance as any)._registeredTools["spawn"].description as string;
+    expect(description).toContain("never reaped");
+    expect(description.toLowerCase()).toContain("concurrency cap");
+  });
+
+  // Final review, I2: `placement` is now REJECTED rather than silently
+  // discarded, so the schema must say so where the model reads it.
+  it("spawn's placement field is documented as local-only", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registered = (server.instance as any)._registeredTools["spawn"];
+    const schema = registered.inputSchema as z.ZodObject<Record<string, z.ZodTypeAny>>;
+    // z.array(z.object({...})) -> element shape
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const placement = (schema.shape.tasks as any).element.shape.placement;
+    expect(placement.description).toContain("LOCAL ONLY");
+    expect(placement.description).toContain("ok:false");
+  });
+
   it("spawn's description documents the per-task {ok,error} result shape", () => {
     const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

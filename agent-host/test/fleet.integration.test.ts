@@ -157,18 +157,30 @@ describe.skipIf(!available)("fleet (live, localhost)", () => {
       }
 
       // `check` must return a value from the real AgentStatus union for
-      // every id. With liveness/lastFinishReason hard-wired to null,
-      // `deriveAgentStatus` structurally cannot report anything but
-      // "unknown" for a bound agent (src/fleet/status.ts) — asserted
-      // explicitly below so this test documents, rather than hides, that
-      // ceiling. Written against the full union (not hardcoded to
-      // "unknown") so it keeps passing, unchanged, once real liveness
-      // wiring lands and starts returning "working"/"done"/etc.
+      // every id. This part is the DURABLE assertion: it holds whatever
+      // liveness reports, now or later.
       const statuses = await ops.check(ids);
       expect(statuses).toHaveLength(2);
       for (const s of statuses) {
         expect(ALL_STATUSES).toContain(s.status);
       }
+
+      // M4: the assertion below is a CURRENT-BUILD CEILING, not a durable
+      // invariant, and it is deliberately written to FAIL when that ceiling
+      // is lifted. With liveness/lastFinishReason hard-wired to null (the
+      // same stubs src/index.ts passes), `deriveAgentStatus` structurally
+      // cannot report anything but "unknown" for a bound agent
+      // (src/fleet/status.ts) — pinned here so this test documents the
+      // ceiling rather than hiding it, and so nobody can believe `check`
+      // works from a green live run. An earlier version of this comment
+      // claimed the assertion "keeps passing, unchanged, once real liveness
+      // wiring lands", which was never true of the line beneath it.
+      //
+      // WHEN REAL LIVENESS LANDS: delete this assertion (and the stub
+      // `liveness`/`lastFinishReason` above), replacing it with
+      // `status === "done"` plus a `collect` call asserting real result text.
+      // A failure here after that work is the expected, correct signal —
+      // not a flake.
       expect(statuses.every((s) => s.status === "unknown")).toBe(true);
     },
   );

@@ -46,12 +46,19 @@ import { syncSystem } from "./ontology/projector.js";
 import type { Express } from "express";
 
 /** The fleet tools that require operator approval before they run — exactly
- *  `mcp__fleet__spawn`. Exported as the thing the wiring actually consumes so
- *  a test can assert the host gates what `src/fleet/server.ts` says must be
- *  gated (and, just as importantly, that it does NOT gate the read-only
+ *  `mcp__fleet__spawn`.
+ *
+ *  A TEST-FACING accessor, and nothing more: `buildApp` and
+ *  `makeFleetCanUseTool` below read `GATED_FLEET_TOOL_NAMES` (the Set)
+ *  directly, so this array is not on any production path. It exists so a test
+ *  can assert the host gates what `src/fleet/server.ts` says must be gated
+ *  (and, just as importantly, that it does NOT gate the read-only
  *  `check`/`collect`: forcing an approval to poll trains an operator to click
  *  through, which is a worse security outcome than one well-presented
- *  decision on the action that actually creates agents). */
+ *  decision on the action that actually creates agents). Final review, M2: an
+ *  earlier version of this comment claimed to be "the thing the wiring
+ *  actually consumes", which was never true and would have made a test
+ *  asserting on it look like it was covering the wiring when it is not. */
 export function fleetGatedToolNames(): string[] {
   return [...GATED_FLEET_TOOL_NAMES];
 }
@@ -208,7 +215,23 @@ type CanUseTool = (toolName: string, input: Record<string, unknown>, opts: unkno
  *  **The non-fleet fall-through, and why it is `allow` (F4).** Installing a
  *  `canUseTool` at all routes EVERY tool decision through this callback,
  *  including on a box that previously had none, so the fall-through result
- *  replaces whatever `permissionMode` would have decided. The SDK's
+ *  replaces whatever `permissionMode` would have decided.
+ *
+ *  Final review: that is a widening of the FOREGROUND agent's permission
+ *  behaviour, not merely a fleet-shaped addition, and the mechanism is worth
+ *  naming precisely because an operator enabling a *spawning* feature would
+ *  not expect it. Passing `canUseTool` makes the SDK launch the CLI with
+ *  `--permission-prompt-tool stdio` (verified in
+ *  `@anthropic-ai/claude-agent-sdk/sdk.mjs` — the `if (canUseTool)` branch of
+ *  the argv builder), which routes every tool permission decision to this
+ *  callback over stdio. So on a fleet-enabled, infra-less box, an ordinary
+ *  `Bash` or `Write` call is answered `allow` by RHUMB — by the line below —
+ *  rather than by `RHUMB_PERMISSION_MODE`'s own policy. Under
+ *  `acceptEdits` or `default`, tool calls that the SDK would have gated are
+ *  no longer gated. This is documented in agent-host/README.md's
+ *  "Fleet (experimental)" section in the same terms, and warned about at boot.
+ *
+ *  It is not fixable here rather than merely disclosed: the SDK's
  *  `PermissionResult` is `{behavior:"allow"} | {behavior:"deny"}` — verified
  *  in `@anthropic-ai/claude-agent-sdk/entrypoints/sdk/coreTypes.d.ts`; there
  *  is NO "defer to the default policy" variant — so the only alternative to
@@ -778,10 +801,11 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     //
     // The unattended session's permission callback is chosen EXPLICITLY, never
     // inherited: spreading `sessionExtraOptions` would hand it whatever the
-    // interactive path happens to use, which since the fleet block is a gate
-    // whose non-fleet fall-through answers `allow` for everything. That is a
-    // deliberate, announced trade for the OPERATOR'S session (see
-    // makeFleetCanUseTool); it is not one anybody chose for an unattended one.
+    // interactive path happens to use, and once the fleet block above has run
+    // that is a gate whose non-fleet fall-through answers `allow` for
+    // everything. That is a deliberate, announced trade for the OPERATOR'S
+    // session (see makeFleetCanUseTool); it is not one anybody chose for an
+    // unattended one.
     // So the inherited key is dropped here and re-set only when a
     // watchdog-specific gate exists — leaving a watchdog on a non-infra box
     // with exactly the permission policy it had before the fleet existed.

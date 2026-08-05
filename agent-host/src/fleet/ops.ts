@@ -12,9 +12,48 @@ import { isTerminalFinishReason, EMPTY_COMPLETION_RESULT } from "../backends/mng
 
 export interface FleetTask {
   prompt: string;
-  /** mngr address suffix. Local-only in P1; the parameter exists so remote
-   *  placement widens this without a signature change. */
+  /** mngr address suffix. Local-only in this release — see
+   *  `placementRejection`, which REFUSES anything else per task rather than
+   *  accepting and discarding it. The parameter exists so remote placement
+   *  widens this without a signature change. */
   placement?: string;
+}
+
+/** Final review, I2: `placement` used to be declared on the tool schema,
+ *  typed here, and read by NOTHING. A model told "run these on the build box"
+ *  passed `placement: "buildbox"`, got `ok: true` back, and received
+ *  localhost agents — no error, no log line, no way to tell. The spec's
+ *  non-goal was "P1 accepts local only"; ACCEPTING AND IGNORING is not that,
+ *  it is silently doing something other than what was asked.
+ *
+ *  THE DELIBERATE DECISION ABOUT AN EXPLICITLY-LOCAL VALUE: `"local"` and
+ *  `"localhost"` (case- and whitespace-insensitive), and an omitted or empty
+ *  value, are ACCEPTED. Every other value is REJECTED for that task alone.
+ *  Accepting the explicit spelling is not the "accept and ignore" bug this
+ *  fixes: the request is HONOURED there — the agent really does run locally,
+ *  which is exactly what was asked — whereas any other value names a
+ *  placement this release cannot honour and must not silently downgrade to
+ *  localhost. Rejecting `"local"` too would have been defensible (nothing
+ *  reads the field, so arguably no value should be dignified), but it would
+ *  fail a model that asked for precisely what it gets, which teaches it
+ *  nothing except to stop passing the field.
+ *
+ *  Rejection is PER TASK, not per batch: a batch with one bad placement
+ *  still spawns its other tasks, matching the per-task `{ok,error}` contract
+ *  `SpawnOutcome` already has for dispatch failures. Rejected tasks mint no
+ *  principal and do NOT consume the per-spawn cap — they create no agent, so
+ *  charging them against a limit on created agents would be wrong. */
+const LOCAL_PLACEMENTS: ReadonlySet<string> = new Set(["local", "localhost"]);
+
+export const PLACEMENT_LOCAL_ONLY_ERROR = "placement is local-only in this release";
+
+/** The rejection message for a task's `placement`, or null when it is one
+ *  this release can honour. */
+function placementRejection(placement: string | undefined): string | null {
+  if (placement === undefined) return null;
+  const normalized = placement.trim().toLowerCase();
+  if (normalized === "" || LOCAL_PLACEMENTS.has(normalized)) return null;
+  return `${PLACEMENT_LOCAL_ONLY_ERROR} (rejected placement ${JSON.stringify(placement)}; omit it, or pass "local")`;
 }
 
 export type SpawnOutcome = { ok: true; agentId: string } | { ok: false; error: string };
@@ -242,9 +281,42 @@ export function createFleetOps(deps: {
     return count;
   }
 
+  /** Final review, I5: is this agentId one the FLEET may report on?
+   *
+   *  `check`/`collect` are ungated (deliberately — see
+   *  `GATED_FLEET_TOOL_NAMES`'s doc comment in server.ts) and take model-
+   *  supplied ids, and they used to do a bare `registry.get(agentId)` with no
+   *  assertion that the id belongs to a fleet child at all. The registry is
+   *  shared with the `RHUMB_AGENT_BACKEND=mngr` foreground path (ONE instance
+   *  per process over one `agents.json` — see src/index.ts), so it also holds
+   *  the OPERATOR's own conversation principals. Nothing stopped the model
+   *  from naming one of those and having `collect` hand back its transcript's
+   *  final answer: a cross-conversation read, through an ungated tool, from
+   *  ids that are guessable-by-listing rather than secret.
+   *
+   *  Inert today only by accident — `resultFor` can never return while
+   *  liveness is stubbed — which is exactly why it is closed NOW, while it
+   *  costs one predicate, rather than discovered the day real liveness makes
+   *  it live.
+   *
+   *  `depth > 0` IS the test: `registry.create` stamps `ctx.depth + 1` on
+   *  every fleet child (`spawn` above), and the operator's own conversation is
+   *  always a root at depth 0 (the `ctx` thunk in src/index.ts hardcodes it,
+   *  and `agents.ts` normalises a legacy record with no `depth` to 0). So a
+   *  depth-0 record is never a fleet agent, and neither is an unknown id.
+   *  Both get the SAME answer an unknown id has always got — "unknown" /
+   *  `null` — rather than a distinguishable "not yours", so the tools do not
+   *  become an oracle for which ids exist. */
+  function isFleetChild(rec: AgentRecord | undefined): rec is AgentRecord {
+    return Boolean(rec && rec.depth > 0);
+  }
+
   async function statusFor(agentId: string): Promise<AgentStatus> {
     const rec = registry.get(agentId);
-    if (!rec) return "unknown";
+    // Final review, I5: the ownership check must come FIRST — ahead of the `stopped`
+    // branch below, which would otherwise still report on a depth-0
+    // principal.
+    if (!isFleetChild(rec)) return "unknown";
     if (rec.status === "stopped") {
       // Fix round 1, I3: a stopped (killed, or intentionally retired)
       // principal is neither "done" nor equivalent to one — "done" implies
@@ -292,7 +364,12 @@ export function createFleetOps(deps: {
     if (status !== "done") return null;
 
     const rec = registry.get(agentId);
-    if (!rec?.nativeId) return null; // unbound principal: nothing to read.
+    // Final review, I5: re-asserted here rather than leaned on `statusFor` having already
+    // refused — this function reads a TRANSCRIPT, so it must not depend on a
+    // caller elsewhere in the file having checked ownership first. See
+    // `isFleetChild`.
+    if (!isFleetChild(rec)) return null;
+    if (!rec.nativeId) return null; // unbound principal: nothing to read.
 
     const msgs = await backend.transcript({ agentId, nativeId: rec.nativeId, backend: "mngr" });
     if (msgs === null) return null; // unreadable transcript — indistinguishable
@@ -499,6 +576,22 @@ export function createFleetOps(deps: {
 
   return {
     async spawn(tasks, ctx) {
+      // Final review, I2: placement is screened FIRST — before the cap check and before any
+      // principal is minted — so a task this release cannot honour never
+      // creates an agent, never consumes a cap slot, and never reports
+      // `ok: true`. See `placementRejection` for which values are accepted
+      // and why. Indices are carried through so the returned array stays
+      // positionally aligned with `tasks`: the model maps outcome N onto task
+      // N, and a batch with a rejected task in the middle must not shift the
+      // rest.
+      const rejections = new Map<number, SpawnOutcome>();
+      const admitted: Array<{ index: number; task: FleetTask }> = [];
+      tasks.forEach((task, index) => {
+        const rejection = placementRejection(task.placement);
+        if (rejection) rejections.set(index, { ok: false, error: rejection });
+        else admitted.push({ index, task });
+      });
+
       // Caps first: a breach rejects the WHOLE batch before any principal is
       // minted or any agent created. Partial application of a rejected spawn
       // would leave orphans the operator never approved — real processes on
@@ -508,16 +601,23 @@ export function createFleetOps(deps: {
       // inside `withMutex`, so a concurrently-running `spawn` cannot observe
       // a stale (pre-mutation) `liveCount`. See `createMutex`'s doc comment
       // for the exact race this closes.
+      // The cap check runs unconditionally, even when every task was
+      // placement-rejected and `requested` is 0: it can then only fire on
+      // `concurrent` (already over) or `depth`, neither of which would have
+      // spawned anything anyway, so running it costs nothing and keeps "every
+      // spawn call is cap-checked" a property with no exceptions to reason
+      // about.
       const created = await withMutex(async () => {
         const breach = checkCaps({
           caps,
-          requested: tasks.length,
+          requested: admitted.length,
           liveCount: await liveCount(),
           depth: ctx.depth,
         });
         if (breach) throw new Error(capBreachMessage(breach));
 
-        return tasks.map((task) => ({
+        return admitted.map(({ index, task }) => ({
+          index,
           task,
           rec: registry.create(mintName(), "mngr", {
             parentAgentId: ctx.parentAgentId,
@@ -530,7 +630,14 @@ export function createFleetOps(deps: {
       // comment. This runs OUTSIDE the mutex on purpose: a slow `ensure`
       // (real `mngr create` calls) must not block a DIFFERENT batch's cap
       // check, only the check-then-mint region itself needs to be atomic.
-      return Promise.all(created.map(({ task, rec }) => dispatchOne(task, rec)));
+      const outcomes = new Array<SpawnOutcome>(tasks.length);
+      for (const [index, rejection] of rejections) outcomes[index] = rejection;
+      await Promise.all(
+        created.map(async ({ index, task, rec }) => {
+          outcomes[index] = await dispatchOne(task, rec);
+        }),
+      );
+      return outcomes;
     },
 
     async check(agentIds) {
