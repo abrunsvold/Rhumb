@@ -503,4 +503,56 @@ describe("agent-host server", () => {
     // start a second one.
     expect(resumed).toEqual([undefined, "s-real"]);
   });
+
+  it("starts a fresh session for a new room after an earlier room finished", async () => {
+    const resumed: Array<string | undefined> = [];
+    const manager = {
+      async run(
+        _prompt: string,
+        sessionId: string | undefined,
+        onEvent: (e: AgentEvent) => void,
+      ) {
+        resumed.push(sessionId);
+        onEvent({ type: "session", sessionId: "s1" });
+        return "s1";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ prompt: "first chat" });
+    await new Promise((r) => setImmediate(r));
+    await request(app).post("/messages").send({ prompt: "second chat" });
+    await new Promise((r) => setImmediate(r));
+
+    // Both are brand-new rooms. The second must not inherit the first room's
+    // session through the shared "" draft bucket.
+    expect(resumed).toEqual([undefined, undefined]);
+  });
+
+  it("adopts the session id returned by a backend that emits no session event", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    // Emits nothing: the returned id is the only source of session identity.
+    const manager = {
+      async run(_prompt: string, sessionId: string | undefined) {
+        resumed.push(sessionId);
+        if (resumed.length === 1) await firstGate;
+        return "s-quiet";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ prompt: "one" });
+    await request(app).post("/messages").send({ prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined, "s-quiet"]);
+  });
 });

@@ -83,6 +83,18 @@ export function createServer(deps: {
   const laneSession = new Map<string, string>();
   const roomKey = (lane: string): string => laneSession.get(lane) ?? lane;
 
+  // The mapping must not outlive the lane. "" is a process-wide bucket shared by
+  // every room whose session id has not arrived yet, so a surviving
+  // laneSession[""] would make the NEXT new chat resume the previous chat's
+  // session and broadcast into its room. The queue drops its aliases on the same
+  // event (`dropLane` in queue.ts), and `subscribers` drops its "" bucket on
+  // re-key; this is the third map with that lifetime.
+  function forgetLaneSession(sessionId: string): void {
+    for (const [lane, id] of laneSession) {
+      if (id === sessionId) laneSession.delete(lane);
+    }
+  }
+
   const queue =
     deps.queue ??
     createTurnQueue({
@@ -90,6 +102,9 @@ export function createServer(deps: {
         for (const r of subscribers.get(roomKey(lane)) ?? []) {
           writeSseEvent(r, { type: "queue", depth });
         }
+        // Depth zero means the lane is empty and idle: no queued turn can still
+        // need this mapping, and the queue is about to drop the lane itself.
+        if (depth === 0) forgetLaneSession(lane);
       },
     });
 
@@ -169,19 +184,25 @@ export function createServer(deps: {
       const resume = inputId ?? laneSession.get(lane);
       let targetId = resume ?? "";
 
-      const onEvent = (e: AgentEvent) => {
-        if (e.type === "session" && e.sessionId && e.sessionId !== targetId) {
-          const pending = subscribers.get(targetId);
-          if (pending) {
-            const dest = subsFor(subscribers, e.sessionId);
-            for (const r of pending) dest.add(r);
-            if (targetId === "") subscribers.delete("");
-          }
-          laneSession.set(lane, e.sessionId);
-          queue.rekey(lane, e.sessionId);
-          targetId = e.sessionId;
+      // Move the room onto its real session id. Subscribers, the lane->session
+      // mapping, and the queue lane all follow together; calling it twice with
+      // the same id is a no-op.
+      const adoptSession = (id: string): void => {
+        if (!id || id === targetId) return;
+        const pending = subscribers.get(targetId);
+        if (pending) {
+          const dest = subsFor(subscribers, id);
+          for (const r of pending) dest.add(r);
+          if (targetId === "") subscribers.delete("");
         }
+        laneSession.set(lane, id);
+        queue.rekey(lane, id);
+        targetId = id;
+      };
+
+      const onEvent = (e: AgentEvent) => {
         if (e.type === "session" && e.sessionId) {
+          adoptSession(e.sessionId);
           deps.sessions?.upsertFromTurn(e.sessionId, prompt);
         }
         for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
@@ -191,7 +212,12 @@ export function createServer(deps: {
       };
 
       // `prompt` stays raw for session titles; only the backend sees the envelope.
-      await deps.manager.run(stampAuthor(author, prompt), resume, onEvent);
+      //
+      // The `session` event is the normal source of the id, but the AgentBackend
+      // contract guarantees only that `run` RETURNS it. Adopting the return value
+      // too means a backend that stays quiet cannot leave the next queued turn to
+      // start a second session — the exact fork this queue exists to prevent.
+      adoptSession(await deps.manager.run(stampAuthor(author, prompt), resume, onEvent));
     });
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });
