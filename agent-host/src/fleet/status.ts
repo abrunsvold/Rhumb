@@ -43,8 +43,8 @@ export function deriveAgentStatus(deps: {
       return "done";
 
     case "WAITING":
-      // WaitingReason enum: PERMISSIONS, UNKNOWN (== END_OF_TURN).
-      // See imbue/mngr/primitives.py:288-292.
+      // WaitingReason enum: PERMISSIONS, END_OF_TURN.
+      // See imbue/mngr/primitives.py:281-293.
       if (waitingReason === "PERMISSIONS") {
         // Tool-approval dialog: fleet must not collect answer yet.
         return "blocked";
@@ -73,10 +73,15 @@ export function deriveAgentStatus(deps: {
       return "stopped";
 
     default:
-      // AgentLifecycleState has no failure member. This branch is unreachable
-      // unless mngr's enum grows a failure state. Keep it here so the union
-      // type is complete; do not return "failed" from any other branch.
-      // eslint-disable-next-line @typescript-eslint/no-unreachable
-      return "failed";
+      // Unrecognized state (missing field, future enum member, or malformed
+      // payload) is UNKNOWABLE, not failed. Follow the first rule: null liveness
+      // → "unknown". Unrecognized states must also be "unknown", not terminally
+      // dead. A fleet must not stop polling a healthy agent due to a payload
+      // malformation or an mngr version skew.
+      //
+      // Note: "failed" is in the union but no branch returns it today.
+      // AgentLifecycleState has no failure member; only a future enum member or
+      // a new signal source could yield a "failed" status.
+      return "unknown";
   }
 }
