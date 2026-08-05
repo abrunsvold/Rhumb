@@ -1,5 +1,6 @@
 import { loadProvider, type ProviderConfig } from "./provider.js";
 import type { BackendId } from "./backends/types.js";
+import { loadFleetCaps, type FleetCaps } from "./fleet/caps.js";
 
 export interface Config {
   port: number;
@@ -11,6 +12,7 @@ export interface Config {
   insecureDev: boolean;
   watchdogMinutes: number | null;
   agentBackend: BackendId;
+  fleetCaps: FleetCaps;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -79,5 +81,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       return Number.isInteger(n) && n > 0 ? n : null;
     })(),
     agentBackend,
+    fleetCaps: loadFleetCaps(env),
   };
 }

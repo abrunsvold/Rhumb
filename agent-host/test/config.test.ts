@@ -28,6 +28,7 @@ describe("loadConfig", () => {
       insecureDev: true,
       watchdogMinutes: null,
       agentBackend: "sdk",
+      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
     });
   });
 
@@ -48,6 +49,7 @@ describe("loadConfig", () => {
       insecureDev: true,
       watchdogMinutes: null,
       agentBackend: "sdk",
+      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
     });
   });
 
@@ -145,5 +147,17 @@ describe("RHUMB_AGENT_BACKEND", () => {
 
   it("rejects an unknown backend", () => {
     expect(() => loadConfig({ ...base, RHUMB_AGENT_BACKEND: "wat" })).toThrow(/sdk\|mngr/);
+  });
+});
+
+describe("fleet caps in config", () => {
+  const base = { CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_ALLOWED_USERS: "you@example.com" } as NodeJS.ProcessEnv;
+
+  it("exposes defaults", () => {
+    expect(loadConfig({ ...base }).fleetCaps).toEqual({ maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 });
+  });
+
+  it("fails at load on a malformed cap", () => {
+    expect(() => loadConfig({ ...base, RHUMB_FLEET_MAX_CONCURRENT: "nope" })).toThrow(/RHUMB_FLEET_MAX_CONCURRENT/);
   });
 });
