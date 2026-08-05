@@ -49,6 +49,9 @@ export interface PendingAction {
   resolvedAt?: string;
   result?: string;
   error?: string;
+  // Who approved or denied this. Pairs with `proposedBy`: in a shared room,
+  // "the operator decided" stops being enough on its own.
+  resolvedBy?: string;
 }
 
 export interface InfraAuditEntry {
@@ -58,4 +61,5 @@ export interface InfraAuditEntry {
   decision: "approved" | "denied" | "error" | "parked" | "executed";
   result?: unknown;
   error?: string;
+  actor?: string;
 }

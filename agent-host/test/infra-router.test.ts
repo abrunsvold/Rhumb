@@ -112,3 +112,62 @@ describe("infra router (parked resolution audit)", () => {
     expect(audits).toEqual([]);
   });
 });
+
+describe("resolve attribution", () => {
+  it("records the acting login on approval", async () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    pending.enqueue("create_vm", {});
+    const app = express();
+    app.use(express.json());
+    app.use(
+      "/infra",
+      createInfraRouter({ pending, actorOf: (req) => req.get("tailscale-user-login") ?? "" }),
+    );
+
+    const res = await request(app)
+      .post("/infra/pending/p1/resolve")
+      .set("Tailscale-User-Login", "op@example.com")
+      .send({ decision: "approve" });
+
+    expect(res.status).toBe(200);
+    expect(pending.get("p1")?.resolvedBy).toBe("op@example.com");
+  });
+
+  it("tells a second approver who won, instead of a bare 404", async () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    pending.enqueue("create_vm", {});
+    const app = express();
+    app.use(express.json());
+    app.use(
+      "/infra",
+      createInfraRouter({ pending, actorOf: (req) => req.get("tailscale-user-login") ?? "" }),
+    );
+
+    await request(app)
+      .post("/infra/pending/p1/resolve")
+      .set("Tailscale-User-Login", "first@example.com")
+      .send({ decision: "approve" });
+
+    const res = await request(app)
+      .post("/infra/pending/p1/resolve")
+      .set("Tailscale-User-Login", "second@example.com")
+      .send({ decision: "deny" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "already resolved",
+      by: "first@example.com",
+      decision: "approved",
+    });
+  });
+
+  it("still 404s an unknown pending id", async () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    const app = express();
+    app.use(express.json());
+    app.use("/infra", createInfraRouter({ pending }));
+
+    const res = await request(app).post("/infra/pending/nope/resolve").send({ decision: "approve" });
+    expect(res.status).toBe(404);
+  });
+});
