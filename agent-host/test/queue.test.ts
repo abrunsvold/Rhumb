@@ -134,4 +134,99 @@ describe("createTurnQueue", () => {
     await flush();
     expect(seen).toEqual([1, 0]);
   });
+
+  it("frees the pending bucket for the next room once a lane drains", async () => {
+    const seen: Array<[string, number]> = [];
+    const q = createTurnQueue({ onDepth: (k, d) => seen.push([k, d]) });
+
+    // Room A: drafts, gets its id, drains completely.
+    q.enqueue("", async () => {});
+    q.rekey("", "sA");
+    await flush();
+
+    // Room B is a different room that also starts as a draft. Its turns must
+    // land on their own lane, not be routed into room A's by a stale alias.
+    seen.length = 0;
+    q.enqueue("", async () => {});
+    await flush();
+
+    expect(seen.every(([k]) => k === "")).toBe(true);
+    expect(seen[seen.length - 1]).toEqual(["", 0]);
+  });
+
+  it("re-points aliases through a second rekey", async () => {
+    const seen: Array<[string, number]> = [];
+    const gate = deferred();
+    const q = createTurnQueue({ onDepth: (k, d) => seen.push([k, d]) });
+
+    q.enqueue("", async () => {
+      await gate.promise;
+    });
+    q.rekey("", "s1");
+    q.rekey("s1", "s2");
+    // Still the original lane, reached through the old key.
+    expect(q.depth("")).toBe(1);
+
+    gate.resolve();
+    await flush();
+    expect(seen[seen.length - 1]).toEqual(["s2", 0]);
+    expect(q.depth("")).toBe(0);
+  });
+
+  it("refuses to merge lanes when either is running", async () => {
+    const started: string[] = [];
+    const src = deferred();
+    const dst = deferred();
+    const q = createTurnQueue({ onDepth: () => {} });
+
+    q.enqueue("", async () => {
+      started.push("src-first");
+      await src.promise;
+    });
+    q.enqueue("", async () => {
+      started.push("src-queued");
+    });
+    q.enqueue("s1", async () => {
+      started.push("dst-first");
+      await dst.promise;
+    });
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    // Both lanes are live. Merging here would either strand a running flag
+    // forever or let two turns run at once, so the rekey must do nothing.
+    q.rekey("", "s1");
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    dst.resolve();
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first"]);
+
+    src.resolve();
+    await flush();
+    expect(started).toEqual(["src-first", "dst-first", "src-queued"]);
+    expect(q.depth("")).toBe(0);
+    expect(q.depth("s1")).toBe(0);
+  });
+
+  it("keeps draining when a depth subscriber throws", async () => {
+    const started: string[] = [];
+    const q = createTurnQueue({
+      onDepth: () => {
+        throw new Error("subscriber blew up");
+      },
+    });
+
+    q.enqueue("s1", async () => {
+      started.push("one");
+    });
+    q.enqueue("s1", async () => {
+      started.push("two");
+    });
+    await flush();
+
+    expect(started).toEqual(["one", "two"]);
+    expect(q.depth("s1")).toBe(0);
+  });
 });
