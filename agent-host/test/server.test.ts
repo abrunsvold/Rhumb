@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createServer, pruneSubscriber, stripAgentPrefix } from "../src/server.js";
+import { createServer, pruneSubscriber, stripAgentPrefix, presenceLogins } from "../src/server.js";
 import type { AgentEvent } from "../src/types.js";
 import { mkdtempSync, readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionService } from "../src/sessions.js";
+import http from "node:http";
 
 function fakeManager(script: AgentEvent[]) {
   return {
@@ -554,5 +555,75 @@ describe("agent-host server", () => {
     releaseFirst();
     await new Promise((r) => setImmediate(r));
     expect(resumed).toEqual([undefined, "s-quiet"]);
+  });
+});
+
+describe("presenceLogins", () => {
+  it("dedupes and sorts logins, ignoring responses with no recorded login", () => {
+    const a = {} as import("express").Response;
+    const b = {} as import("express").Response;
+    const c = {} as import("express").Response;
+    const d = {} as import("express").Response;
+    const logins = new Map<import("express").Response, string>([
+      [a, "zoe@example.com"],
+      [b, "op@example.com"],
+      [c, "op@example.com"],
+    ]);
+    expect(presenceLogins(new Set([a, b, c, d]), (r) => logins.get(r))).toEqual([
+      "op@example.com",
+      "zoe@example.com",
+    ]);
+  });
+
+  it("returns an empty list for an absent subscriber set", () => {
+    expect(presenceLogins(undefined, () => "op@example.com")).toEqual([]);
+  });
+});
+
+describe("presence over SSE", () => {
+  it("tells both watchers who is in the room, and again when one leaves", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const server = http.createServer(app);
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as import("node:net").AddressInfo).port;
+
+    function open(login: string) {
+      const frames: string[] = [];
+      return new Promise<{ frames: string[]; abort: () => void }>((resolve) => {
+        const req = http.get(
+          {
+            port,
+            path: "/sessions/s1/stream",
+            headers: { "Tailscale-User-Login": login, "Sec-Rhumb-Control": "1" },
+          },
+          (res) => {
+            res.on("data", (c: Buffer) => frames.push(c.toString()));
+            resolve({ frames, abort: () => req.destroy() });
+          },
+        );
+      });
+    }
+
+    const first = await open("op@example.com");
+    const second = await open("zoe@example.com");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(first.frames.join("")).toContain('"type":"presence"');
+    expect(first.frames.join("")).toContain("zoe@example.com");
+    expect(second.frames.join("")).toContain("op@example.com");
+
+    const beforeLeave = first.frames.length;
+    second.abort();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = first.frames.slice(beforeLeave).join("");
+    expect(after).toContain('"type":"presence"');
+    expect(after).not.toContain("zoe@example.com");
+
+    first.abort();
+    await new Promise<void>((r) => server.close(() => r()));
   });
 });

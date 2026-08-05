@@ -59,6 +59,21 @@ export function pruneSubscriber(
   if (set.size === 0) map.delete(id);
 }
 
+// Two connections from one person (a reconnect, or a second window) are one
+// presence entry. Responses with no recorded login are subscribers that
+// predate the login being tracked, and are skipped rather than shown blank.
+export function presenceLogins(
+  subs: Set<Response> | undefined,
+  loginOf: (r: Response) => string | undefined,
+): string[] {
+  const out = new Set<string>();
+  for (const r of subs ?? []) {
+    const login = loginOf(r);
+    if (login) out.add(login);
+  }
+  return [...out].sort();
+}
+
 export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
@@ -76,6 +91,16 @@ export function createServer(deps: {
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
   const now = deps.now ?? (() => new Date().toISOString());
+
+  // Keyed by the response object, so presence survives the "" -> session id
+  // re-key: the same responses simply move to the new bucket.
+  const subscriberLogin = new WeakMap<Response, string>();
+
+  function broadcastPresence(id: string): void {
+    const subs = subscribers.get(id);
+    const logins = presenceLogins(subs, (r) => subscriberLogin.get(r));
+    for (const r of subs ?? []) writeSseEvent(r, { type: "presence", logins });
+  }
 
   // Lane key -> the session id turns on that lane should resume. Populated when
   // the first turn in a draft room emits its `session` event, so a turn queued
@@ -141,9 +166,14 @@ export function createServer(deps: {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
     const id = req.params.id;
+    subscriberLogin.set(res, readActorLogin(req, deps.identity.insecureDev));
     subsFor(subscribers, id).add(res);
     attachHeartbeat(res, req);
-    req.on("close", () => pruneSubscriber(subscribers, id, res));
+    broadcastPresence(id);
+    req.on("close", () => {
+      pruneSubscriber(subscribers, id, res);
+      broadcastPresence(id);
+    });
   });
 
   app.get("/turns/:turnId/stream", (req: Request, res: Response) => {
