@@ -25,7 +25,9 @@ import { PendingActions } from "./infra/pending.js";
 import { createInfraServer, makeCanUseTool, READ_TOOL_NAMES } from "./infra/server.js";
 import { createGatedExecutor } from "./infra/executor.js";
 import { appendInfraAudit } from "./infra/audit.js";
-import type { PendingAction } from "./infra/types.js";
+import type { GatedTool, PendingAction } from "./infra/types.js";
+import { createFleetOps, type FleetTask, type SpawnContext } from "./fleet/ops.js";
+import { createFleetServer, FLEET_TOOL_NAMES, GATED_FLEET_TOOL_NAMES } from "./fleet/server.js";
 import { createInfraRouter } from "./infra/router.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
@@ -42,6 +44,90 @@ import { createOntologyServer } from "./ontology/server.js";
 import { createOntologyRouter } from "./ontology/router.js";
 import { syncSystem } from "./ontology/projector.js";
 import type { Express } from "express";
+
+/** The fleet tools that require operator approval before they run — exactly
+ *  `mcp__fleet__spawn`. Exported as the thing the wiring actually consumes so
+ *  a test can assert the host gates what `src/fleet/server.ts` says must be
+ *  gated (and, just as importantly, that it does NOT gate the read-only
+ *  `check`/`collect`: forcing an approval to poll trains an operator to click
+ *  through, which is a worse security outcome than one well-presented
+ *  decision on the action that actually creates agents). */
+export function fleetGatedToolNames(): string[] {
+  return [...GATED_FLEET_TOOL_NAMES];
+}
+
+type PermissionResult =
+  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | { behavior: "deny"; message: string };
+/** Structurally identical to `src/infra/server.ts`'s own `CanUseTool` (which
+ *  that module does not export). Declared here rather than exported from
+ *  there because `src/infra/` is out of scope for this change. */
+type CanUseTool = (toolName: string, input: Record<string, unknown>, opts: unknown) => Promise<PermissionResult>;
+
+/** The operator gate for `mcp__fleet__spawn`.
+ *
+ *  **This is the infra gate's path, not a second one.** It enqueues into the
+ *  SAME `PendingActions` queue, surfaces through the SAME `/infra/pending`
+ *  route + SSE stream, is decided in the SAME client `ConfirmationDialog`,
+ *  and is recorded in the SAME `appendInfraAudit` log as every gated infra
+ *  mutation. Approvals stay one queue, in one place, with one ordering.
+ *
+ *  It is a separate FUNCTION only because `makeCanUseTool`
+ *  (src/infra/server.ts) cannot be handed a non-infra tool name: its gated
+ *  set is a module-private `Set` built from `GATED_TOOLS` and every name it
+ *  recognises is `mcp__infra__*` — anything else it allows unconditionally,
+ *  which is exactly the ungated-spawn outcome this exists to prevent. Making
+ *  that set injectable would be the tidier fix and is the natural follow-up;
+ *  it is not done here because this task must not modify `src/infra/`. What
+ *  is deliberately NOT re-implemented is the decision machinery itself —
+ *  the pending queue, its persistence, the resolve route, the audit writer
+ *  are all the infra module's, reused as-is.
+ *
+ *  `next` chains to the infra gate when infra is configured, so one
+ *  `canUseTool` covers both tool families; when infra is not configured
+ *  there is nothing else to gate and everything else is allowed — the fleet
+ *  gate must still apply, since a box without Proxmox is the common case and
+ *  spawning agents there is no less consequential.
+ *
+ *  The audit records the SHAPE of the call (how many tasks) and the
+ *  operator's decision, never the task prompts: prompts are the operator's
+ *  own text but can be arbitrarily long, and the log is append-only. The
+ *  operator still sees the full input in the approval dialog — only the log
+ *  is summarised. */
+export function makeFleetCanUseTool(deps: {
+  pending: PendingActions;
+  auditPath: string;
+  now: () => string;
+  /** The next gate in the chain (the infra one), or undefined when infra is
+   *  not configured. */
+  next?: CanUseTool;
+}): CanUseTool {
+  return async (toolName, input, opts) => {
+    if (!GATED_FLEET_TOOL_NAMES.has(toolName)) {
+      return deps.next ? deps.next(toolName, input, opts) : { behavior: "allow", updatedInput: input };
+    }
+    const shape = { taskCount: Array.isArray(input.tasks) ? input.tasks.length : null };
+    // `PendingAction.tool` is typed `GatedTool` (an infra-tool union in
+    // src/infra/types.ts, which this task must not edit). The queue itself
+    // is name-agnostic — it stores the string and the client renders it —
+    // so the full MCP tool name is stored as-is rather than mapped onto
+    // some infra tool it is not: the operator's dialog and the audit line
+    // must both say `mcp__fleet__spawn`, because that is what is being
+    // approved.
+    const { decision } = deps.pending.enqueue(toolName as GatedTool, input);
+    let d: "approve" | "deny";
+    try {
+      d = await decision;
+    } catch (e) {
+      appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input: shape, decision: "error", error: String(e) });
+      return { behavior: "deny", message: "Fleet spawn could not be confirmed." };
+    }
+    appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input: shape, decision: d === "approve" ? "approved" : "denied" });
+    return d === "approve"
+      ? { behavior: "allow", updatedInput: input }
+      : { behavior: "deny", message: "Operator denied this fleet spawn." };
+  };
+}
 
 export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   const sessionExtraOptions: Record<string, unknown> = {};
@@ -167,6 +253,191 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   sessionExtraOptions.mcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}), ontology: ontologyServer };
   sessionExtraOptions.allowedTools = [ ...((sessionExtraOptions.allowedTools as string[]) ?? []), ...ONTOLOGY_TOOL_NAMES ];
 
+  // ---------------------------------------------------------------- fleet --
+  // The fleet ALWAYS spawns through mngr, whatever backend this conversation
+  // uses — so a fast sdk foreground turn can dispatch a background mngr
+  // fleet. mngr's prerequisites gate THIS BLOCK only, never the whole host
+  // (unlike RHUMB_AGENT_BACKEND=mngr below, where they are a boot condition).
+  //
+  // Two preconditions, checked in this order:
+  //  1. `config.fleetCaps` must be present. `checkCaps` (src/fleet/caps.ts)
+  //     is the ONLY limit on model-directed spawning; a Config without caps
+  //     cannot enforce one, so the fleet is not offered at all rather than
+  //     offered unbounded. `loadConfig` always supplies them, so this only
+  //     fires for a partial Config — which is also why it is checked FIRST:
+  //     `assertMngrPrerequisites` shells out (`command -v`, `bash`), and a
+  //     caller that never asked for a fleet should neither pay for that nor
+  //     have its behaviour depend on what happens to be installed.
+  //  2. mngr's CLI prerequisites must be present.
+  let fleetAvailable = Boolean(deps.config.fleetCaps);
+  if (fleetAvailable) {
+    try {
+      assertMngrPrerequisites();
+    } catch (e) {
+      fleetAvailable = false;
+      console.warn(`[rhumb] fleet tools unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  // The MCP servers an UNATTENDED (watchdog) session may have — snapshotted
+  // before the fleet is added, because it must never be one of them. See the
+  // watchdog manager below.
+  let watchdogMcpServers: object | undefined;
+  // Shared with the RHUMB_AGENT_BACKEND=mngr block below — see the comment
+  // at its `registry` for why there must be exactly one instance per file.
+  let fleetRegistry: AgentRegistry | undefined;
+
+  if (fleetAvailable) {
+    const fleetNow = () => new Date().toISOString();
+    const fleetSpec = {
+      model: deps.config.provider.model,
+      workspace: deps.config.workspace,
+      permissionMode: deps.config.permissionMode,
+      // Deliberately EMPTY, not `sessionExtraOptions`: a spawned agent
+      // inherits no tool policy from the operator's conversation, and in
+      // particular inherits no fleet. See the comment on the ctx thunk below.
+      extraOptions: {},
+    };
+    fleetRegistry = createAgentRegistry({
+      indexPath: joinPath(deps.config.workspace, "agents.json"),
+      now: fleetNow,
+      id: () => `rhumb-${randomUUID()}`,
+    });
+    const fleetBackend = createMngrBackend({
+      exec: createRealExec(),
+      registry: fleetRegistry,
+      credentialEnv: deps.config.provider.credentialEnv,
+      spec: fleetSpec,
+      // Same wildcard blanking the RHUMB_AGENT_BACKEND=mngr path uses below
+      // — see the long comment there for why it is computed here.
+      extraBlankedVars: Object.keys(process.env).filter((k) => k.startsWith("RHUMB_")),
+    });
+    const fleetOps = createFleetOps({
+      backend: fleetBackend,
+      registry: fleetRegistry,
+      caps: deps.config.fleetCaps,
+      spec: fleetSpec,
+      mintName: () => `fleet-${randomUUID().slice(0, 8)}`,
+      // Both are honest `null` stubs, not guesses: `null` means UNKNOWABLE,
+      // so `check` reports "unknown" rather than inventing a status. Real
+      // wiring is a follow-up and needs two things the fleet backend does
+      // not expose publicly yet: `mngr list --format json` parsed into a
+      // nativeId -> liveness map (its fields are snake_case — `waiting_reason`
+      // maps to `waitingReason` in MngrLiveness, src/fleet/status.ts), and
+      // `mngr transcript` read for the last assistant finish_reason.
+      liveness: async () => null,
+      lastFinishReason: async () => null,
+    });
+
+    // Every spawn is audited, on every box. The brief anticipated skipping
+    // this where `infra.auditPath` is absent — it never is: `loadInfraConfig`
+    // always returns an auditPath (defaulting to
+    // `<workspace>/infra-audit.jsonl`), and only the infra TOOLS are
+    // conditional on Proxmox/pg-admin config. `appendInfraAudit` creates the
+    // parent directory itself, so there is no unaudited-spawn gap to
+    // document.
+    //
+    // Two lines land per approved call: the gate's ("approved"/"denied", from
+    // makeFleetCanUseTool) and this one ("executed"/"error"), adjacent and
+    // both naming `mcp__fleet__spawn`. Together they answer "which agents
+    // were created, spawned by whom, at what depth, under whose
+    // authorization" without reconstruction. Task prompts are NOT recorded
+    // (they can be long and the log is append-only) — the count and the
+    // lineage are.
+    const auditedOps = {
+      ...fleetOps,
+      async spawn(tasks: FleetTask[], ctx: SpawnContext) {
+        const ts = fleetNow();
+        const input = { taskCount: tasks.length, parentAgentId: ctx.parentAgentId, depth: ctx.depth };
+        try {
+          const outcomes = await fleetOps.spawn(tasks, ctx);
+          appendInfraAudit(infra.auditPath, {
+            ts,
+            tool: "mcp__fleet__spawn",
+            input,
+            decision: "executed",
+            result: {
+              spawned: outcomes.flatMap((o) => (o.ok ? [o.agentId] : [])),
+              failed: outcomes.filter((o) => !o.ok).length,
+            },
+          });
+          return outcomes;
+        } catch (e) {
+          // A cap breach throws with zero principals created. That must
+          // leave a trace too — a refused spawn is exactly the event an
+          // operator wants to find later.
+          appendInfraAudit(infra.auditPath, {
+            ts,
+            tool: "mcp__fleet__spawn",
+            input,
+            decision: "error",
+            error: e instanceof Error ? e.message : String(e),
+          });
+          throw e;
+        }
+      },
+    };
+
+    // WHY depth 0 IS CORRECT HERE, AND ONLY HERE.
+    //
+    // `ops.spawn` enforces the depth cap against whatever this thunk returns
+    // — the tool schema deliberately cannot carry `depth`/`parentAgentId`
+    // (see createFleetServer's doc comment), so this call site IS the depth
+    // cap. Hardcoding `{ parentAgentId: null, depth: 0 }` is correct because
+    // THIS host process serves the OPERATOR'S OWN conversation, which is a
+    // genuine root: it is reached over HTTP by an authenticated operator
+    // (src/server.ts identity gate), never by another agent, and nothing
+    // upstream of it is an agent that could be a parent.
+    //
+    // A host serving a SPAWNED CHILD must NOT reuse this value. Doing so
+    // would let a child claim to be a root and the depth cap would be evaded
+    // through the front door — no schema change or model trickery required,
+    // just the wrong constant at the wrong call site. Such a host must
+    // derive the thunk from the child's own registry record
+    // (`{ parentAgentId: rec.agentId, depth: rec.depth }`, both already
+    // recorded by `registry.create` at spawn time).
+    //
+    // In this slice no spawned agent can reach these tools at all: the fleet
+    // MCP server is an in-process JS object and `agentArgsFor`
+    // (src/backends/mngr.ts) carries only --model/--permission-mode/
+    // --allowedTools/--disallowedTools/--append-system-prompt across the mngr
+    // CLI boundary; `mcpServers` structurally cannot cross it, and the spec
+    // above passes `extraOptions: {}` regardless.
+    const fleetServer = createFleetServer(auditedOps, () => ({ parentAgentId: null, depth: 0 }));
+
+    // The approval surface. When infra is configured we reuse ITS queue; when
+    // it is not, we create the queue here AND publish it as `infraPending` so
+    // the /infra router (the client's only approval channel) still mounts.
+    // Without that, `mcp__fleet__spawn` on a non-Proxmox box — the common
+    // case — would either be ungated or block on a dialog no operator could
+    // ever see: wedged, not gated.
+    const pending =
+      infraPending ??
+      new PendingActions({
+        now: fleetNow,
+        id: () => randomUUID(),
+        persistPath: joinPath(deps.config.workspace, "pending-actions.json"),
+      });
+    infraPending = pending;
+    sessionExtraOptions.canUseTool = makeFleetCanUseTool({
+      pending,
+      auditPath: infra.auditPath,
+      now: fleetNow,
+      // Chains to the infra gate when there is one, so a single canUseTool
+      // covers both families and neither loses its gate.
+      next: sessionExtraOptions.canUseTool as CanUseTool | undefined,
+    });
+
+    watchdogMcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}) };
+    sessionExtraOptions.mcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}), fleet: fleetServer };
+    // Only the read-only tools are pre-allowed; `spawn` is left out on
+    // purpose so it falls through to canUseTool above — the same shape
+    // READ_TOOL_NAMES/GATED_TOOLS give the infra server.
+    sessionExtraOptions.allowedTools = [
+      ...((sessionExtraOptions.allowedTools as string[]) ?? []),
+      ...FLEET_TOOL_NAMES.filter((n) => !GATED_FLEET_TOOL_NAMES.has(n)),
+    ];
+  }
+
   // The watchdog manager below (see WATCHDOG_MINUTES branch further down)
   // deliberately stays on the SDK path: it is a read-only reconcile turn
   // whose tool policy is the point, and slice 1 does not model unattended
@@ -190,11 +461,21 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // warnAboutUncarriableSpec's doc comment in mngr.ts for the full
     // reasoning.
     assertMngrPrerequisites();
-    const registry = createAgentRegistry({
-      indexPath: joinPath(deps.config.workspace, "agents.json"),
-      now: () => new Date().toISOString(),
-      id: () => `rhumb-${randomUUID()}`,
-    });
+    // ONE registry instance per process over `agents.json`, shared with the
+    // fleet above when that is wired. `createAgentRegistry` loads the file
+    // once at construction and rewrites it WHOLE on every mutation
+    // (`persist`, agents.ts), so two instances over the same path would each
+    // overwrite the other's records from a stale in-memory snapshot — the
+    // fleet's principals would vanish from disk on the operator's next turn,
+    // and `check`/`collect` would then answer "unknown" for agents that are
+    // genuinely running.
+    const registry =
+      fleetRegistry ??
+      createAgentRegistry({
+        indexPath: joinPath(deps.config.workspace, "agents.json"),
+        now: () => new Date().toISOString(),
+        id: () => `rhumb-${randomUUID()}`,
+      });
     backend = createMngrBackend({
       exec: createRealExec(),
       registry,
@@ -284,7 +565,16 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       permissionMode: deps.config.permissionMode,
       extraOptions: {
         ...sessionExtraOptions,
-        disallowedTools: watchdogDisallowedTools(),
+        // The fleet is never carried into an UNATTENDED session — belt
+        // (drop the server, so the tools do not exist) and braces (name them
+        // disallowed anyway). Two independent reasons: spawning background
+        // agents is a mutation, and this session is structurally read-only;
+        // and the fleet gate BLOCKS on an operator decision, which an
+        // unattended turn has nobody to make — it would hang, not park, and
+        // the parked-mode gate below cannot help because it only knows infra
+        // tool names.
+        ...(watchdogMcpServers ? { mcpServers: watchdogMcpServers } : {}),
+        disallowedTools: [...watchdogDisallowedTools(), ...FLEET_TOOL_NAMES],
         // Parked gate: proposals queue for approval instead of blocking the
         // unattended turn. Only present when infra is configured at all.
         ...(watchdogCanUseTool ? { canUseTool: watchdogCanUseTool } : {}),
@@ -388,7 +678,23 @@ export function createMngrAgentIdResolver(
     const unbound = registry
       .list()
       .filter(
-        (r) => r.backend === "mngr" && r.status === "active" && r.nativeId === null && !inFlight.has(r.agentId),
+        (r) =>
+          r.backend === "mngr" &&
+          r.status === "active" &&
+          r.nativeId === null &&
+          !inFlight.has(r.agentId) &&
+          // Root principals only. Since the fleet shares this registry (see
+          // buildApp), the unbound pool now also contains FLEET CHILDREN —
+          // minted at `depth: parent.depth + 1` inside `spawn`'s mutex and
+          // left unbound for as long as `mngr create` takes (tens of
+          // seconds, Phase 0). Without this clause, an operator turn
+          // arriving in that window would adopt a child that was spawned
+          // for someone else's task: the operator's prompt would land in
+          // the child's transcript, and the fleet's own `ensure` would find
+          // its principal already claimed. The reuse-before-mint
+          // optimisation (A2) exists to recycle principals minted FOR
+          // operator conversations; a spawned child was never one of those.
+          r.depth === 0,
       )
       // Newest first. Must return 0 on a tie — a comparator that only ever
       // returns -1/1 is non-conforming (fix round 4, Minor: the previous
