@@ -202,6 +202,89 @@ rather than keyed on binary presence alone:
 Set `CLAUDE_CODE_OAUTH_TOKEN` as well to additionally exercise a turn that
 returns a real model reply; without it that one case reports as skipped.
 
+## Fleet (experimental)
+
+Rhumb can give the model its own tools for spawning background agents —
+`mcp__fleet__spawn`, `mcp__fleet__check`, `mcp__fleet__collect` — so a single
+conversation can fan work out to several agents working in parallel instead
+of doing everything itself, one step at a time.
+
+**Off by default.** Set `RHUMB_FLEET_ENABLED=1` to turn it on. With it unset,
+nothing fleet-related is wired at all: no tools are registered, no approval
+gate is installed. Fleet always spawns through **mngr**, regardless of
+`RHUMB_AGENT_BACKEND` — so even a fast `sdk` foreground conversation can
+dispatch a background mngr fleet. That means fleet requires mngr's
+prerequisites (`mngr`, `tmux`, `git`, `jq`, bash >= 4 on `PATH`); if they're
+missing the host logs a warning and boots without the fleet tools rather than
+refusing to start (a host that never asked for a fleet should not fail on
+what happens to be installed).
+
+**The three tools:**
+
+- **`spawn`** creates one background agent per task and returns their agent
+  ids. It returns **immediately** once the agents are created and their
+  prompts have been handed off — it does **not** wait for them to answer.
+  The agents are still working when the call returns.
+- **`check`** is a cheap status poll for previously spawned agents (see
+  "Current limitations" below for what it can actually report right now).
+- **`collect`** fetches results, optionally waiting up to a caller-supplied
+  timeout for agents still working to finish.
+
+**Approval.** `spawn` requires operator approval — the same confirmation
+dialog and audit log the infra tools use — but it is asked **once per batch**
+(one decision covers every task in that `spawn` call), not once per agent.
+`check` and `collect` are read-only and are never gated; gating a poll would
+just train an operator to click through, which is worse than one
+well-presented decision on the action that actually creates agents.
+
+**Caps.** Three limits, enforced by the **host**, before any agent is
+created — never by the model's own judgment or by prompt instructions:
+
+| Cap | Env var | Default |
+| --- | --- | --- |
+| Tasks per `spawn` call | `RHUMB_FLEET_MAX_PER_SPAWN` | 8 |
+| Concurrent live fleet agents | `RHUMB_FLEET_MAX_CONCURRENT` | 8 |
+| Spawn-of-a-spawn depth | `RHUMB_FLEET_MAX_DEPTH` | 1 |
+
+A cap breach rejects the whole batch — zero agents are created, not a
+partial batch the operator never approved.
+
+**A spawned agent cannot itself spawn a fleet.** mngr agents receive no
+in-process MCP servers at all (there is no CLI equivalent for a live JS
+closure — see "Capability reduction, not a gate bypass" above), and the
+fleet tools are exactly that: an in-process MCP server. So in this release a
+spawned agent structurally has no fleet tools to call, regardless of the
+depth cap. The depth cap exists for when that changes — the day a future
+backend *can* carry the fleet tools to a spawned agent, `RHUMB_FLEET_MAX_DEPTH`
+is what stops nested fleets from spawning without bound.
+
+**Current limitations, stated plainly:**
+
+- **`check` reports `"unknown"` for every agent, and `collect` can never
+  return a result.** Real liveness/finish-reason wiring hasn't landed yet —
+  the host currently wires both to stubs that always return "unknown." Once
+  real liveness wiring lands, `check` will report real progress
+  (`working`/`done`/`blocked`/`stopped`/`failed`) and `collect` will be able
+  to return actual answers.
+- **`liveCount` never reaps.** Nothing currently retires a fleet-spawned
+  agent's record once it finishes, so every agent ever spawned on a given
+  `agents.json` keeps counting toward `RHUMB_FLEET_MAX_CONCURRENT` forever.
+  On a long-lived workspace this means spawning will eventually be refused
+  permanently once the cumulative total crosses the concurrent cap — not
+  just the currently-running total. Destroying old agents (`mngr destroy
+  <name> --force -b`) does not currently un-count them either; only a fresh
+  `agents.json` does.
+- **Every mngr turn costs at least ~90 seconds.** Creating an agent and
+  getting its first reply is not fast. The fleet is meant for background
+  work you can check on later, not for interactive back-and-forth.
+
+**`RHUMB_PERMISSION_MODE=bypassPermissions` makes the approval gate inert.**
+The SDK skips the tool-approval callback entirely in that mode, so
+`mcp__fleet__spawn` will **not** prompt for approval — the model can create
+background agents (up to the caps) with no operator decision, though spawns
+are still audited. The host warns about this loudly at boot when the fleet
+is enabled under that permission mode.
+
 ## Security
 
 The agent host runs Claude Code autonomously with Bash and Write access to the
