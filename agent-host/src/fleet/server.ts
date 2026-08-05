@@ -16,6 +16,7 @@ export const FLEET_TOOL_NAMES = [
 export const GATED_FLEET_TOOL_NAMES: ReadonlySet<string> = new Set(["mcp__fleet__spawn"]);
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
+const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true as const });
 
 /**
  * The `spawn` tool's zod schema intentionally accepts ONLY `tasks` — no
@@ -39,8 +40,11 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           "Returns IMMEDIATELY once the agents are created — the agents are " +
           "still working when this call returns; it does NOT wait for them to " +
           "answer. Use check/collect afterward to find out when they finish " +
-          "and what they produced. A spawned agent cannot itself spawn " +
-          "(no nested fleets). Requires operator approval before it runs.",
+          "and what they produced. Each result entry is either {ok:true, agentId} " +
+          "or {ok:false, error} — check ok per task, since some tasks in a batch " +
+          "can fail to dispatch while others succeed. A spawned agent's own ability " +
+          "to spawn further agents is subject to the operator's depth cap (default: " +
+          "no nested fleets). Requires operator approval before it runs.",
         {
           tasks: z
             .array(
@@ -58,7 +62,13 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           try {
             return ok(JSON.stringify(await ops.spawn(args.tasks, ctx())));
           } catch (e) {
-            return ok(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            // ops.spawn THROWS on a cap breach — zero principals created. That
+            // must be unmistakable to the model, not just structurally distinct
+            // (an error object vs. an array) inside an otherwise-successful
+            // tool result — hence isError:true, matching the ontology/infra
+            // server precedent (`fail()` in src/ontology/server.ts and
+            // src/infra/server.ts), rather than `ok()` for this path.
+            return fail(e instanceof Error ? e.message : String(e));
           }
         },
       ),
@@ -71,7 +81,7 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           try {
             return ok(JSON.stringify(await ops.check(args.agentIds)));
           } catch (e) {
-            return ok(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            return fail(e instanceof Error ? e.message : String(e));
           }
         },
       ),
@@ -86,7 +96,7 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           try {
             return ok(JSON.stringify(await ops.collect(args.agentIds, args.waitMs)));
           } catch (e) {
-            return ok(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            return fail(e instanceof Error ? e.message : String(e));
           }
         },
       ),

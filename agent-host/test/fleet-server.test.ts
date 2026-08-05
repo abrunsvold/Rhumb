@@ -3,6 +3,12 @@ import { z } from "zod";
 import { FLEET_TOOL_NAMES, GATED_FLEET_TOOL_NAMES, createFleetServer } from "../src/fleet/server.js";
 import type { FleetOps, SpawnContext } from "../src/fleet/ops.js";
 
+const noopOps: FleetOps = {
+  spawn: async () => [],
+  check: async () => [],
+  collect: async () => [],
+};
+
 describe("fleet server", () => {
   it("exposes exactly spawn, check, collect", () => {
     expect([...FLEET_TOOL_NAMES].sort()).toEqual([
@@ -10,6 +16,28 @@ describe("fleet server", () => {
       "mcp__fleet__collect",
       "mcp__fleet__spawn",
     ]);
+  });
+
+  // F1: FLEET_TOOL_NAMES/GATED_FLEET_TOOL_NAMES are hand-maintained constants
+  // with nothing structurally tying them to what createFleetServer actually
+  // registers — a fourth tool or a server rename could silently drift the
+  // constants away from reality with no test failing. This derives the truth
+  // from the constructed server itself (the same `_registeredTools` shape
+  // the SDK's own request handler reads from — see McpServer.setToolRequestHandlers
+  // in @anthropic-ai/claude-agent-sdk's sdk.mjs) and asserts the exported
+  // constants match it exactly, so adding/renaming a tool without updating
+  // the constants fails HERE rather than silently leaving the new tool
+  // neither allow-listed nor gated.
+  it("FLEET_TOOL_NAMES matches exactly what the server registers, prefixed mcp__fleet__", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registeredNames = Object.keys((server.instance as any)._registeredTools).map(
+      (name) => `mcp__fleet__${name}`,
+    );
+    expect([...FLEET_TOOL_NAMES].sort()).toEqual(registeredNames.sort());
+    for (const gated of GATED_FLEET_TOOL_NAMES) {
+      expect(FLEET_TOOL_NAMES).toContain(gated);
+    }
   });
 
   it("gates spawn and ONLY spawn", () => {
@@ -78,17 +106,31 @@ describe("fleet server", () => {
       check: async () => [],
       collect: async () => [],
     };
-    const fixedCtx: SpawnContext = { parentAgentId: "parent-1", depth: 3 };
-    const server = createFleetServer(ops, () => fixedCtx);
+    // F3: the thunk returns a DIFFERENT value on each call (an incrementing
+    // depth) rather than a fixed constant. A fixed-value thunk can't tell
+    // `ctx()` called fresh per-call apart from a refactor that hoists it to
+    // `const c = ctx()` once at construction time and reuses `c` for every
+    // subsequent call — both would satisfy a single-call, fixed-ctx
+    // assertion. Task 7 depends on per-call derivation (the calling agent's
+    // real depth changes call to call), so this test calls the handler
+    // twice and asserts ops.spawn observed two DISTINCT ctx values, which a
+    // hoisted `ctx()` call cannot produce.
+    let depth = 0;
+    const ctx = () => ({ parentAgentId: "parent-1", depth: ++depth });
+    const server = createFleetServer(ops, ctx);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const registered = (server.instance as any)._registeredTools["spawn"];
     // Simulate a model trying to smuggle depth/parentAgentId through the
     // arguments object directly (bypassing schema stripping entirely, the
     // worst case). The handler must still ignore them and use ctx().
     await registered.handler({ tasks: [{ prompt: "hi" }], depth: 0, parentAgentId: "root" }, {});
+    await registered.handler({ tasks: [{ prompt: "bye" }], depth: 99, parentAgentId: "root" }, {});
 
-    expect(seenTasks).toEqual([[{ prompt: "hi" }]]);
-    expect(seenCtx).toEqual([fixedCtx]);
+    expect(seenTasks).toEqual([[{ prompt: "hi" }], [{ prompt: "bye" }]]);
+    expect(seenCtx).toEqual([
+      { parentAgentId: "parent-1", depth: 1 },
+      { parentAgentId: "parent-1", depth: 2 },
+    ]);
   });
 
   it("check and collect forward to ops without requiring approval semantics", async () => {
@@ -108,7 +150,11 @@ describe("fleet server", () => {
     expect(JSON.parse(collectResult.content[0].text)).toEqual([{ agentId: "a1", status: "working", result: null }]);
   });
 
-  it("spawn surfaces a thrown cap-breach error without throwing itself", async () => {
+  // F2: a cap breach (zero principals minted) must be UNMISTAKABLE to the
+  // model, not merely structurally distinct (an error object vs. an array)
+  // inside an otherwise-successful (non-isError) tool result. Matches the
+  // `fail()` precedent in src/ontology/server.ts and src/infra/server.ts.
+  it("spawn surfaces a thrown cap-breach error as isError:true, not a disguised success", async () => {
     const ops: FleetOps = {
       spawn: async () => { throw new Error("cap breached: would exceed maxConcurrent=8"); },
       check: async () => [],
@@ -118,7 +164,43 @@ describe("fleet server", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const registered = (server.instance as any)._registeredTools["spawn"];
     const result = await registered.handler({ tasks: [{ prompt: "hi" }] }, {});
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.error).toContain("cap breached");
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("cap breached");
+  });
+
+  it("check surfaces a thrown ops error as isError:true", async () => {
+    const ops: FleetOps = {
+      spawn: async () => [],
+      check: async () => { throw new Error("registry unreadable"); },
+      collect: async () => [],
+    };
+    const server = createFleetServer(ops, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registered = (server.instance as any)._registeredTools["check"];
+    const result = await registered.handler({ agentIds: ["a1"] }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("registry unreadable");
+  });
+
+  it("collect surfaces a thrown ops error as isError:true", async () => {
+    const ops: FleetOps = {
+      spawn: async () => [],
+      check: async () => [],
+      collect: async () => { throw new Error("liveness probe failed"); },
+    };
+    const server = createFleetServer(ops, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registered = (server.instance as any)._registeredTools["collect"];
+    const result = await registered.handler({ agentIds: ["a1"] }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("liveness probe failed");
+  });
+
+  it("spawn's description documents the per-task {ok,error} result shape", () => {
+    const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registered = (server.instance as any)._registeredTools["spawn"];
+    expect(registered.description).toMatch(/ok\s*:\s*false/);
+    expect(registered.description.toLowerCase()).toContain("error");
   });
 });
