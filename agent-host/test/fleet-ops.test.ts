@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createFleetOps } from "../src/fleet/ops.js";
@@ -371,6 +371,50 @@ describe("fleet liveCount reconciliation (I1 + fix round 2 R2)", () => {
       const second = await ops.spawn([{ prompt: "c" }], { parentAgentId: null, depth: 0 });
       expect(second[0]).toMatchObject({ ok: false }); // still fails (broken backend) — but the CAP admitted the attempt
       expect(registry.list()).toHaveLength(2);
+    },
+  );
+
+  it(
+    "F1: a never-bound record with an unparseable/missing createdAt still COUNTS toward liveCount " +
+      "(a legacy or hand-edited agents.json must not fail OPEN on the concurrency cap)",
+    async () => {
+      // Simulates a legacy/hand-edited index: agents.ts's on-load
+      // normalisation covers parentAgentId/depth but not createdAt, so a
+      // record like this is loadable as-is.
+      const legacyIndexPath = join(dir, "legacy-agents.json");
+      writeFileSync(
+        legacyIndexPath,
+        JSON.stringify([
+          {
+            agentId: "legacy-1",
+            nativeId: null,
+            backend: "mngr",
+            name: "legacy",
+            createdAt: "not-a-date", // Date.parse(...) => NaN
+            lastActiveAt: "2026-08-04T00:00:00.000Z",
+            status: "active",
+            parentAgentId: null,
+            depth: 0,
+          },
+        ]),
+      );
+      const legacyRegistry = createAgentRegistry({
+        indexPath: legacyIndexPath,
+        now: () => "2026-08-04T00:00:00.000Z",
+        id: () => "rhumb-new",
+      });
+      const { ops } = makeOps({
+        registry: legacyRegistry,
+        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+      });
+
+      // maxConcurrent: 1, and the legacy record alone should already
+      // consume that one slot — a naive `age <= WINDOW` check would read
+      // its age as NaN, silently exclude it, and let this spawn through.
+      await expect(
+        ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 }),
+      ).rejects.toThrow(/limit 1 concurrent/);
+      expect(legacyRegistry.list()).toHaveLength(1); // nothing new minted
     },
   );
 });

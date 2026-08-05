@@ -155,9 +155,29 @@ export function createFleetOps(deps: {
    *     record while it's younger than `NEVER_BOUND_DISPATCH_WINDOW_MS`
    *     (see that constant's doc comment): recently-created ones may
    *     genuinely be mid-dispatch (no `nativeId` yet is expected and
-   *     transient), but one older than that cannot correspond to a live
-   *     agent — no `nativeId` was ever bound, so nothing was ever created
-   *     for it to still be running as.
+   *     transient), but one older than that is presumed dead. This is a
+   *     presumption, not a proof: it's true for most `ensure` failure
+   *     reasons (an invalid name, a create that genuinely never happened),
+   *     but NOT for `reason: "create-unconfirmed"` — there, `mngr create`
+   *     itself exited 0 and only the FOLLOW-UP listing failed, so a real
+   *     live agent very likely exists behind this permanently-unbound
+   *     record (mngr.ts's `ensureAgent`). That case is narrow and already
+   *     an orphan by the time this window elapses regardless (nothing else
+   *     retries the adoption), so it isn't fixed here — flagged as a
+   *     follow-up rather than treated as this comment's invariant.
+   *
+   *     Fix round 3, F1: `now() - Date.parse(rec.createdAt)` is `NaN` for a
+   *     missing or malformed `createdAt` (a legacy or hand-edited
+   *     `agents.json` — `agents.ts`'s on-load normalisation covers
+   *     `parentAgentId`/`depth` but not `createdAt`). Every comparison
+   *     against `NaN` is `false`, so a naive `age <= WINDOW` check would
+   *     silently EXCLUDE an unparseable record — the exact inverse of this
+   *     function's "exclude only on positive confirmation" discipline, and
+   *     a fail-OPEN on the concurrency cap. The comparison below is
+   *     inverted (`!(age > WINDOW)`) specifically so `NaN` — which makes
+   *     `age > WINDOW` false and therefore the negation true — COUNTS,
+   *     consistent with the "absence/unknowability is ambiguous, so count
+   *     it" rule already applied to a missing liveness-map entry above.
    *   - A record WITH a nativeId is reconciled against `liveness()`, but
    *     ONLY excluded from the count when it is POSITIVELY confirmed
    *     terminal — `deriveAgentStatus` says "done" or "stopped" for a
@@ -198,9 +218,15 @@ export function createFleetOps(deps: {
     for (const rec of active) {
       if (!rec.nativeId) {
         // R2: only count while still plausibly mid-dispatch — see
-        // NEVER_BOUND_DISPATCH_WINDOW_MS's doc comment.
+        // NEVER_BOUND_DISPATCH_WINDOW_MS's doc comment. F1: written as
+        // `!(age > WINDOW)` rather than `age <= WINDOW` so an unparseable
+        // `createdAt` (age is `NaN`) still counts — `NaN > x` is `false`,
+        // so the negation is `true` — instead of silently (and
+        // fail-openly) excluding it. A `NaN` age is treated as "recent",
+        // the same conservative reading this function gives any other
+        // ambiguous/unknowable signal.
         const age = now() - Date.parse(rec.createdAt);
-        if (age <= NEVER_BOUND_DISPATCH_WINDOW_MS) count++;
+        if (!(age > NEVER_BOUND_DISPATCH_WINDOW_MS)) count++;
         continue;
       }
       if (!live.has(rec.nativeId)) {
