@@ -556,6 +556,33 @@ describe("agent-host server", () => {
     await new Promise((r) => setImmediate(r));
     expect(resumed).toEqual([undefined, "s-quiet"]);
   });
+
+  it("GET /roster returns the allowlist as logins and handles", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: ["op@example.com", "zoe@example.com"], insecureDev: false },
+    });
+    const res = await request(app)
+      .get("/roster")
+      .set("Tailscale-User-Login", "op@example.com")
+      .set("Sec-Rhumb-Control", "1");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      roster: [
+        { login: "op@example.com", handle: "op" },
+        { login: "zoe@example.com", handle: "zoe" },
+      ],
+    });
+  });
+
+  it("GET /roster is behind the identity guard", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: ["op@example.com"], insecureDev: false },
+    });
+    const res = await request(app).get("/roster");
+    expect(res.status).toBe(403);
+  });
 });
 
 describe("presenceLogins", () => {

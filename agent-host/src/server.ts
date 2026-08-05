@@ -8,6 +8,7 @@ import { createIdentityGuard, requireShellHeader, readActorLogin } from "./ident
 import { stampAuthor } from "./envelope.js";
 import type { SessionService } from "./sessions.js";
 import { createTurnQueue, type TurnQueue } from "./queue.js";
+import { buildRoster } from "./roster.js";
 
 export interface IdentityDeps {
   allowedUsers: string[];
@@ -174,6 +175,10 @@ export function createServer(deps: {
       pruneSubscriber(subscribers, id, res);
       broadcastPresence(id);
     });
+  });
+
+  app.get("/roster", (_req: Request, res: Response) => {
+    res.json({ roster: buildRoster(deps.identity.allowedUsers) });
   });
 
   app.get("/turns/:turnId/stream", (req: Request, res: Response) => {
