@@ -93,10 +93,31 @@ export function createFleetOps(deps: {
   /** The last assistant finish_reason for one agent, or null if unreadable. */
   lastFinishReason: (nativeId: string) => Promise<string | null>;
   pollIntervalMs?: number;
+  /** Fix round 2, R2: injectable clock for `liveCount`'s staleness check
+   *  (see below). Defaults to the real wall clock; tests override it to
+   *  simulate the passage of time without real sleeps. */
+  now?: () => number;
 }): FleetOps {
   const { backend, registry, caps, spec, mintName, liveness, lastFinishReason } = deps;
   const pollInterval = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const now = deps.now ?? Date.now;
   const withMutex = createMutex();
+
+  /** Fix round 2, R2: how long a never-bound record (`nativeId === null`)
+   *  keeps counting toward `liveCount` before it's presumed dead rather
+   *  than merely mid-dispatch. `ensureAgent` (mngr.ts) can chain several
+   *  sequential `exec()` calls for one `ensure` — a liveness listing, an
+   *  optional `create`, and a re-resolve — each individually capped at
+   *  `EXEC_TIMEOUT_MS` (120s, exec.ts). Ten minutes is comfortably above
+   *  even a worst-case chain of those, so this only excludes records from
+   *  a `spawn` call that is unambiguously not still in flight — never one
+   *  that's merely running long. Generous on purpose: the failure mode of
+   *  UNDER-estimating this window is silently re-opening I1's brick (a
+   *  genuinely in-flight ensure gets excluded, undercounting live
+   *  capacity); the failure mode of over-estimating it is a wrongly
+   *  conservative `liveCount` for a few extra minutes after a real ensure
+   *  failure, which is the safe direction. */
+  const NEVER_BOUND_DISPATCH_WINDOW_MS = 10 * 60_000;
 
   /** How many mngr-backed principals currently consume a concurrency slot
    *  (fix round 1, I1). Nothing in the registry ever flips a record's
@@ -123,6 +144,20 @@ export function createFleetOps(deps: {
    *     brand-new records would still show `nativeId === null` at that
    *     point (they haven't been through `ensure` yet, which runs OUTSIDE
    *     the mutex — see `spawn`).
+   *
+   *     Fix round 2, R2: this counted UNCONDITIONALLY at first, which
+   *     reopens I1's own brick on the failure path — a failed `ensure`
+   *     deliberately leaves its record ACTIVE and unbound forever (see
+   *     `dispatchOne`), nothing ever reaps it, and `agents.json` persists,
+   *     so after `maxConcurrent` cumulative ensure failures the box would
+   *     be bricked exactly as I1 described, just via unbound records
+   *     instead of stale bound ones. Fixed by only counting a never-bound
+   *     record while it's younger than `NEVER_BOUND_DISPATCH_WINDOW_MS`
+   *     (see that constant's doc comment): recently-created ones may
+   *     genuinely be mid-dispatch (no `nativeId` yet is expected and
+   *     transient), but one older than that cannot correspond to a live
+   *     agent — no `nativeId` was ever bound, so nothing was ever created
+   *     for it to still be running as.
    *   - A record WITH a nativeId is reconciled against `liveness()`, but
    *     ONLY excluded from the count when it is POSITIVELY confirmed
    *     terminal — `deriveAgentStatus` says "done" or "stopped" for a
@@ -162,7 +197,10 @@ export function createFleetOps(deps: {
     let count = 0;
     for (const rec of active) {
       if (!rec.nativeId) {
-        count++;
+        // R2: only count while still plausibly mid-dispatch — see
+        // NEVER_BOUND_DISPATCH_WINDOW_MS's doc comment.
+        const age = now() - Date.parse(rec.createdAt);
+        if (age <= NEVER_BOUND_DISPATCH_WINDOW_MS) count++;
         continue;
       }
       if (!live.has(rec.nativeId)) {
@@ -235,32 +273,51 @@ export function createFleetOps(deps: {
     // from "not done" under the fixed `string | null` result shape; see I5
     // note above and the report.
 
-    const last = msgs.filter((m) => m.kind === "text").at(-1) ?? null;
-    if (!last) return EMPTY_COMPLETION_RESULT;
-
+    // Fix round 2, R5: the terminality gate must run BEFORE the
+    // no-text-entries check, not after. Checking `!last` first would
+    // report EMPTY_COMPLETION_RESULT for a transcript that has no text
+    // entries YET and a non-terminal finish reason — i.e. assert a
+    // confirmed-empty terminal answer for a turn that in fact hasn't
+    // terminated. Withholding (null) is the honest answer in that case,
+    // exactly like the has-text-but-non-terminal case below it.
     const finishReason = await lastFinishReason(rec.nativeId);
     if (!isTerminalFinishReason(finishReason)) return null; // I4: mid-turn
-    // narration, not a real answer — withhold it rather than report it.
+    // narration (or no output at all yet), not a confirmed final answer —
+    // withhold it rather than report it.
+
+    const last = msgs.filter((m) => m.kind === "text").at(-1) ?? null;
+    if (!last) return EMPTY_COMPLETION_RESULT;
 
     return last.text.trim().length > 0 ? last.text : EMPTY_COMPLETION_RESULT;
   }
 
-  /** A task failed AFTER `ensure` produced a real, bound agent — i.e. a live
-   *  mngr process genuinely exists (fix round 1, C2). Before this fix, a
-   *  failure here was recorded by editing the registry's JSON `status`
-   *  field alone (`registry.markStopped`), which does nothing to the real
-   *  mngr agent: it keeps running in tmux, orphaned — a real process on the
-   *  box, costing real money, that nobody sanctioned. Worse, marking the
-   *  record stopped ALSO makes it unrecoverable: `ensureAgent` refuses to
-   *  silently revive a stopped principal by design, and `list()` filters
-   *  out stopped records, so the leaked agent becomes invisible to the
-   *  operator with no handle left to find or stop it.
+  /** Stop-then-markStopped for a principal being ABANDONED BEFORE its send
+   *  was ever actually dispatched to mngr (fix round 1, C2 — narrowed in
+   *  scope by fix round 2, R1; see `dispatchSend`'s doc comment for why
+   *  this is no longer used for anything that happens AFTER a send genuinely
+   *  started).
+   *
+   *  `ensure` already produced a real, bound agent by the time this can be
+   *  called — a live mngr process genuinely exists — so simply editing the
+   *  registry's JSON `status` field (as fix round 1's very first draft did)
+   *  does nothing to it: it keeps running in tmux, orphaned — a real
+   *  process on the box, costing real money, that nobody sanctioned. Worse,
+   *  marking the record stopped ALSO makes it unrecoverable: `ensureAgent`
+   *  refuses to silently revive a stopped principal by design, and `list()`
+   *  filters out stopped records, so the leaked agent becomes invisible to
+   *  the operator with no handle left to find or stop it.
    *
    *  Fixed by stopping the REAL agent first, and only marking the registry
    *  record stopped once that succeeds. If `stop` itself fails, the record
    *  is deliberately left ACTIVE (not stopped) — the agent stays
-   *  discoverable via `list()`/`check()` for a later retry, and the stop
-   *  failure is folded into the reported error instead of being swallowed. */
+   *  discoverable via `list()`/`check()` for a later retry; the stop
+   *  failure is logged (R3) rather than swallowed.
+   *
+   *  The ONLY caller left after R1 is `dispatchOne`'s guard around a
+   *  SYNCHRONOUS throw from `dispatchSend` (R4) — i.e. `send` was never
+   *  actually invoked in a way that could reach mngr, so the agent really
+   *  is being abandoned pre-dispatch, not judged on a turn that's already
+   *  underway. */
   async function failAfterEnsure(agentId: string, ref: AgentRef, primaryError: string): Promise<void> {
     try {
       await backend.stop(ref);
@@ -283,29 +340,65 @@ export function createFleetOps(deps: {
    *  reports failure by calling `onEvent({type:"error", ...})`, never by
    *  throwing). The brief's original `() => {}` discarded every one of
    *  those events, so every mngr-side failure was silently reported as
-   *  `ok: true`. This collects them and, on failure, runs the real
-   *  `failAfterEnsure` stop-then-mark-stopped sequence — asynchronously,
-   *  since by the time any of this resolves `spawn` has already returned.
-   *  `.catch()` on the whole chain guarantees no unhandled rejection
-   *  escapes this fire-and-forget call, matching the AgentBackend contract
-   *  defensively even though the real backend's `send` never rejects. */
+   *  `ok: true`; fix round 1 fixed THAT but overcorrected into R1's
+   *  Critical regression — see below.
+   *
+   *  Fix round 2, R1 — CRITICAL, and the rule that matters most in this
+   *  function: a POST-DISPATCH failure (an `{type:"error"}` event, or a
+   *  rejected `send` promise) must NEVER stop the agent or mark it
+   *  stopped. mngr's own `send()` emits EXACTLY this event for an entirely
+   *  healthy, still-working agent: `DEFAULT_REPLY_TIMEOUT_MS` (300s, never
+   *  overridden) elapsing while the turn is genuinely still in progress —
+   *  eligibility requires a TERMINAL assistant entry, so any multi-step
+   *  tool-using turn that simply takes a while ALWAYS trips it — and a
+   *  single failed pre-send transcript read trips it within seconds on a
+   *  perfectly healthy agent. mngr's own comment calls this an honest
+   *  "delivered but not yet answered" report, not a death sentence — in
+   *  interactive use the agent survives and answers later. Fix round 1
+   *  treated this event as fatal (called `failAfterEnsure` here), which
+   *  stopped and PERMANENTLY RETIRED every task whose first terminal reply
+   *  took over five minutes — the exact long-running workload `spawn`/
+   *  `collect` exist for — and because `markStopped` is a deliberate dead
+   *  end (`ensureAgent` refuses to revive a stopped principal; `list()`
+   *  excludes stopped records), the agent became unrecoverable and
+   *  invisible. That turned C2's harm (an orphaned, unrecoverable agent)
+   *  into deliberate behaviour instead of fixing it.
+   *
+   *  Deliberately NOT attempting to classify the error TEXT as fatal vs.
+   *  non-fatal: the message string is not a contract (mngr's wording can
+   *  change), so no substring match here would be trustworthy. The
+   *  structural rule instead: once `send` has actually been invoked (as
+   *  opposed to throwing synchronously before ever being invoked — see
+   *  `dispatchOne`'s R4 guard, the one remaining case that still calls
+   *  `failAfterEnsure`), the agent's fate belongs entirely to
+   *  `check`/`collect`, which judge it from mngr's own liveness — never
+   *  from a `send` error event. The registry record is left ACTIVE and
+   *  untouched either way, so it stays visible to `list()` and harvestable
+   *  by `collect()`. R3: the error text is still surfaced via
+   *  `console.warn` for operator visibility — it just isn't ACTED on. */
   function dispatchSend(agentId: string, ref: AgentRef, prompt: string): void {
     const events: AgentEvent[] = [];
     backend
       .send(ref, prompt, (e) => events.push(e))
-      .then((finalRef) => {
+      .then(() => {
         const errorEvent = events.find((e) => e.type === "error");
         if (errorEvent) {
-          return failAfterEnsure(agentId, finalRef, (errorEvent as { message: string }).message);
+          console.warn(
+            `[rhumb] fleet: agent ${agentId}'s dispatched turn reported an error; left ACTIVE — ` +
+              "check()/collect() will judge its real status from mngr's own liveness, not this event " +
+              `(a routine reply-timeout report looks identical to a real failure here): ${(errorEvent as { message: string }).message}`,
+          );
         }
-        return undefined;
       })
-      .catch((e) => failAfterEnsure(agentId, ref, e instanceof Error ? e.message : String(e)))
       .catch((e) => {
-        // failAfterEnsure itself should never throw, but this is a
-        // fire-and-forget chain — guarantee nothing unhandled escapes it
-        // regardless.
-        console.warn(`[rhumb] fleet: could not record a dispatch failure for ${agentId}:`, e);
+        // Defensive: the real backend's `send` never rejects (failure is
+        // always an onEvent call, handled above); a differently-behaved
+        // backend might. Same rule applies regardless: record for
+        // diagnostics only, never stop or mark-stop.
+        console.warn(
+          `[rhumb] fleet: agent ${agentId}'s dispatched send() rejected; left ACTIVE — ` +
+            `check()/collect() will judge its real status from mngr's own liveness: ${e instanceof Error ? e.message : String(e)}`,
+        );
       });
   }
 
@@ -346,7 +439,35 @@ export function createFleetOps(deps: {
       return { ok: false, error: `agentId ${rec.agentId}: mngr: agent could not be ensured (${reason})` };
     }
 
-    dispatchSend(rec.agentId, ref, task.prompt);
+    // Fix round 2, R4: `dispatchSend` calls `backend.send(...)`, and the
+    // `AgentBackend` contract requires that to always RETURN a promise
+    // (even on internal failure — the real backend never throws, only its
+    // returned promise's `onEvent` calls / resolution communicate
+    // failure). A SYNCHRONOUS throw here would be a contract violation,
+    // and unguarded would propagate straight out of this async function,
+    // rejecting `Promise.all(created.map(dispatchOne))` for the WHOLE
+    // BATCH — every other task's outcome lost, and `spawn` itself
+    // rejecting indistinguishably from a zero-mint cap breach even though
+    // N-1 principals really were minted and dispatched fine. `ensure`
+    // already produced a real, bound agent by this point, but a
+    // synchronous throw means dispatch never actually reached mngr (no
+    // promise was ever created for `dispatchSend`'s fire-and-forget chain
+    // to attach to) — this is the one remaining "ensure succeeded, but the
+    // task never actually got dispatched" case, so it — uniquely — still
+    // gets the pre-dispatch stop-then-markStopped treatment via
+    // `failAfterEnsure`. R1's "post-dispatch failures never stop the
+    // agent" rule does not apply here, because dispatch never actually
+    // started.
+    try {
+      dispatchSend(rec.agentId, ref, task.prompt);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await failAfterEnsure(rec.agentId, ref, msg);
+      return {
+        ok: false,
+        error: `agentId ${rec.agentId}: mngr: send() failed synchronously before dispatch could start (${msg})`,
+      };
+    }
     return { ok: true, agentId: rec.agentId };
   }
 

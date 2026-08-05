@@ -193,16 +193,21 @@ describe("fleet spawn concurrency (C3)", () => {
   });
 });
 
-describe("fleet dispatch failure recording (C1 + C2)", () => {
+describe("fleet dispatch failure recording (C1 + C2 + fix round 2 R1/R4)", () => {
   it(
-    "stops the real agent and marks it stopped when a dispatched send fails AFTER ensure succeeded",
+    "R1 CRITICAL regression guard: a post-dispatch send() onEvent error must NOT stop or mark-stop the agent",
     async () => {
+      // This is mngr's OWN "delivered but not yet answered" report — fired
+      // on a perfectly healthy, still-working agent (a routine 300s
+      // reply-timeout on a multi-step turn, or a single failed pre-send
+      // transcript read). Fix round 1 treated ANY such event as fatal,
+      // which stopped and permanently retired every long-running task —
+      // this test guards against reintroducing that.
       const stopped: string[] = [];
       const backend = fakeBackend([]);
       const failing: AgentBackend = {
         ...backend,
         async send(ref, _prompt, onEvent) {
-          // C1: the real backend reports failure via onEvent, not a throw.
           onEvent({ type: "error", message: "mngr: message delivered but not yet answered" });
           return ref;
         },
@@ -212,25 +217,90 @@ describe("fleet dispatch failure recording (C1 + C2)", () => {
       };
       const { ops } = makeOps({ backend: failing });
       const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
-      // Dispatch-only: spawn() itself still reports success (ensure
-      // succeeded; the send failure isn't known yet).
       expect(out).toEqual([{ ok: true, agentId: (out[0] as { agentId: string }).agentId }]);
       const id = (out[0] as { ok: true; agentId: string }).agentId;
 
       await flushMicrotasks();
 
-      expect(stopped).toEqual([id]);
-      expect(registry.get(id)?.status).toBe("stopped");
+      expect(stopped).toEqual([]); // backend.stop must NEVER be called for this
+      expect(registry.get(id)?.status).toBe("active"); // left ACTIVE, harvestable by check()/collect()
     },
   );
 
-  it("leaves the record ACTIVE (discoverable) when stop() itself fails after a send failure", async () => {
+  it(
+    "a REJECTING send() promise (defensive path, previously untested) also leaves the agent ACTIVE and untouched",
+    async () => {
+      const stopped: string[] = [];
+      const backend = fakeBackend([]);
+      const failing: AgentBackend = {
+        ...backend,
+        async send() {
+          // A genuine promise rejection (as opposed to R4's synchronous
+          // throw below) — the real backend never does this, but the
+          // AgentBackend type doesn't forbid it, and R1's rule applies
+          // regardless of which post-dispatch failure shape occurs.
+          throw new Error("send() rejected");
+        },
+        async stop(ref) {
+          stopped.push(ref.agentId);
+        },
+      };
+      const { ops } = makeOps({ backend: failing });
+      const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+      const id = (out[0] as { ok: true; agentId: string }).agentId;
+
+      await flushMicrotasks();
+
+      expect(stopped).toEqual([]);
+      expect(registry.get(id)?.status).toBe("active");
+    },
+  );
+
+  it(
+    "R4: a SYNCHRONOUS throw from send() (contract violation — dispatch never actually starts) " +
+      "stops that one agent, reports ok:false for THAT task only, and does not sink the rest of the batch",
+    async () => {
+      const stopped: string[] = [];
+      const backend = fakeBackend([]);
+      const failing: AgentBackend = {
+        ...backend,
+        // Deliberately NOT `async` — a genuine SYNCHRONOUS throw, not a
+        // rejected promise, simulating a backend that violates the
+        // AgentBackend contract (send() must always return a Promise, even
+        // on internal failure).
+        send(ref, prompt) {
+          if (prompt === "boom") throw new Error("sync send failure");
+          return backend.send(ref, prompt, () => {});
+        },
+        async stop(ref) {
+          stopped.push(ref.agentId);
+        },
+      };
+      const { ops } = makeOps({ backend: failing });
+      const out = await ops.spawn([{ prompt: "ok" }, { prompt: "boom" }], { parentAgentId: null, depth: 0 });
+      // The whole batch survives — spawn() itself does NOT reject, unlike
+      // pre-round-2 behaviour where this would sink Promise.all entirely.
+      expect(out).toHaveLength(2);
+      const okOutcome = out.find((o) => o.ok);
+      const failedOutcome = out.find((o) => !o.ok) as { ok: false; error: string };
+      expect(okOutcome).toBeDefined();
+      expect(failedOutcome.error).toMatch(/sync send failure/);
+
+      // Pre-dispatch abandonment (dispatch never reached mngr at all): this
+      // IS still stop-then-markStopped via failAfterEnsure, unlike R1's
+      // post-dispatch rule.
+      const failedRecord = registry.list().find((r) => r.status === "stopped");
+      expect(failedRecord).toBeDefined();
+      expect(stopped).toEqual([failedRecord?.agentId]);
+    },
+  );
+
+  it("R4 + C2: if stop() ALSO fails on the synchronous-throw path, the record stays ACTIVE (discoverable)", async () => {
     const backend = fakeBackend([]);
     const failing: AgentBackend = {
       ...backend,
-      async send(ref, _prompt, onEvent) {
-        onEvent({ type: "error", message: "mngr: delivered but not answered" });
-        return ref;
+      send(): never {
+        throw new Error("sync send failure");
       },
       async stop() {
         throw new Error("mngr: stop refused");
@@ -238,14 +308,71 @@ describe("fleet dispatch failure recording (C1 + C2)", () => {
     };
     const { ops } = makeOps({ backend: failing });
     const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
-    const id = (out[0] as { ok: true; agentId: string }).agentId;
-
-    await flushMicrotasks();
-
-    // NOT marked stopped: the agent must stay discoverable via list()/
-    // check() for manual cleanup rather than becoming invisible AND leaked.
-    expect(registry.get(id)?.status).toBe("active");
+    const failed = out[0] as { ok: false; error: string };
+    expect(failed.error).toMatch(/sync send failure/);
+    // NOT marked stopped: stays discoverable via list()/check() for manual cleanup.
+    expect(registry.get("rhumb-1")?.status).toBe("active");
   });
+});
+
+describe("fleet liveCount reconciliation (I1 + fix round 2 R2)", () => {
+  it("a bound agent positively confirmed done/stopped frees its concurrency slot (I1 present-entry branch)", async () => {
+    // maxConcurrent: 1 — if a DONE agent kept consuming its slot forever
+    // (the registry's own "active" status never flips on its own), this
+    // second spawn could never succeed again. This branch of liveCount had
+    // no test at all before fix round 2.
+    const { ops } = makeOps({
+      caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+      liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
+    });
+    const first = await ops.spawn([{ prompt: "a" }], { parentAgentId: null, depth: 0 });
+    expect(first[0]).toEqual({ ok: true, agentId: "rhumb-1" });
+
+    const second = await ops.spawn([{ prompt: "b" }], { parentAgentId: null, depth: 0 });
+    expect(second[0]).toEqual({ ok: true, agentId: "rhumb-2" });
+  });
+
+  it(
+    "R2: a never-bound record ages out of liveCount after the dispatch window, instead of bricking the fleet permanently",
+    async () => {
+      const REGISTRY_NOW_MS = Date.parse("2026-08-04T00:00:00.000Z"); // matches the fixed registry clock in beforeEach
+      let nowMs = REGISTRY_NOW_MS;
+      const brokenBackend: AgentBackend = {
+        ...fakeBackend([]),
+        async ensure(agentId) {
+          // Always fails to bind — no real agent is EVER created for this
+          // principal, simulating a permanently-broken spawn attempt.
+          return { agentId, nativeId: null, backend: "mngr", reason: "create-failed" } as AgentRef;
+        },
+      };
+      const { ops } = makeOps({
+        backend: brokenBackend,
+        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+        now: () => nowMs,
+      });
+
+      const first = await ops.spawn([{ prompt: "a" }], { parentAgentId: null, depth: 0 });
+      expect(first[0]).toMatchObject({ ok: false });
+      expect(registry.get("rhumb-1")).toMatchObject({ status: "active", nativeId: null });
+
+      // Still within the dispatch window: the failed record keeps
+      // consuming the only slot, so a second spawn correctly breaches
+      // maxConcurrent (proves the window isn't simply always-excluded).
+      await expect(
+        ops.spawn([{ prompt: "b" }], { parentAgentId: null, depth: 0 }),
+      ).rejects.toThrow(/limit 1 concurrent/);
+      expect(registry.list()).toHaveLength(1); // the rejected attempt minted nothing
+
+      // Advance past the window: the stale, never-bound record must stop
+      // consuming the slot, or the fleet would be bricked forever after
+      // just this one ensure failure — I1's own bug, reopened on the
+      // failure path.
+      nowMs += 11 * 60_000;
+      const second = await ops.spawn([{ prompt: "c" }], { parentAgentId: null, depth: 0 });
+      expect(second[0]).toMatchObject({ ok: false }); // still fails (broken backend) — but the CAP admitted the attempt
+      expect(registry.list()).toHaveLength(2);
+    },
+  );
 });
 
 describe("fleet check/collect", () => {
@@ -335,4 +462,30 @@ describe("fleet check/collect", () => {
     const id = (out[0] as { ok: true; agentId: string }).agentId;
     expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: EMPTY_COMPLETION_RESULT }]);
   });
+
+  it(
+    "R5: collect WITHHOLDS the result (never EMPTY_COMPLETION_RESULT) when there are NO text entries " +
+      "at all AND the finish reason is non-terminal",
+    async () => {
+      const backend = fakeBackend([]);
+      const withTranscript: AgentBackend = {
+        ...backend,
+        async transcript() {
+          return []; // no text entries whatsoever
+        },
+      };
+      const { ops } = makeOps({
+        backend: withTranscript,
+        liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
+        lastFinishReason: async () => "tool_use", // NON-terminal
+      });
+      const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+      const id = (out[0] as { ok: true; agentId: string }).agentId;
+      // Before R5's reorder, the empty-transcript check ran BEFORE the
+      // terminality gate, so this reported EMPTY_COMPLETION_RESULT — a
+      // confirmed-empty final answer — for a turn that in fact hasn't
+      // terminated yet.
+      expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: null }]);
+    },
+  );
 });
