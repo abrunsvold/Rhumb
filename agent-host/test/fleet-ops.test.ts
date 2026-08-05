@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { createFleetOps } from "../src/fleet/ops.js";
 import { createAgentRegistry, type AgentRegistry } from "../src/agents.js";
 import type { AgentBackend, AgentRef } from "../src/backends/types.js";
+import { EMPTY_COMPLETION_RESULT } from "../src/backends/mngr.js";
 
 let dir: string;
 let registry: AgentRegistry;
@@ -19,7 +20,10 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const CAPS = { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 };
+// Fix round 1: distinct values so a breach test can tell WHICH cap fired —
+// the original 8/8 fixture couldn't distinguish maxPerSpawn from
+// maxConcurrent.
+const CAPS = { maxPerSpawn: 3, maxConcurrent: 8, maxDepth: 1 };
 const SPEC = { model: "m", workspace: "/ws", permissionMode: "acceptEdits", extraOptions: {} };
 
 /** Records sends; ensure() binds a fake nativeId. */
@@ -55,6 +59,15 @@ function makeOps(over: Partial<Parameters<typeof createFleetOps>[0]> = {}) {
   return { ops, sent };
 }
 
+/** Waits out the fire-and-forget dispatch chain (I2: `spawn` no longer
+ *  awaits `send`, so failures it discovers are recorded asynchronously,
+ *  after `spawn` has already returned). Node drains ALL pending microtasks
+ *  before firing a macrotask, so a single `setTimeout(0)` is enough to
+ *  observe anything the dispatch chain has settled by then. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
 describe("fleet spawn", () => {
   it("creates one principal per task and dispatches each prompt", async () => {
     const { ops, sent } = makeOps();
@@ -86,21 +99,152 @@ describe("fleet spawn", () => {
     expect(sent).toHaveLength(0);
   });
 
-  it("isolates a per-task failure without failing the batch", async () => {
-    const sent: Array<{ agentId: string; prompt: string }> = [];
-    const backend = fakeBackend(sent);
+  it("REJECTS a batch that would exceed maxConcurrent (distinct from maxPerSpawn), minting nothing extra", async () => {
+    // Fix round 1, I1: previously only maxPerSpawn was ever exercised.
+    // maxPerSpawn is generous here (5) so only the CONCURRENT cap can fire.
+    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 2, maxDepth: 1 } });
+    const first = await ops.spawn([{ prompt: "a" }, { prompt: "b" }], { parentAgentId: null, depth: 0 });
+    expect(first.every((o) => o.ok)).toBe(true); // exactly fills the cap: 2/2
+
+    await expect(
+      ops.spawn([{ prompt: "c" }], { parentAgentId: null, depth: 0 }),
+    ).rejects.toThrow(/limit 2 concurrent/);
+    expect(registry.list()).toHaveLength(2); // the second batch minted NOTHING
+  });
+
+  it("spawn returns once every agent is ensured, WITHOUT waiting for send() to resolve (I2 dispatch-only)", async () => {
+    let releaseSend: (() => void) | null = null;
+    const backend = fakeBackend([]);
+    const slow: AgentBackend = {
+      ...backend,
+      send(ref) {
+        // A send() that would hang forever unless explicitly released —
+        // if `spawn` awaited this, the test itself would time out.
+        return new Promise((resolve) => {
+          releaseSend = () => resolve(ref);
+        });
+      },
+    };
+    const { ops } = makeOps({ backend: slow });
+    const started = Date.now();
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(out).toEqual([{ ok: true, agentId: (out[0] as { agentId: string }).agentId }]);
+    // Release the dangling send so it doesn't leak an unresolved promise
+    // (and a potential unhandled-rejection warning) past this test.
+    releaseSend?.();
+    await flushMicrotasks();
+  });
+
+  it(
+    "isolates a per-task ENSURE failure without failing the batch " +
+      "(the realistic production failure mode: ensure() returns nativeId:null, it never throws)",
+    async () => {
+      const sent: Array<{ agentId: string; prompt: string }> = [];
+      const backend = fakeBackend(sent);
+      const failing: AgentBackend = {
+        ...backend,
+        async ensure(agentId, spec) {
+          if (agentId === "rhumb-2") {
+            // Matches the real mngr backend's failure shape: no throw, a
+            // null nativeId plus a `reason` code.
+            return { agentId, nativeId: null, backend: "mngr", reason: "create-failed" } as AgentRef;
+          }
+          return backend.ensure(agentId, spec);
+        },
+      };
+      const { ops } = makeOps({ backend: failing });
+      const out = await ops.spawn([{ prompt: "ok" }, { prompt: "boom" }], { parentAgentId: null, depth: 0 });
+      expect(out.filter((o) => o.ok)).toHaveLength(1);
+      const failed = out.find((o) => !o.ok) as { ok: false; error: string };
+      expect(failed.error).toMatch(/create-failed/);
+      // The failed principal is left ACTIVE and unbound (not markStopped),
+      // so a later retry through ensureAgent's own adoption path could
+      // still recover it — see the `dispatchOne` doc comment in ops.ts.
+      expect(registry.get("rhumb-2")?.status).toBe("active");
+      expect(sent).toHaveLength(1); // only the surviving task's prompt was sent
+    },
+  );
+});
+
+describe("fleet spawn concurrency (C3)", () => {
+  it("serializes check-then-mint so two concurrent spawns cannot jointly exceed maxConcurrent", async () => {
+    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 3, maxDepth: 1 } });
+    const ctx = { parentAgentId: null, depth: 0 };
+
+    const [r1, r2] = await Promise.allSettled([
+      ops.spawn([{ prompt: "a1" }, { prompt: "a2" }], ctx),
+      ops.spawn([{ prompt: "b1" }, { prompt: "b2" }], ctx),
+    ]);
+
+    // The invariant that actually matters: total principals minted across
+    // BOTH concurrent calls never exceeds the cap.
+    expect(registry.list().length).toBeLessThanOrEqual(3);
+
+    // With the mutex, this resolves deterministically: batch A (called
+    // first) mints 2 and fills liveCount to 2; batch B's check then sees
+    // 2 + 2 = 4 > 3 and rejects outright — cap-first, so batch B mints
+    // NOTHING (not a partial 1-of-2 admission).
+    const fulfilled = [r1, r2].filter((r) => r.status === "fulfilled");
+    expect(fulfilled).toHaveLength(1);
+    const rejected = [r1, r2].find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+    expect(rejected?.reason).toBeInstanceOf(Error);
+    expect((rejected?.reason as Error).message).toMatch(/limit 3 concurrent/);
+  });
+});
+
+describe("fleet dispatch failure recording (C1 + C2)", () => {
+  it(
+    "stops the real agent and marks it stopped when a dispatched send fails AFTER ensure succeeded",
+    async () => {
+      const stopped: string[] = [];
+      const backend = fakeBackend([]);
+      const failing: AgentBackend = {
+        ...backend,
+        async send(ref, _prompt, onEvent) {
+          // C1: the real backend reports failure via onEvent, not a throw.
+          onEvent({ type: "error", message: "mngr: message delivered but not yet answered" });
+          return ref;
+        },
+        async stop(ref) {
+          stopped.push(ref.agentId);
+        },
+      };
+      const { ops } = makeOps({ backend: failing });
+      const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+      // Dispatch-only: spawn() itself still reports success (ensure
+      // succeeded; the send failure isn't known yet).
+      expect(out).toEqual([{ ok: true, agentId: (out[0] as { agentId: string }).agentId }]);
+      const id = (out[0] as { ok: true; agentId: string }).agentId;
+
+      await flushMicrotasks();
+
+      expect(stopped).toEqual([id]);
+      expect(registry.get(id)?.status).toBe("stopped");
+    },
+  );
+
+  it("leaves the record ACTIVE (discoverable) when stop() itself fails after a send failure", async () => {
+    const backend = fakeBackend([]);
     const failing: AgentBackend = {
       ...backend,
-      async send(ref, prompt) {
-        if (prompt === "boom") throw new Error("spawn refused");
-        return backend.send(ref, prompt, () => {});
+      async send(ref, _prompt, onEvent) {
+        onEvent({ type: "error", message: "mngr: delivered but not answered" });
+        return ref;
+      },
+      async stop() {
+        throw new Error("mngr: stop refused");
       },
     };
     const { ops } = makeOps({ backend: failing });
-    const out = await ops.spawn([{ prompt: "ok" }, { prompt: "boom" }], { parentAgentId: null, depth: 0 });
-    expect(out.filter((o) => o.ok)).toHaveLength(1);
-    const failed = out.find((o) => !o.ok) as { ok: false; error: string };
-    expect(failed.error).toMatch(/spawn refused/);
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+
+    await flushMicrotasks();
+
+    // NOT marked stopped: the agent must stay discoverable via list()/
+    // check() for manual cleanup rather than becoming invisible AND leaked.
+    expect(registry.get(id)?.status).toBe("active");
   });
 });
 
@@ -115,6 +259,14 @@ describe("fleet check/collect", () => {
     expect(await ops.check([id])).toEqual([{ agentId: id, status: "done" }]);
   });
 
+  it("reports a stopped principal's status as \"stopped\", never \"done\" (I3)", async () => {
+    const { ops } = makeOps();
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    registry.markStopped(id);
+    expect(await ops.check([id])).toEqual([{ agentId: id, status: "stopped" }]);
+  });
+
   it("collect returns PARTIAL results with status rather than throwing on timeout", async () => {
     const { ops } = makeOps({
       liveness: async () => new Map([["agent-native-rhumb-1", { state: "RUNNING", idleSeconds: 0 }]]),
@@ -125,5 +277,62 @@ describe("fleet check/collect", () => {
     const id = (out[0] as { ok: true; agentId: string }).agentId;
     const collected = await ops.collect([id], 20);
     expect(collected).toEqual([{ agentId: id, status: "working", result: null }]);
+  });
+
+  it("collect returns the transcript's answer when the last assistant turn is TERMINAL", async () => {
+    const backend = fakeBackend([]);
+    const withTranscript: AgentBackend = {
+      ...backend,
+      async transcript() {
+        return [{ kind: "text", text: "the real answer" }];
+      },
+    };
+    const { ops } = makeOps({
+      backend: withTranscript,
+      liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
+      lastFinishReason: async () => "end_turn",
+    });
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: "the real answer" }]);
+  });
+
+  it("collect WITHHOLDS the result when the last assistant message is NON-terminal narration (I4)", async () => {
+    const backend = fakeBackend([]);
+    const withTranscript: AgentBackend = {
+      ...backend,
+      async transcript() {
+        return [{ kind: "text", text: "narrating a tool call I am about to make..." }];
+      },
+    };
+    const { ops } = makeOps({
+      backend: withTranscript,
+      liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
+      lastFinishReason: async () => "tool_use", // NON-terminal
+    });
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    // mngr's own state says DONE (deriveAgentStatus's DONE branch doesn't
+    // consult finish_reason), so status is "done" — but the narration must
+    // not be handed back as the answer.
+    expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: null }]);
+  });
+
+  it("collect reports EMPTY_COMPLETION_RESULT, not null, for a genuinely empty terminal completion (I5)", async () => {
+    const backend = fakeBackend([]);
+    const withTranscript: AgentBackend = {
+      ...backend,
+      async transcript() {
+        return [{ kind: "text", text: "" }];
+      },
+    };
+    const { ops } = makeOps({
+      backend: withTranscript,
+      liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
+      lastFinishReason: async () => "end_turn",
+    });
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: EMPTY_COMPLETION_RESULT }]);
   });
 });
