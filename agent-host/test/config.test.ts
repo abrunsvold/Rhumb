@@ -28,6 +28,7 @@ describe("loadConfig", () => {
       insecureDev: true,
       watchdogMinutes: null,
       agentBackend: "sdk",
+      fleetEnabled: false,
       fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
     });
   });
@@ -49,6 +50,7 @@ describe("loadConfig", () => {
       insecureDev: true,
       watchdogMinutes: null,
       agentBackend: "sdk",
+      fleetEnabled: false,
       fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
     });
   });

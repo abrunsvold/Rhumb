@@ -56,6 +56,64 @@ export function fleetGatedToolNames(): string[] {
   return [...GATED_FLEET_TOOL_NAMES];
 }
 
+/** The one gated fleet tool, written once. The audit lines in `buildApp` use
+ *  it so the log can never name a tool the gate does not match;
+ *  `fleetServerKey` proves at boot that it is genuinely a name the SDK will
+ *  publish and that the gate genuinely matches it. */
+const FLEET_SPAWN_TOOL = "mcp__fleet__spawn";
+
+/** The `mcpServers` key to register the fleet server under — read off the
+ *  server the SDK actually constructed, never written as a literal here.
+ *
+ *  **Why this is not just `"fleet"`.** The SDK derives every tool's public
+ *  name as `mcp__<server>__<tool>`, and `GATED_FLEET_TOOL_NAMES` — the set
+ *  `makeFleetCanUseTool` matches against — is a list of those full names. A
+ *  literal key at the registration site is unbound to that list: rename
+ *  either side and `spawn` registers under a name the gated set does not
+ *  contain, the gate falls through to ALLOW, and nothing fails. Task 6
+ *  deferred this as "not exploitable while nothing consumes the constants";
+ *  this file consumes them, so it is.
+ *
+ *  Binding it in two directions:
+ *   1. the key IS the name the server was constructed with, so the key can
+ *      never drift from the construction site;
+ *   2. this throws at BOOT (not at spawn time, and not only in a test) if
+ *      any name in `FLEET_TOOL_NAMES` does not carry that server's prefix,
+ *      or if a gated name is not one of them — i.e. if a rename on either
+ *      side has left the gate pointing at a tool that does not exist.
+ *
+ *  Fails closed by refusing to boot: an ungated `spawn` is worse than a
+ *  host that will not start. */
+export function fleetServerKey(server: { name: string }): string {
+  const prefix = `mcp__${server.name}__`;
+  if (!GATED_FLEET_TOOL_NAMES.has(FLEET_SPAWN_TOOL)) {
+    throw new Error(
+      `fleet wiring: "${FLEET_SPAWN_TOOL}" is no longer in GATED_FLEET_TOOL_NAMES ` +
+        `(${[...GATED_FLEET_TOOL_NAMES].join(", ") || "empty"}) — the host would audit a name ` +
+        "the approval gate does not match, i.e. spawn would run ungated.",
+    );
+  }
+  const misprefixed = (FLEET_TOOL_NAMES as readonly string[]).filter((n) => !n.startsWith(prefix));
+  if (misprefixed.length > 0) {
+    throw new Error(
+      `fleet wiring: MCP server is named "${server.name}" but FLEET_TOOL_NAMES contains ` +
+        `${misprefixed.join(", ")}, which the SDK would never produce (it derives ${prefix}<tool>). ` +
+        "One side was renamed without the other; the approval gate matches on these names, so " +
+        "booting would leave mcp__*__spawn ungated.",
+    );
+  }
+  const unknown = [...GATED_FLEET_TOOL_NAMES].filter(
+    (n) => !(FLEET_TOOL_NAMES as readonly string[]).includes(n),
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `fleet wiring: gated tool name(s) ${unknown.join(", ")} are not among the fleet's own tools ` +
+        `(${FLEET_TOOL_NAMES.join(", ")}) — the gate would match nothing.`,
+    );
+  }
+  return server.name;
+}
+
 type PermissionResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
@@ -84,10 +142,24 @@ type CanUseTool = (toolName: string, input: Record<string, unknown>, opts: unkno
  *  are all the infra module's, reused as-is.
  *
  *  `next` chains to the infra gate when infra is configured, so one
- *  `canUseTool` covers both tool families; when infra is not configured
- *  there is nothing else to gate and everything else is allowed — the fleet
- *  gate must still apply, since a box without Proxmox is the common case and
+ *  `canUseTool` covers both tool families. The fleet gate must apply whether
+ *  or not infra is configured — a box without Proxmox is the common case and
  *  spawning agents there is no less consequential.
+ *
+ *  **The non-fleet fall-through, and why it is `allow` (F4).** Installing a
+ *  `canUseTool` at all routes EVERY tool decision through this callback,
+ *  including on a box that previously had none, so the fall-through result
+ *  replaces whatever `permissionMode` would have decided. The SDK's
+ *  `PermissionResult` is `{behavior:"allow"} | {behavior:"deny"}` — verified
+ *  in `@anthropic-ai/claude-agent-sdk/entrypoints/sdk/coreTypes.d.ts`; there
+ *  is NO "defer to the default policy" variant — so the only alternative to
+ *  `allow` is denying every ordinary tool, which would break the host. Two
+ *  things keep that from being a quiet widening: the callback is installed
+ *  ONLY when the operator has explicitly enabled the fleet
+ *  (`RHUMB_FLEET_ENABLED`, config.ts), and `buildApp` warns at boot, naming
+ *  the effect, when it installs one where no gate existed before. Chaining
+ *  to `next` is always preferred, so an infra-configured box keeps exactly
+ *  the policy it had.
  *
  *  The audit records the SHAPE of the call (how many tasks) and the
  *  operator's decision, never the task prompts: prompts are the operator's
@@ -259,17 +331,21 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   // fleet. mngr's prerequisites gate THIS BLOCK only, never the whole host
   // (unlike RHUMB_AGENT_BACKEND=mngr below, where they are a boot condition).
   //
-  // Two preconditions, checked in this order:
-  //  1. `config.fleetCaps` must be present. `checkCaps` (src/fleet/caps.ts)
+  // Three preconditions, checked in this order:
+  //  1. `RHUMB_FLEET_ENABLED` must be on (`config.fleetEnabled`, default
+  //     OFF — see `loadFleetEnabled`). The kill switch, and the reason an
+  //     operator upgrading a box that already has mngr on PATH does not
+  //     silently acquire model-directed spawning.
+  //  2. `config.fleetCaps` must be present. `checkCaps` (src/fleet/caps.ts)
   //     is the ONLY limit on model-directed spawning; a Config without caps
   //     cannot enforce one, so the fleet is not offered at all rather than
   //     offered unbounded. `loadConfig` always supplies them, so this only
-  //     fires for a partial Config — which is also why it is checked FIRST:
-  //     `assertMngrPrerequisites` shells out (`command -v`, `bash`), and a
-  //     caller that never asked for a fleet should neither pay for that nor
-  //     have its behaviour depend on what happens to be installed.
-  //  2. mngr's CLI prerequisites must be present.
-  let fleetAvailable = Boolean(deps.config.fleetCaps);
+  //     fires for a partial Config.
+  //  3. mngr's CLI prerequisites must be present. Checked LAST because
+  //     `assertMngrPrerequisites` shells out (`command -v`, `bash`): a host
+  //     that never asked for a fleet must neither pay for that nor have its
+  //     behaviour depend on what happens to be installed.
+  let fleetAvailable = Boolean(deps.config.fleetEnabled && deps.config.fleetCaps);
   if (fleetAvailable) {
     try {
       assertMngrPrerequisites();
@@ -285,6 +361,10 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
   // Shared with the RHUMB_AGENT_BACKEND=mngr block below — see the comment
   // at its `registry` for why there must be exactly one instance per file.
   let fleetRegistry: AgentRegistry | undefined;
+  // The principal spawning a fleet, when it is knowable. Assigned by the
+  // RHUMB_AGENT_BACKEND=mngr block below, which is the only path where the
+  // operator's own conversation HAS a principal — see the ctx thunk.
+  let foregroundAgentId: () => string | null = () => null;
 
   if (fleetAvailable) {
     const fleetNow = () => new Date().toISOString();
@@ -292,10 +372,14 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
       model: deps.config.provider.model,
       workspace: deps.config.workspace,
       permissionMode: deps.config.permissionMode,
-      // Deliberately EMPTY, not `sessionExtraOptions`: a spawned agent
-      // inherits no tool policy from the operator's conversation, and in
-      // particular inherits no fleet. See the comment on the ctx thunk below.
-      extraOptions: {},
+      // NOT `sessionExtraOptions`: a spawned agent inherits no tool policy
+      // from the operator's conversation, and in particular inherits no
+      // fleet (see the ctx thunk below). The one thing it does inherit is
+      // the AskUserQuestion ban, and it needs it MORE than the foreground
+      // does: a background agent has no operator attached, so a question it
+      // asks is a question nobody will ever answer — it would block until
+      // the reply timeout with nothing to show for it.
+      extraOptions: { disallowedTools: ["AskUserQuestion"] },
     };
     fleetRegistry = createAgentRegistry({
       indexPath: joinPath(deps.config.workspace, "agents.json"),
@@ -352,7 +436,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
           const outcomes = await fleetOps.spawn(tasks, ctx);
           appendInfraAudit(infra.auditPath, {
             ts,
-            tool: "mcp__fleet__spawn",
+            tool: FLEET_SPAWN_TOOL,
             input,
             decision: "executed",
             result: {
@@ -367,7 +451,7 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
           // operator wants to find later.
           appendInfraAudit(infra.auditPath, {
             ts,
-            tool: "mcp__fleet__spawn",
+            tool: FLEET_SPAWN_TOOL,
             input,
             decision: "error",
             error: e instanceof Error ? e.message : String(e),
@@ -401,8 +485,18 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     // (src/backends/mngr.ts) carries only --model/--permission-mode/
     // --allowedTools/--disallowedTools/--append-system-prompt across the mngr
     // CLI boundary; `mcpServers` structurally cannot cross it, and the spec
-    // above passes `extraOptions: {}` regardless.
-    const fleetServer = createFleetServer(auditedOps, () => ({ parentAgentId: null, depth: 0 }));
+    // above carries only a disallow list regardless.
+    //
+    // `parentAgentId` is the operator conversation's OWN principal where one
+    // exists, so the audit can answer "spawned by whom" instead of always
+    // saying null. It exists only under RHUMB_AGENT_BACKEND=mngr; on the sdk
+    // path the operator's conversation is not a principal at all and `null`
+    // is the honest answer, not a placeholder. `depth` stays 0 either way —
+    // an operator conversation is a root whether or not it has a principal.
+    const fleetServer = createFleetServer(auditedOps, () => ({
+      parentAgentId: foregroundAgentId(),
+      depth: 0,
+    }));
 
     // The approval surface. When infra is configured we reuse ITS queue; when
     // it is not, we create the queue here AND publish it as `infraPending` so
@@ -418,17 +512,48 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
         persistPath: joinPath(deps.config.workspace, "pending-actions.json"),
       });
     infraPending = pending;
+    const priorCanUseTool = sessionExtraOptions.canUseTool as CanUseTool | undefined;
+    if (!priorCanUseTool) {
+      // F4: on a box with no infra gate this callback is NEW, and the SDK
+      // routes every tool decision through it once it exists. Its non-fleet
+      // fall-through is `allow` because PermissionResult has no
+      // defer-to-default variant (see makeFleetCanUseTool) — so say so, out
+      // loud, at the one moment an operator is looking.
+      console.warn(
+        "[rhumb] WARNING: enabling the fleet installs a tool-permission callback (canUseTool) " +
+          "on a host that had none. mcp__fleet__spawn now requires operator approval, but every " +
+          "OTHER tool is answered 'allow' by that callback rather than by the SDK's own " +
+          `permission-mode policy (RHUMB_PERMISSION_MODE=${deps.config.permissionMode}). Unset ` +
+          "RHUMB_FLEET_ENABLED to restore the previous behaviour.",
+      );
+    }
     sessionExtraOptions.canUseTool = makeFleetCanUseTool({
       pending,
       auditPath: infra.auditPath,
       now: fleetNow,
       // Chains to the infra gate when there is one, so a single canUseTool
       // covers both families and neither loses its gate.
-      next: sessionExtraOptions.canUseTool as CanUseTool | undefined,
+      next: priorCanUseTool,
     });
+    if (deps.config.permissionMode === "bypassPermissions") {
+      // F5: the SDK skips canUseTool entirely in this mode, so the approval
+      // gate above never runs. Inherited from the infra precedent, but the
+      // stakes are higher here — this one creates agents.
+      console.warn(
+        "[rhumb] WARNING: RHUMB_PERMISSION_MODE=bypassPermissions makes the SDK skip the " +
+          "tool-approval callback, so fleet spawns will NOT prompt for approval — the model can " +
+          "create background agents (up to the fleet caps) with no operator decision. Spawns are " +
+          "still audited. Use a different permission mode if you want the gate to run.",
+      );
+    }
 
     watchdogMcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}) };
-    sessionExtraOptions.mcpServers = { ...(sessionExtraOptions.mcpServers as object ?? {}), fleet: fleetServer };
+    // F1: the key is read off the server, never written as a literal, and
+    // cross-checked against the gated names — see `fleetServerKey`.
+    sessionExtraOptions.mcpServers = {
+      ...(sessionExtraOptions.mcpServers as object ?? {}),
+      [fleetServerKey(fleetServer)]: fleetServer,
+    };
     // Only the read-only tools are pre-allowed; `spawn` is left out on
     // purpose so it falls through to canUseTool above — the same shape
     // READ_TOOL_NAMES/GATED_TOOLS give the infra server.
@@ -515,6 +640,21 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     resolveAgentId = createMngrAgentIdResolver(registry, { inFlight: inFlightMngrAgentIds });
     releaseAgentId = (agentId) => {
       inFlightMngrAgentIds.delete(agentId);
+    };
+    // F6: the fleet's `parentAgentId`. A spawn only ever happens DURING a
+    // turn, and `inFlight` holds exactly the principals whose turn is
+    // currently running — so with one turn in flight, that principal is the
+    // one calling `spawn`. With zero (no turn — nothing can be spawning) or
+    // more than one (concurrent conversations), which one is the caller is
+    // genuinely not knowable at this layer: the MCP tool handler carries no
+    // session identity, so there is nothing to disambiguate with. `null`
+    // then, honestly, rather than a guess that would attribute one
+    // operator's fleet to another's conversation in the audit. Threading a
+    // real per-turn identity down to the tool handler is the proper fix and
+    // is a follow-up.
+    foregroundAgentId = () => {
+      const inFlight = [...inFlightMngrAgentIds];
+      return inFlight.length === 1 ? inFlight[0] : null;
     };
   }
 
@@ -773,6 +913,17 @@ export function main(): void {
   (app.locals.watchdog as { start(): void } | undefined)?.start();
   if (config.watchdogMinutes) {
     console.log(`[rhumb] watchdog: read-only reconcile session every ${config.watchdogMinutes}m`);
+  }
+  // Positive confirmation of a capability that is OFF by default: buildApp
+  // warns when the fleet is enabled but unusable, and this says when it is
+  // live. An operator should never have to guess whether the model on this
+  // host can create agents.
+  if (config.fleetEnabled) {
+    const c = config.fleetCaps;
+    console.log(
+      `[rhumb] fleet: model-directed spawning ENABLED (max ${c.maxPerSpawn}/spawn, ` +
+        `${c.maxConcurrent} concurrent, depth ${c.maxDepth}); every spawn requires operator approval`,
+    );
   }
   const onListen = () => {
     const bound = config.insecureDev ? "all interfaces" : "127.0.0.1";

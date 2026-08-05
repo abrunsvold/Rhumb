@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createMngrAgentIdResolver, fleetGatedToolNames, makeFleetCanUseTool } from "../src/index.js";
+import { createMngrAgentIdResolver, fleetGatedToolNames, fleetServerKey, makeFleetCanUseTool } from "../src/index.js";
 import { PendingActions } from "../src/infra/pending.js";
 import { createAgentRegistry } from "../src/agents.js";
+import { createFleetServer, FLEET_TOOL_NAMES, GATED_FLEET_TOOL_NAMES } from "../src/fleet/server.js";
+import type { FleetOps } from "../src/fleet/ops.js";
+import { loadFleetEnabled } from "../src/config.js";
 
 describe("fleet gating wiring", () => {
   it("includes mcp__fleet__spawn in the gated tool set", () => {
@@ -14,6 +17,63 @@ describe("fleet gating wiring", () => {
   it("does not gate the read-only fleet tools", () => {
     expect(fleetGatedToolNames()).not.toContain("mcp__fleet__check");
     expect(fleetGatedToolNames()).not.toContain("mcp__fleet__collect");
+  });
+});
+
+// F1: the registration key, the tool names the SDK will publish, and the set
+// the approval gate matches on must not be able to drift apart. If they do,
+// `spawn` registers under a name the gate does not contain and the gate falls
+// through to ALLOW — silently, with every other test still green.
+describe("fleetServerKey (registration key <-> gated names binding)", () => {
+  const noopOps: FleetOps = { spawn: async () => [], check: async () => [], collect: async () => [] };
+  const server = createFleetServer(noopOps, () => ({ parentAgentId: null, depth: 0 }));
+
+  it("returns the name the server was actually constructed with", () => {
+    expect(fleetServerKey(server)).toBe(server.name);
+  });
+
+  it("every gated name is a tool the constructed server really registers", () => {
+    // Same private-field read `test/fleet-server.test.ts` uses — this is the
+    // only channel to what the SDK will publish.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registered = Object.keys((server.instance as any)._registeredTools).map(
+      (name) => `mcp__${fleetServerKey(server)}__${name}`,
+    );
+    for (const gated of GATED_FLEET_TOOL_NAMES) expect(registered).toContain(gated);
+    expect([...FLEET_TOOL_NAMES].sort()).toEqual(registered.sort());
+  });
+
+  it("refuses to produce a key when the server name and the gated names disagree", () => {
+    // Exactly the drift the guard exists for: someone renames the MCP server
+    // (or the constants) and leaves the other side alone.
+    expect(() => fleetServerKey({ name: "swarm" })).toThrow(/renamed|never produce/);
+    expect(() => fleetServerKey({ name: "" })).toThrow();
+  });
+});
+
+// F3: the kill switch. Fleet activation must be an explicit operator choice,
+// not a side effect of mngr being on PATH.
+describe("loadFleetEnabled", () => {
+  it("is OFF when unset", () => {
+    expect(loadFleetEnabled({})).toBe(false);
+    expect(loadFleetEnabled({ RHUMB_FLEET_ENABLED: "" })).toBe(false);
+  });
+
+  it("is ON only for recognised truthy values", () => {
+    for (const v of ["1", "true", "TRUE", " yes ", "on"]) {
+      expect(loadFleetEnabled({ RHUMB_FLEET_ENABLED: v })).toBe(true);
+    }
+    for (const v of ["0", "false", "no", "off"]) {
+      expect(loadFleetEnabled({ RHUMB_FLEET_ENABLED: v })).toBe(false);
+    }
+  });
+
+  it("fails closed and warns on an unrecognised value", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(loadFleetEnabled({ RHUMB_FLEET_ENABLED: "enabled-please" })).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0] as string).toContain("RHUMB_FLEET_ENABLED");
+    warn.mockRestore();
   });
 });
 
