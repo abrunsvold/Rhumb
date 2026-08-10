@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TranscriptMessage } from "../lib/agentEvents";
 import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
-import { ApprovalCard } from "./ApprovalCard";
+import { ApprovalQueue } from "./ApprovalCard";
 import { Markdown } from "./Markdown";
 
 function Message({ m }: { m: TranscriptMessage }) {
@@ -140,18 +140,7 @@ export function Transcript({
         {messages.map((m, i) => (
           <Message key={m.id ?? i} m={m} />
         ))}
-        {/* Keyed by position as well as id: a failed resolve records an outcome
-            while leaving the pending in place, so one pendingId can legitimately
-            produce several entries (each retry) and ids alone are not unique. */}
-        {resolved.map((r, i) => (
-          <div key={`${r.pendingId}:${i}`} data-kind="resolved" className="flex max-w-[60ch] flex-col gap-1.5 border-l border-line pl-3.5">
-            <span className="text-[14.5px] leading-[1.75] text-ink-soft">{r.summary}</span>
-            <span className="text-[12.5px] leading-relaxed text-faint">{r.outcome}</span>
-          </div>
-        ))}
-        {pending.map((p) => (
-          <ApprovalCard key={p.pendingId} item={p} onResolve={(d, t) => onResolve(p, d, t)} />
-        ))}
+        <ApprovalQueue pending={pending} resolved={resolved} onResolve={onResolve} />
         {busy && (
           <div className="flex items-center gap-2.5">
             <span className="h-[5px] w-[5px] rounded-full bg-accent" />

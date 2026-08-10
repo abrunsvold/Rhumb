@@ -211,6 +211,60 @@ describe("Workspace approvals (inline in the transcript)", () => {
     expect(resolvePending).not.toHaveBeenCalled();
   });
 
+  // The pendings are held server-side whether or not a chat tab is open, so
+  // closing the last one must not strand them: an approval card the client
+  // stops drawing is a write nobody can approve or deny.
+  it("keeps the queue reachable after the last chat tab is closed", async () => {
+    const emit = captureStreams();
+    setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    expect(await screen.findByText("Update rows in printers.jobs")).toBeTruthy();
+
+    for (const close of await screen.findAllByRole("button", { name: /^Close / })) {
+      await userEvent.click(close);
+    }
+    expect(screen.queryAllByRole("tab", { name: /new session/i })).toHaveLength(0);
+    expect(screen.getByText(/open a session or start a new one/i)).toBeTruthy();
+
+    // Still on screen, and still resolvable.
+    expect(screen.getByText("Update rows in printers.jobs")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p1", "approve", false),
+    );
+    expect(screen.getByText("Approved — sent to the host to run.")).toBeTruthy();
+  });
+
+  // `trust` is per-card useState; only the pendingId key keeps a ticked box
+  // from sliding onto whichever pending takes the slot when an earlier one
+  // resolves, which would grant standing trust on an op nobody saw.
+  it("does not carry a ticked trust box from one pending onto the next", async () => {
+    const emit = captureStreams();
+    setup();
+    act(() => {
+      emit.data?.(dataWrite({ kind: "update", table: "jobs" }, "p1"));
+      emit.data?.(dataWrite({ kind: "update", table: "spools" }, "p2"));
+    });
+    expect(await screen.findByText("Update rows in printers.jobs")).toBeTruthy();
+    expect(screen.getByText("Update rows in printers.spools")).toBeTruthy();
+
+    const boxes = screen.getAllByLabelText(/Trust this surface/);
+    expect(boxes).toHaveLength(2);
+    await userEvent.click(boxes[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+    await waitFor(() =>
+      expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p1", "approve", true),
+    );
+
+    const remaining = screen.getAllByLabelText(/Trust this surface/);
+    expect(remaining).toHaveLength(1);
+    expect((remaining[0] as HTMLInputElement).checked).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p2", "approve", false),
+    );
+  });
+
   it("offers no trust checkbox for a delete and says why", async () => {
     const emit = captureStreams();
     setup();

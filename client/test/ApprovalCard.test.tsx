@@ -64,6 +64,14 @@ describe("ApprovalCard", () => {
     expect(screen.queryByLabelText(/Trust this surface/)).toBeNull();
   });
 
+  // The host writes a trust pair only when the pending carries a surfaceId
+  // (dashboard-host/src/data/router.ts gates on `pending?.surfaceId`), so
+  // offering the box without one promises a grant the server drops.
+  it("offers no trust option for a data write with no surface", () => {
+    render(<ApprovalCard item={{ ...write, surfaceId: null }} onResolve={vi.fn()} />);
+    expect(screen.queryByLabelText(/Trust this surface/)).toBeNull();
+  });
+
   it("offers no trust option for an infra action", () => {
     render(<ApprovalCard item={infra} onResolve={vi.fn()} />);
     expect(screen.queryByLabelText(/Trust this surface/)).toBeNull();

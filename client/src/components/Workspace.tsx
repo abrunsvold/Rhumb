@@ -9,6 +9,7 @@ import { SessionsPanel } from "./SessionsPanel";
 import { OntologyPanel } from "./OntologyPanel";
 import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
+import { ApprovalQueue } from "./ApprovalCard";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { reduceRegistry, type Tab } from "../lib/registryStore";
 import { reducePending, type PendingItem, type ResolvedItem } from "../lib/pendingStore";
@@ -107,7 +108,12 @@ export function Workspace({
     }
     const outcome =
       decision === "approve"
-        ? trust && item.origin === "data"
+        ? // Mirrors what the host actually requires to write a trust pair
+          // (dashboard-host/src/data/router.ts gates on `pending?.surfaceId`):
+          // without a surface there is nothing to trust, the grant is silently
+          // dropped, and claiming one here would report a grant the server
+          // never made.
+          trust && item.origin === "data" && !!item.surfaceId
           ? "Approved, and this surface is now trusted for adds and edits."
           // A resolved call means the host accepted the DECISION, not that the
           // write ran — it can still fail server-side afterwards (the audit
@@ -175,7 +181,16 @@ export function Workspace({
               onResolve={resolve}
             />
           ) : (
-            <p className="m-auto text-sm text-muted">Open a session or start a new one.</p>
+            // Closing the last tab must not strand the approval queue: the
+            // pendings are held server-side either way, so with no transcript
+            // to host them the cards render here instead. The dialog this
+            // replaced was a sibling of Workspace and drew regardless of tab
+            // state; dropping them here would leave a write queued with no way
+            // to approve or deny it.
+            <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-7">
+              <p className="text-sm text-muted">Open a session or start a new one.</p>
+              <ApprovalQueue pending={pending} resolved={resolved} onResolve={resolve} />
+            </div>
           )}
         </div>
         <div className="min-w-0 flex-1">

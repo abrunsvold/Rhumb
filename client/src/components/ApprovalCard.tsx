@@ -1,6 +1,42 @@
 import { useState } from "react";
-import type { PendingItem } from "../lib/pendingStore";
+import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
 import { summarizeOp } from "../lib/opSummary";
+
+// The approval queue, rendered both inside a transcript and — when no session
+// is open — on its own. It lives in one place because a pending write must
+// stay reachable in every state the middle column can be in: the queue is
+// server-side, so a card the client fails to draw is a write left held with no
+// way to approve or deny it.
+export function ApprovalQueue({
+  pending,
+  resolved,
+  onResolve,
+}: {
+  pending: PendingItem[];
+  resolved: ResolvedItem[];
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
+}) {
+  return (
+    <>
+      {/* Keyed by position as well as id: a failed resolve records an outcome
+          while leaving the pending in place, so one pendingId can legitimately
+          produce several entries (each retry) and ids alone are not unique. */}
+      {resolved.map((r, i) => (
+        <div key={`${r.pendingId}:${i}`} data-kind="resolved" className="flex max-w-[60ch] flex-col gap-1.5 border-l border-line pl-3.5">
+          <span className="text-[14.5px] leading-[1.75] text-ink-soft">{r.summary}</span>
+          <span className="text-[12.5px] leading-relaxed text-faint">{r.outcome}</span>
+        </div>
+      ))}
+      {/* Keyed by pendingId, never by index: `trust` is per-card useState, and
+          an index key would let a ticked box slide onto whichever pending takes
+          the slot when an earlier one resolves — granting standing trust on an
+          op the operator never saw. */}
+      {pending.map((p) => (
+        <ApprovalCard key={p.pendingId} item={p} onResolve={(d, t) => onResolve(p, d, t)} />
+      ))}
+    </>
+  );
+}
 
 function isDelete(item: PendingItem): boolean {
   return item.origin === "data" && (item.op as { kind?: string } | null)?.kind === "delete";
