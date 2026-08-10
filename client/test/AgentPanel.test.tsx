@@ -19,9 +19,9 @@ describe("AgentPanel (presentational)", () => {
     expect(onSend).toHaveBeenCalledWith("hi", []);
   });
 
-  it("shows thinking while the tab has open turns", () => {
+  it("shows a busy indicator while the tab has open turns", () => {
     render(<AgentPanel tab={tab({ openTurns: 1 })} slashCommands={[]} onSend={vi.fn()} />);
-    expect(screen.getByText(/thinking/i)).toBeTruthy();
+    expect(screen.getByText(/working/i)).toBeTruthy();
   });
 
   it("shows a stale-stream notice", () => {

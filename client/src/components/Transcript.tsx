@@ -2,78 +2,74 @@ import { useEffect, useRef, useState } from "react";
 import type { TranscriptMessage } from "../lib/agentEvents";
 import { Markdown } from "./Markdown";
 
-function ToolChip({ m }: { m: TranscriptMessage }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div data-kind="tool" className="self-start max-w-full">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="font-mono text-xs px-2 py-1 rounded border border-line bg-raised text-muted hover:text-ink"
-      >
-        🔧 {m.toolName}
-      </button>
-      {open && (
-        <pre className="mt-1 max-h-48 overflow-auto rounded border border-line bg-raised p-2 font-mono text-xs text-muted">
-          {JSON.stringify(m.toolInput ?? null, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 function Message({ m }: { m: TranscriptMessage }) {
   switch (m.kind) {
     case "user":
       return (
-        <div data-kind="user" className="self-end max-w-[85%] rounded-lg bg-accent-soft border border-line px-3 py-2 whitespace-pre-wrap">
-          {m.text.startsWith("/") ? (
-            (() => {
-              const space = m.text.indexOf(" ");
-              const cmd = space === -1 ? m.text : m.text.slice(0, space);
-              return (
-                <>
-                  <span className="font-mono text-accent">{cmd}</span>
-                  {space === -1 ? "" : m.text.slice(space)}
-                </>
-              );
-            })()
-          ) : (
-            m.text
-          )}
-          {m.attachments && m.attachments.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {m.attachments.map((a) => (
-                <span key={a} className="font-mono text-xs rounded bg-raised border border-line px-1.5 py-0.5 text-muted">
-{a}
-                </span>
-              ))}
-            </div>
-          )}
+        <div data-kind="user" className="flex justify-end">
+          <div className="max-w-[82%] whitespace-pre-wrap rounded-sm bg-raised px-3.5 py-2.5 text-[14px] leading-relaxed text-ink">
+            {m.text.startsWith("/") ? (
+              (() => {
+                const space = m.text.indexOf(" ");
+                const cmd = space === -1 ? m.text : m.text.slice(0, space);
+                return (
+                  <>
+                    <span className="font-mono text-accent">{cmd}</span>
+                    {space === -1 ? "" : m.text.slice(space)}
+                  </>
+                );
+              })()
+            ) : (
+              m.text
+            )}
+            {m.attachments && m.attachments.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {m.attachments.map((a) => (
+                  <span key={a} className="mn border border-line-strong px-1.5 py-0.5 text-faint">{a}</span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       );
     case "tool":
       return <ToolChip m={m} />;
     case "error":
       return (
-        <div data-kind="error" className="self-start max-w-[85%] text-danger whitespace-pre-wrap">
+        <div data-kind="error" className="max-w-[60ch] whitespace-pre-wrap text-[13px] text-danger">
           {m.text}
         </div>
       );
     case "result":
       return (
-        <div data-kind="result" className="self-stretch flex items-center gap-2 text-xs text-muted">
-          <span className="h-px flex-1 bg-line" />
-          <span className="max-w-[70%] truncate">{m.text}</span>
-          <span className="h-px flex-1 bg-line" />
+        <div data-kind="result" className="flex items-center gap-2.5">
+          <span data-role="dot" className="h-[5px] w-[5px] shrink-0 rounded-full bg-faint" />
+          <span className="text-[12.5px] text-faint">{m.text}</span>
         </div>
       );
     default:
       return (
-        <div data-kind="text" className="self-start max-w-[85%]">
+        <div data-kind="text" className="max-w-[60ch] text-[14.5px] leading-[1.75] text-ink-soft">
           <Markdown text={m.text} />
         </div>
       );
   }
+}
+
+function ToolChip({ m }: { m: TranscriptMessage }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-kind="tool" className="max-w-[60ch] self-start">
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="text-left text-[12.5px] text-faint">
+        {m.toolName} · <span className="border-b border-line-strong text-muted">{open ? "hide" : "details"}</span>
+      </button>
+      {open && (
+        <pre className="mt-1 max-h-48 overflow-auto border border-line bg-panel p-2 font-mono text-xs text-muted">
+          {JSON.stringify(m.toolInput ?? null, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; busy: boolean }) {
@@ -122,7 +118,7 @@ export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; 
         onTouchMove={onUserScroll}
         onKeyDown={onUserScroll}
         data-testid="transcript"
-        className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2"
+        className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 pb-2.5 pt-7"
       >
         {messages.length === 0 && !busy && (
           <p className="m-auto text-muted">Send a message to start a session.</p>
@@ -131,7 +127,10 @@ export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; 
           <Message key={m.id ?? i} m={m} />
         ))}
         {busy && (
-          <div className="self-start text-muted text-xs animate-pulse">thinking…</div>
+          <div className="flex items-center gap-2.5">
+            <span className="h-[5px] w-[5px] rounded-full bg-accent" />
+            <span className="text-[12.5px] text-faint">Working…</span>
+          </div>
         )}
       </div>
       {showJump && (

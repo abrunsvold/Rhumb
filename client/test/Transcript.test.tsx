@@ -45,9 +45,9 @@ describe("Transcript", () => {
     expect(screen.getByText(/"\/tmp\/x"/)).toBeTruthy();
   });
 
-  it("shows a thinking indicator while busy", () => {
+  it("shows a busy indicator while busy", () => {
     render(<Transcript messages={[]} busy={true} />);
-    expect(screen.getByText(/thinking/i)).toBeTruthy();
+    expect(screen.getByText(/working/i)).toBeTruthy();
   });
 
   it("mono-styles only the leading slash-command token of a user message", () => {
@@ -172,5 +172,22 @@ describe("Transcript", () => {
       expect(bubble.textContent).toBe("keep **these** stars");
       expect(bubble.querySelector("strong")).toBeNull();
     });
+  });
+
+  it("caps agent prose at a readable measure", () => {
+    render(<Transcript messages={[{ kind: "text", text: "hello" }]} busy={false} />);
+    const el = screen.getByText("hello").closest("[data-kind='text']");
+    expect(el?.className).toContain("max-w-[60ch]");
+  });
+
+  it("renders a result as a dotted status line, not a divider", () => {
+    render(<Transcript messages={[{ kind: "result", text: "Idle" }]} busy={false} />);
+    const el = screen.getByText("Idle").closest("[data-kind='result']");
+    expect(el?.querySelector("[data-role='dot']")).toBeTruthy();
+  });
+
+  it("labels the busy indicator as Working", () => {
+    render(<Transcript messages={[]} busy />);
+    expect(screen.getByText("Working…")).toBeTruthy();
   });
 });
