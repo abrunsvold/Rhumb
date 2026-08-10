@@ -76,10 +76,10 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
   const hostname = (url: string) => url.replace(/^https?:\/\//, "");
 
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="w-[26rem] rounded-lg border border-line bg-panel p-6 flex flex-col gap-3">
-        <h1 className="text-lg font-semibold">Connect Rhumb</h1>
-        <p className="text-xs text-muted -mt-2">
+    <div className="flex h-full items-center justify-center bg-bg">
+      <div className="flex w-full max-w-[420px] flex-col gap-3 p-6">
+        <h1 className="font-mono text-[13px] tracking-[0.22em] text-ink">Connect Rhumb</h1>
+        <p className="text-[13px] text-muted">
           {scanning ? "Scanning your tailnet for Rhumb servers…" : found.length > 0 ? "Found on your tailnet:" : "No Rhumb servers found on your tailnet."}
         </p>
         {found.map((h) => (
@@ -89,14 +89,14 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
             disabled={busy}
             onClick={() => void connect(h.baseUrl)}
             aria-label={`Connect to ${hostname(h.baseUrl)}`}
-            className="flex items-center justify-between rounded border border-line bg-raised px-3 py-2 text-left hover:border-accent disabled:opacity-40"
+            className="flex items-center justify-between border border-line bg-panel px-3 py-2 text-left hover:bg-raised disabled:opacity-40"
           >
-            <span className="font-mono text-sm">{hostname(h.baseUrl)}</span>
-            <span className="text-xs text-muted">v{h.version}</span>
+            <span className="mn">{hostname(h.baseUrl)}</span>
+            <span className="text-[12.5px] text-muted">v{h.version}</span>
           </button>
         ))}
         {!scanning && found.length === 0 && report && (
-          <div className="text-sm text-muted" data-testid="discovery-diagnostic">
+          <div className="text-[12.5px] text-muted" data-testid="discovery-diagnostic">
             <p>
               Scanned {report.scanned} tailnet {report.scanned === 1 ? "peer" : "peers"} — none responded as Rhumb.
             </p>
@@ -105,7 +105,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
                 <summary className="cursor-pointer">Details</summary>
                 <ul className="mt-1 space-y-0.5">
                   {report.attempts.map((a, i) => (
-                    <li key={i} className="font-mono text-xs">
+                    <li key={i} className="mn">
                       {a.peer} ({a.target}) → {a.outcome}
                     </li>
                   ))}
@@ -116,7 +116,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
           </div>
         )}
         {!scanning && (
-          <button type="button" onClick={() => void scan()} className="self-start text-xs text-muted underline">
+          <button type="button" onClick={() => void scan()} className="self-start text-[12.5px] text-muted underline">
             Rescan
           </button>
         )}
@@ -127,7 +127,7 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
           }}
           className="flex flex-col gap-2 border-t border-line pt-3"
         >
-          <label htmlFor="server" className="text-xs text-muted">
+          <label htmlFor="server" className="ey">
             Server URL
           </label>
           <input
@@ -135,18 +135,18 @@ export function ConnectionScreen({ onConnected }: { onConnected: (c: AppConfig) 
             placeholder="https://box.your-tailnet.ts.net"
             value={manualUrl}
             onChange={(e) => setManualUrl(e.target.value)}
-            className="rounded border border-line bg-raised px-2 py-1.5 font-mono text-sm outline-none focus:border-accent"
+            className="mn border border-line-strong bg-bg px-2.5 py-2 text-[12.5px] outline-none placeholder:text-faint focus:border-accent"
           />
           <button
             type="submit"
             disabled={busy || manualUrl.trim() === ""}
-            className="rounded bg-accent px-3 py-1.5 font-medium text-white disabled:opacity-40"
+            className="rounded-sm bg-accent px-4 py-2.5 text-[13px] text-bg disabled:opacity-40"
           >
             {busy ? "Connecting…" : "Connect"}
           </button>
         </form>
         {error && (
-          <p role="alert" className="rounded border border-danger/50 bg-danger/10 px-2 py-1.5 text-sm text-danger">
+          <p role="alert" className="border border-danger/50 bg-danger/10 px-2 py-1.5 text-[12.5px] text-danger">
             {error}
           </p>
         )}
