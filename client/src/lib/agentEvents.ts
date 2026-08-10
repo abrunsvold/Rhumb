@@ -18,9 +18,18 @@ export interface AgentState {
   sessionId: string | null;
   slashCommands: string[];
   messages: TranscriptMessage[];
+  // Room state, per session, fed by the session stream.
+  presence: string[];
+  queueDepth: number;
 }
 
-export const initialAgentState: AgentState = { sessionId: null, slashCommands: [], messages: [] };
+export const initialAgentState: AgentState = {
+  sessionId: null,
+  slashCommands: [],
+  messages: [],
+  presence: [],
+  queueDepth: 0,
+};
 
 export function appendUserMessage(state: AgentState, text: string, attachments?: string[]): AgentState {
   const msg: TranscriptMessage =
@@ -76,11 +85,13 @@ export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
       if (extracted.length === 0) return state;
       return { ...state, messages: [...state.messages, ...extracted] };
     }
-    // Plan 1 mirrors the wire contract so the packages stay in sync and the
-    // switch stays exhaustive. Rendering these is plan 2.
-    case "message":
-    case "queue":
     case "presence":
+      return { ...state, presence: event.logins };
+    case "queue":
+      return { ...state, queueDepth: event.depth };
+    // Task 5 gives `message` real behaviour; until then it stays inert so the
+    // switch remains exhaustive.
+    case "message":
       return state;
     default: {
       // Still fails the build if a future AgentEvent variant goes unhandled —

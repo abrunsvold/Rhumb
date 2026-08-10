@@ -108,3 +108,28 @@ describe("room events", () => {
   });
 
 });
+
+describe("room state", () => {
+  it("starts with nobody present and an empty queue", () => {
+    expect(initialAgentState.presence).toEqual([]);
+    expect(initialAgentState.queueDepth).toBe(0);
+  });
+
+  it("reduces a presence event into per-session state", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "presence",
+      logins: ["op@example.com", "zoe@example.com"],
+    });
+    expect(next.presence).toEqual(["op@example.com", "zoe@example.com"]);
+  });
+
+  it("reduces a queue event into per-session state", () => {
+    const next = reduceAgent(initialAgentState, { type: "queue", depth: 2 });
+    expect(next.queueDepth).toBe(2);
+  });
+
+  it("leaves messages untouched when reducing room state", () => {
+    const seeded = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
+    expect(reduceAgent(seeded, { type: "queue", depth: 1 }).messages).toBe(seeded.messages);
+  });
+});
