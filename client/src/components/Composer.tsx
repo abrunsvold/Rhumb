@@ -104,8 +104,12 @@ export function Composer({
 
   function pickMention(handle: string) {
     const start = caret - (mentionPrefix?.length ?? 0) - 1; // step back over the '@'
-    setDraft(`${draft.slice(0, start)}@${handle} ${draft.slice(caret)}`);
-    pendingCaret.current = start + handle.length + 2;
+    const rest = draft.slice(caret);
+    // Don't stack a trailing space onto a remainder that already starts with
+    // one — accepting mid-draft would otherwise leave "ping @zoe  bye".
+    const sep = rest.startsWith(" ") ? "" : " ";
+    setDraft(`${draft.slice(0, start)}@${handle}${sep}${rest}`);
+    pendingCaret.current = start + 1 + handle.length + sep.length;
     boxRef.current?.focus();
   }
 

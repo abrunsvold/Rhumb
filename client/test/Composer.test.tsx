@@ -165,8 +165,24 @@ describe("mention autocomplete", () => {
   });
 
   it("gives the slash popup precedence over mentions", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<Composer slashCommands={["/compact"]} roster={roster} onSend={onSend} />);
+    // "/@z" satisfies the slash prefix (no spaces) AND the mention regex, so
+    // this fails if the slashPrefix guard on mentionMatch is removed.
+    await userEvent.type(screen.getByRole("textbox"), "/@z");
+    expect(screen.queryByRole("option", { name: "zoe" })).not.toBeInTheDocument();
+  });
+
+  it("accepts a mention mid-draft without stacking a space", async () => {
     setupMentions();
-    await userEvent.type(screen.getByRole("textbox"), "@z");
-    expect(screen.getByRole("option", { name: "zoe" })).toBeInTheDocument();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ping @z bye");
+    // Walk the caret back to just after the "z", so the accept happens with
+    // text still to its right — the arithmetic an end-of-draft test never hits.
+    await userEvent.type(box, "{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}");
+    await userEvent.keyboard("{Tab}");
+
+    expect(box.value).toBe("ping @zoe bye");
+    expect(box.selectionStart).toBe(9);
   });
 });
