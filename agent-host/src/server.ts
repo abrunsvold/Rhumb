@@ -223,7 +223,16 @@ export function createServer(deps: {
 
     // The room sees the question the moment it is accepted. Only one client
     // typed it, but everyone in the session is watching.
-    const message: AgentEvent = { type: "message", author, text: prompt, ts: now() };
+    // The sender receives this on BOTH its turn stream and the session stream.
+    // Carrying the turnId lets it recognize its own echo by identity rather
+    // than by a text-and-recency guess.
+    const message: AgentEvent = {
+      type: "message",
+      author,
+      text: prompt,
+      ts: now(),
+      ...(turn ? { turnId: turn } : {}),
+    };
     for (const r of subscribers.get(roomKey(lane)) ?? []) writeSseEvent(r, message);
     if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, message);
 

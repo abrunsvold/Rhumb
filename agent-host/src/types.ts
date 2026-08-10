@@ -7,7 +7,7 @@ export type AgentEvent =
   | { type: "raw"; message: unknown }
   // Room events. A session is shared, so the human message is broadcast to
   // every watcher rather than echoed locally by whoever typed it.
-  | { type: "message"; author: string; text: string; ts: string }
+  | { type: "message"; author: string; text: string; ts: string; turnId?: string }
   | { type: "queue"; depth: number }
   | { type: "presence"; logins: string[] };
 

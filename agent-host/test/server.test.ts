@@ -97,6 +97,42 @@ describe("agent-host server", () => {
     expect(() => pruneSubscriber(map, "missing", {} as import("express").Response)).not.toThrow();
   });
 
+  it("carries the turnId on the broadcast message when the post supplied one", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi", turnId: "t-1" });
+
+    const frame = written.find((f) => f.includes('"type":"message"')) ?? "";
+    expect(frame).toContain('"turnId":"t-1"');
+  });
+
+  it("omits turnId from the broadcast when the post supplied none", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+
+    const frame = written.find((f) => f.includes('"type":"message"')) ?? "";
+    expect(frame).not.toContain("turnId");
+  });
+
   describe("control-token auth", () => {
     const token = "s3cr3t-operator-token";
 
