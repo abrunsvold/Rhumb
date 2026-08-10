@@ -14,7 +14,7 @@ vi.mock("../src/lib/tauri", () => ({
   archiveSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { SessionsPanel } from "../src/components/SessionsPanel";
+import { SessionsPanel, groupSessions } from "../src/components/SessionsPanel";
 import { listSessions, renameSession, archiveSession } from "../src/lib/tauri";
 
 beforeEach(() => vi.clearAllMocks());
@@ -38,7 +38,7 @@ describe("SessionsPanel", () => {
 
   it("New session triggers onNew", async () => {
     const { onNew } = setup();
-    await userEvent.click(await screen.findByRole("button", { name: /new session/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /\+ new/i }));
     expect(onNew).toHaveBeenCalled();
   });
 
@@ -47,7 +47,9 @@ describe("SessionsPanel", () => {
     const buttons = await screen.findAllByRole("button", { name: /printer digest/i });
     const renameButton = buttons.find((btn) => btn.getAttribute("aria-label") === "Rename Printer digest");
     await userEvent.click(renameButton!);
-    const input = screen.getByRole("textbox");
+    // getByRole("textbox") is now ambiguous with the search input; the rename
+    // field is the one pre-filled with the session's current title.
+    const input = screen.getByDisplayValue("Printer digest");
     await userEvent.clear(input);
     await userEvent.type(input, "Digest v2{Enter}");
     await waitFor(() => expect(renameSession).toHaveBeenCalledWith("http://a:8787", "s1", "Digest v2"));
@@ -89,5 +91,46 @@ describe("SessionsPanel", () => {
       <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 0, unread: false }]} onOpen={vi.fn()} onNew={vi.fn()} />,
     );
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+  });
+
+  it("filters the list and reports the match count", async () => {
+    // uses the file's existing listSessions mock; ensure it resolves at least
+    // two sessions with distinct titles before running this
+    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    await screen.findByText(/sessions$/);
+    await userEvent.type(screen.getByLabelText("Search sessions"), "zzzznomatch");
+    expect(screen.getByText("No session matches that.")).toBeTruthy();
+  });
+});
+
+describe("groupSessions", () => {
+  const now = Date.parse("2026-08-10T12:00:00.000Z");
+  const at = (iso: string) => ({
+    id: iso, title: iso, createdAt: iso, lastActiveAt: iso, preview: "", archived: false,
+  });
+
+  it("buckets by age and drops empty buckets", () => {
+    const groups = groupSessions(
+      [at("2026-08-10T11:00:00.000Z"), at("2026-08-06T11:00:00.000Z")],
+      now,
+    );
+    expect(groups.map((g) => g.label)).toEqual(["Today", "Previous 7 days"]);
+  });
+
+  it("puts anything older than 30 days in the last bucket", () => {
+    const groups = groupSessions([at("2026-05-01T11:00:00.000Z")], now);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe("Previous 30 days");
+  });
+
+  it("keeps host order within a bucket", () => {
+    const groups = groupSessions(
+      [at("2026-08-10T09:00:00.000Z"), at("2026-08-10T11:00:00.000Z")],
+      now,
+    );
+    expect(groups[0].items.map((s) => s.id)).toEqual([
+      "2026-08-10T09:00:00.000Z",
+      "2026-08-10T11:00:00.000Z",
+    ]);
   });
 });
