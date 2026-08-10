@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Canvas } from "./Canvas";
+import { SurfaceFrame } from "./SurfaceFrame";
 import { Sidebar, type SidebarTab } from "./Sidebar";
 import { HostPanel } from "./HostPanel";
 import { SessionsPanel } from "./SessionsPanel";
@@ -8,7 +10,9 @@ import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { reduceRegistry, type Tab } from "../lib/registryStore";
-import { openRegistryStream } from "../lib/tauri";
+import { openRegistryStream, getOntology } from "../lib/tauri";
+import { buildLineage } from "../lib/lineage";
+import type { OntologyNode } from "../lib/types";
 
 export function Workspace({
   agentBase,
@@ -25,6 +29,24 @@ export function Workspace({
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [ontologyNodes, setOntologyNodes] = useState<OntologyNode[]>([]);
+  const [detachError, setDetachError] = useState(false);
+
+  function detach() {
+    const active = surfTabs.find((t) => t.id === activeSurf);
+    if (!active) return;
+    // The detached surface loads untrusted agent-built content. It is labeled
+    // `surface:<id>`, which intentionally matches NO capability in
+    // src-tauri/capabilities/default.json (that capability is scoped to
+    // `"windows": ["main"]`), so this window inherits no Tauri IPC/command
+    // access. Do not add a capability whose `windows` matches `surface:*`.
+    const w = new WebviewWindow(`surface:${active.id}`, {
+      url: `${dashboardBase}${active.url}`,
+      title: active.title,
+    });
+    void w.once("tauri://created", () => setDetachError(false));
+    void w.once("tauri://error", () => setDetachError(true));
+  }
 
   const draftOpened = useRef(false);
   useEffect(() => {
@@ -43,6 +65,12 @@ export function Workspace({
     });
     return stop;
   }, [dashboardBase]);
+
+  useEffect(() => {
+    getOntology(agentBase)
+      .then((s) => setOntologyNodes(s.nodes))
+      .catch(() => setOntologyNodes([])); // breadcrumb degrades to empty; the map panel reports the error
+  }, [agentBase]);
 
   return (
     <div className="flex h-screen">
@@ -91,7 +119,13 @@ export function Workspace({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <Canvas dashboardBase={dashboardBase} tabs={surfTabs} activeId={activeSurf} onSelect={setActiveSurf} />
+          <SurfaceFrame
+            lineage={activeSurf ? buildLineage(ontologyNodes, `dashboard-${activeSurf}`) : []}
+            onDetach={detach}
+            detachError={detachError}
+          >
+            <Canvas dashboardBase={dashboardBase} active={surfTabs.find((t) => t.id === activeSurf) ?? null} />
+          </SurfaceFrame>
         </div>
       </div>
     </div>

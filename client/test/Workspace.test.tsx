@@ -56,7 +56,12 @@ describe("Workspace shell", () => {
     setup();
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
-    expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
+    // Surface selection now lives in the MAP sidebar tab (Task 6); the canvas
+    // column shows the active surface via the SurfaceFrame lineage breadcrumb
+    // instead of its own tab strip.
+    expect(await screen.findByText("Sales")).toBeTruthy();
+    const iframe = document.querySelector("iframe");
+    expect(iframe?.getAttribute("src")).toBe("http://d:8788/surfaces/x1/");
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     const salesButton = await screen.findByRole("button", { name: /sales/i });
     expect(salesButton).toBeTruthy();
