@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TranscriptMessage } from "../lib/agentEvents";
+import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
+import { ApprovalCard } from "./ApprovalCard";
 import { Markdown } from "./Markdown";
 
 function Message({ m }: { m: TranscriptMessage }) {
@@ -72,7 +74,19 @@ function ToolChip({ m }: { m: TranscriptMessage }) {
   );
 }
 
-export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; busy: boolean }) {
+export function Transcript({
+  messages,
+  busy,
+  pending,
+  resolved,
+  onResolve,
+}: {
+  messages: TranscriptMessage[];
+  busy: boolean;
+  pending: PendingItem[];
+  resolved: ResolvedItem[];
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
@@ -108,7 +122,7 @@ export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; 
       setShowJump(true);
     }
     prevLen.current = messages.length;
-  }, [messages, busy]);
+  }, [messages, busy, pending.length, resolved.length]);
 
   return (
     <div className="relative flex-1 min-h-0 flex flex-col">
@@ -120,11 +134,23 @@ export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; 
         data-testid="transcript"
         className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 pb-2.5 pt-7"
       >
-        {messages.length === 0 && !busy && (
+        {messages.length === 0 && !busy && pending.length === 0 && resolved.length === 0 && (
           <p className="m-auto text-muted">Send a message to start a session.</p>
         )}
         {messages.map((m, i) => (
           <Message key={m.id ?? i} m={m} />
+        ))}
+        {/* Keyed by position as well as id: a failed resolve records an outcome
+            while leaving the pending in place, so one pendingId can legitimately
+            produce several entries (each retry) and ids alone are not unique. */}
+        {resolved.map((r, i) => (
+          <div key={`${r.pendingId}:${i}`} data-kind="resolved" className="flex max-w-[60ch] flex-col gap-1.5 border-l border-line pl-3.5">
+            <span className="text-[14.5px] leading-[1.75] text-ink-soft">{r.summary}</span>
+            <span className="text-[12.5px] leading-relaxed text-faint">{r.outcome}</span>
+          </div>
+        ))}
+        {pending.map((p) => (
+          <ApprovalCard key={p.pendingId} item={p} onResolve={(d, t) => onResolve(p, d, t)} />
         ))}
         {busy && (
           <div className="flex items-center gap-2.5">

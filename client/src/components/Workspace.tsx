@@ -11,7 +11,16 @@ import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { reduceRegistry, type Tab } from "../lib/registryStore";
-import { openRegistryStream, getOntology } from "../lib/tauri";
+import { reducePending, type PendingItem, type ResolvedItem } from "../lib/pendingStore";
+import { summarizeOp } from "../lib/opSummary";
+import {
+  openRegistryStream,
+  getOntology,
+  openPendingStream,
+  openInfraPendingStream,
+  resolvePending,
+  resolveInfraPending,
+} from "../lib/tauri";
 import { buildLineage } from "../lib/lineage";
 import type { OntologyNode } from "../lib/types";
 
@@ -32,6 +41,11 @@ export function Workspace({
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [ontologyNodes, setOntologyNodes] = useState<OntologyNode[]>([]);
   const [detachError, setDetachError] = useState(false);
+  // Pendings carry no session id, so they cannot be attributed to a
+  // conversation: they render in whichever transcript is active, and their
+  // outcomes live here for the app's lifetime rather than per session.
+  const [pending, setPending] = useState<PendingItem[]>([]);
+  const [resolved, setResolved] = useState<ResolvedItem[]>([]);
 
   function detach() {
     const active = surfTabs.find((t) => t.id === activeSurf);
@@ -66,6 +80,44 @@ export function Workspace({
     });
     return stop;
   }, [dashboardBase]);
+
+  useEffect(() => {
+    const stopData = openPendingStream(dashboardBase, (e) => setPending((p) => reducePending(p, e, "data")));
+    const stopInfra = openInfraPendingStream(agentBase, (e) => setPending((p) => reducePending(p, e, "infra")));
+    return () => { stopData(); stopInfra(); };
+  }, [agentBase, dashboardBase]);
+
+  async function resolve(item: PendingItem, decision: "approve" | "deny", trust: boolean) {
+    const summary = summarizeOp(item);
+    try {
+      if (item.origin === "data") {
+        // Trust is an approval qualifier only — a denial never grants it.
+        await resolvePending(dashboardBase, item.pendingId, decision, decision === "approve" && trust);
+      } else {
+        // Infra actions have no trust concept: there is no fourth argument.
+        await resolveInfraPending(agentBase, item.pendingId, decision);
+      }
+    } catch (err) {
+      // The host never confirmed the decision, so the item stays in `pending`
+      // and can be retried. Dropping it here would let an unresolved write
+      // vanish from the operator's view while still queued server-side.
+      const detail = err instanceof Error ? err.message : String(err);
+      setResolved((r) => [...r, { pendingId: item.pendingId, summary, outcome: `Could not resolve — ${detail}` }]);
+      return;
+    }
+    const outcome =
+      decision === "approve"
+        ? trust && item.origin === "data"
+          ? "Approved, and this surface is now trusted for adds and edits."
+          // A resolved call means the host accepted the DECISION, not that the
+          // write ran — it can still fail server-side afterwards (the audit
+          // schema has a `decision: "error"` case for exactly that). Do not
+          // restore any wording that claims execution.
+          : "Approved — sent to the host to run."
+        : "Denied — nothing was written.";
+    setResolved((r) => [...r, { pendingId: item.pendingId, summary, outcome }]);
+    setPending((p) => p.filter((x) => x.pendingId !== item.pendingId));
+  }
 
   useEffect(() => {
     getOntology(agentBase)
@@ -118,6 +170,9 @@ export function Workspace({
               tab={active}
               slashCommands={active.agent.slashCommands}
               onSend={(text, files) => chat.send(active.key, text, files)}
+              pending={pending}
+              resolved={resolved}
+              onResolve={resolve}
             />
           ) : (
             <p className="m-auto text-sm text-muted">Open a session or start a new one.</p>
