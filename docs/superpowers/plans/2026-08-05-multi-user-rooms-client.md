@@ -1502,9 +1502,25 @@ describe("mention autocomplete", () => {
   });
 
   it("gives the slash popup precedence over mentions", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<Composer slashCommands={["/compact"]} roster={roster} onSend={onSend} />);
+    // "/@z" satisfies the slash prefix (no spaces) AND the mention regex, so
+    // this fails if the slashPrefix guard on mentionMatch is removed.
+    await userEvent.type(screen.getByRole("textbox"), "/@z");
+    expect(screen.queryByRole("option", { name: "zoe" })).not.toBeInTheDocument();
+  });
+
+  it("accepts a mention mid-draft without stacking a space", async () => {
     setupMentions();
-    await userEvent.type(screen.getByRole("textbox"), "@z");
-    expect(screen.getByRole("option", { name: "zoe" })).toBeInTheDocument();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ping @z bye");
+    // Walk the caret back to just after the "z", so the accept happens with
+    // text still to its right — the arithmetic an end-of-draft test never hits.
+    await userEvent.type(box, "{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}");
+    await userEvent.keyboard("{Tab}");
+
+    expect(box.value).toBe("ping @zoe bye");
+    expect(box.selectionStart).toBe(9);
   });
 });
 ```
@@ -1566,8 +1582,12 @@ Add the accept function beside `pick`:
 ```tsx
   function pickMention(handle: string) {
     const start = caret - (mentionPrefix?.length ?? 0) - 1; // step back over the '@'
-    setDraft(`${draft.slice(0, start)}@${handle} ${draft.slice(caret)}`);
-    pendingCaret.current = start + handle.length + 2;
+    const rest = draft.slice(caret);
+    // Don't stack a trailing space onto a remainder that already starts with
+    // one — accepting mid-draft would otherwise leave "ping @zoe  bye".
+    const sep = rest.startsWith(" ") ? "" : " ";
+    setDraft(`${draft.slice(0, start)}@${handle}${sep}${rest}`);
+    pendingCaret.current = start + 1 + handle.length + sep.length;
     boxRef.current?.focus();
   }
 ```
