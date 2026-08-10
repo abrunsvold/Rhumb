@@ -1,17 +1,23 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #15171c;
-  --color-panel: #1b1e24;
-  --color-raised: #23272f;
-  --color-line: #2e333d;
-  --color-ink: #d7dae0;
-  --color-muted: #8b919d;
-  --color-accent: #4f8cff;
-  --color-accent-soft: #1c2c4d;
-  --color-danger: #e5484d;
+  --color-bg: #0a0b0d;
+  --color-panel: #111316;
+  --color-raised: #16191d;
+  --color-line: #1f2328;
+  --color-line-strong: #2a2f36;
+  --color-ink: #f4f5f7;
+  --color-ink-soft: #d7dae0;
+  --color-muted: #9ba2ac;
+  --color-faint: #5a616b;
+  --color-accent: #ff5a1f;
+  --color-accent-soft: #16191d;
+  --color-ok: #3dd68c;
+  --color-warn: #ffb020;
+  --color-danger: #ff4d4d;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-editorial: ui-serif, Georgia, "Times New Roman", serif;
 }
 
 @layer components {
@@ -109,6 +115,32 @@
   }
   .markdown th {
     background-color: var(--color-raised);
+  }
+
+  /* Eyebrow: uppercase mono label above a group. */
+  .ey {
+    font: 400 10px/1 var(--font-mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+  /* Mono metadata: timestamps, counts, ids, chips. */
+  .mn {
+    font: 400 11px/1.4 var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+  /* Surface and panel headings. */
+  .title-lg {
+    font: 450 22px/1.1 var(--font-sans);
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+  /* The italic fragment inside a heading ("· 6 match"). */
+  .title-note {
+    font-family: var(--font-editorial);
+    font-style: italic;
+    font-weight: 300;
+    color: var(--color-accent);
   }
 }
 
