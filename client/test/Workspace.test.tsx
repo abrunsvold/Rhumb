@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workspace } from "../src/components/Workspace";
 import {
   openRegistryStream,
+  openSessionStream,
   openPendingStream,
   openInfraPendingStream,
   resolvePending,
   resolveInfraPending,
   getOntology,
+  listSessions,
 } from "../src/lib/tauri";
+import type { SessionMeta } from "../src/lib/types";
 
 vi.mock("../src/lib/tauri", () => ({
   openAgentStream: vi.fn(() => () => {}),
@@ -53,7 +56,12 @@ function setup() {
 describe("Workspace shell", () => {
   // Call counts are asserted below (the ontology refresh), so usage data has to
   // start clean per test. `clearAllMocks` keeps the resolved values above.
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // One test seeds a real session; `mockResolvedValue` would leak into the
+    // rest of the file, so restore the empty default here rather than there.
+    vi.mocked(listSessions).mockResolvedValue([]);
+  });
 
   it("renders the sidebar tabs", () => {
     setup();
@@ -140,11 +148,68 @@ describe("Workspace shell", () => {
     expect(screen.queryByText("LXC 118")).toBeNull();
   });
 
+  // The three-track grid IS the deliverable of this task, so assert the track
+  // list and what each track holds — a wordmark plus a telemetry string is
+  // equally true of a single-column stack.
   it("lays out the top bar, three columns, and the telemetry bar", async () => {
     setup();
-    expect(screen.getByText("RHUMB")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
-    expect(await screen.findByText("QUEUE clear")).toBeTruthy();
+    expect(screen.getByText("RHUMB")).toBeTruthy(); // top row
+    expect(await screen.findByText("QUEUE clear")).toBeTruthy(); // bottom row
+    await screen.findByPlaceholderText(/reply, or ask for something new/i);
+
+    const grid = document.querySelector("div.grid") as HTMLElement;
+    expect(grid).toBeTruthy();
+    // jsdom does not run Tailwind, so getComputedStyle sees nothing. Read the
+    // declared track list straight off the arbitrary-property class.
+    const template = /\[grid-template-columns:([^\]]+)\]/.exec(grid.className)?.[1];
+    expect(template).toBeTruthy();
+    // Safe split: no track in this template contains an underscore.
+    expect(template!.split("_")).toEqual([
+      "272px",
+      "minmax(320px,0.9fr)",
+      "minmax(560px,1.3fr)",
+    ]);
+
+    const columns = Array.from(grid.children) as HTMLElement[];
+    expect(columns).toHaveLength(3);
+    expect(within(columns[0]).getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
+    expect(within(columns[1]).getByPlaceholderText(/reply, or ask for something new/i)).toBeTruthy();
+    expect(within(columns[2]).getByRole("button", { name: /DETACH/ })).toBeTruthy();
+  });
+
+  // The top bar's numbers are computed HERE, not in TopBar: `turns` counts
+  // user-kind messages only, and `messages.length` (which counts the agent's
+  // replies too) is the plausible-looking way to get it wrong.
+  it("hands the top bar the session title and the USER-turn count, not every message", async () => {
+    const meta: SessionMeta = {
+      id: "s7", title: "Printer digest", createdAt: "2026-07-01T00:00:00Z",
+      lastActiveAt: "2026-07-02T00:00:00Z", preview: "spool 3", archived: false,
+    };
+    vi.mocked(listSessions).mockResolvedValue([meta]);
+    setup();
+
+    const rows = await screen.findAllByRole("button", { name: /printer digest/i });
+    await userEvent.click(rows.find((b) => !b.getAttribute("aria-label"))!);
+
+    // Two agent replies arrive on the session stream, so total messages and
+    // user messages diverge.
+    const onSession = vi.mocked(openSessionStream).mock.calls.at(-1)![2];
+    act(() => {
+      onSession({ type: "result", result: "spool 3 refilled", isError: false });
+      onSession({ type: "result", result: "job resumed", isError: false });
+    });
+
+    await userEvent.type(
+      screen.getByPlaceholderText(/reply, or ask for something new/i),
+      "check the spools{Enter}",
+    );
+
+    // Scoped to the <header>: the title also appears in the chat tab strip.
+    const bar = screen.getByRole("banner");
+    await waitFor(() => expect(within(bar).getByText("1 turn")).toBeTruthy());
+    expect(within(bar).getByText("Printer digest")).toBeTruthy();
+    expect(within(bar).queryByText("3 turns")).toBeNull(); // messages.length
+    expect(within(bar).queryByText("0 turns")).toBeNull(); // a hardcoded zero
   });
 
   it("counts registered surfaces and ontology nodes in the telemetry bar", async () => {
@@ -172,6 +237,24 @@ describe("Workspace shell", () => {
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
+  });
+
+  // A failed refresh must NOT blank the snapshot. Rendering "NODES 0" would be
+  // an affirmative claim that the map is empty, which the client cannot
+  // support — the honest report is the last successful sync plus a named error.
+  it("keeps the last good ontology when a refresh fails, and names the error", async () => {
+    setup();
+    await waitFor(() => expect(screen.getByText(/NODES/).textContent).toBe("NODES 2"));
+
+    vi.mocked(getOntology).mockRejectedValueOnce(new Error("agent unreachable"));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+
+    // The error reaches OntologyPanel through Workspace's `ontologyError`.
+    expect(await screen.findByText(/sync problem: agent unreachable/)).toBeTruthy();
+    // …and the counts and tree still describe the last sync that succeeded.
+    expect(screen.getByText(/NODES/).textContent).toBe("NODES 2");
+    expect(screen.getByRole("button", { name: /printer-api/i })).toBeTruthy();
   });
 });
 
