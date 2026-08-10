@@ -142,10 +142,11 @@ author, no label, and their message reads as yours.
 
 Instead the client learns who it is. **The first `message` event that reconciles
 against one of your own optimistic entries carries your login by definition** —
-it matched a turnId you generated. Store that as `me`: `App.tsx` state, passed down
-to `Transcript` as a prop, learned once per app run rather than per tab. Nothing
-is persisted, so it cannot go stale against a changed tailnet login, and no
-identity endpoint is added.
+it matched a turnId you generated. Store that as `me`: `useChatSessions` learns it and
+returns it, `Workspace` passes it down to `Transcript` — `Workspace` is what
+actually owns the hook and renders `AgentPanel`. Learned once per app run rather
+than per tab. Nothing is persisted, so it cannot go stale against a changed
+tailnet login, and no identity endpoint is added.
 
 Then:
 
@@ -170,8 +171,9 @@ unchanged, which is still the common case.
 ### @-mention autocomplete
 
 The roster is fetched once on connect via a new `get_roster` Rust command and
-held as app state passed down as a prop. It is a static list with no event
-stream, so it does not warrant a store alongside `registryStore`/`ontologyStore`.
+held as `Workspace` state, passed down as a prop to `AgentPanel` and on to
+`Composer` and `Transcript`. It is a static list with no event stream, so it does
+not warrant a store alongside `registryStore`/`ontologyStore`.
 
 Matching is `/@([A-Za-z0-9._+-]*)$/` against the text **before the cursor**,
 filtered case-insensitively by handle prefix. Accepting replaces the token with
@@ -240,9 +242,11 @@ in `proxy.rs`. They return the parsed 409 body instead, so the dialog can report
 
 **client** — new `src/components/RoomStrip.tsx`; `src/lib/types.ts`,
 `src/lib/agentEvents.ts`, `src/lib/tauri.ts`, `src/hooks/useChatSessions.ts`,
+new `src/lib/attachments.ts`; `src/lib/chatStore.ts`,
 `src/components/Transcript.tsx`, `src/components/Composer.tsx`,
-`src/components/AgentPanel.tsx`, `src/components/ConfirmationDialog.tsx`,
-`src/App.tsx`, `src-tauri/src/proxy.rs`
+`src/components/AgentPanel.tsx`, `src/components/Workspace.tsx`,
+`src/components/ConfirmationDialog.tsx`, `src-tauri/src/proxy.rs`,
+`src-tauri/src/lib.rs`
 
 ## Follow-ups
 
