@@ -322,7 +322,7 @@ pub async fn resolve_pending(
     pending_id: String,
     decision: String,
     trust_surface: bool,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     let (url, bearer) = dashboard_target(&app, &dashboard_base, &format!("/data/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(
@@ -332,10 +332,15 @@ pub async fn resolve_pending(
         &bearer,
     );
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    // 409 is not a transport failure: someone else decided first, and the body
+    // names them. Anything else non-2xx stays an error.
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return resp.json::<Value>().await.map(Some).map_err(|e| e.to_string());
+    }
     if !resp.status().is_success() {
         return Err(format!("dashboard host returned {}", resp.status()));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[tauri::command]
@@ -367,15 +372,20 @@ pub async fn resolve_infra_pending(
     agent_base: String,
     pending_id: String,
     decision: String,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/infra/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(client.post(&url).json(&serde_json::json!({ "decision": decision })), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    // 409 is not a transport failure: someone else decided first, and the body
+    // names them. Anything else non-2xx stays an error.
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return resp.json::<Value>().await.map(Some).map_err(|e| e.to_string());
+    }
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[tauri::command]

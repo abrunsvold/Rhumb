@@ -127,13 +127,24 @@ export function openPendingStream(
   return () => void invoke("stop_pending_stream");
 }
 
+export interface ResolveConflict {
+  error: string;
+  by: string;
+  decision: string;
+}
+
 export function resolvePending(
   dashboardBase: string,
   pendingId: string,
   decision: "approve" | "deny",
   trustSurface: boolean,
-): Promise<void> {
-  return invoke("resolve_pending", { dashboardBase, pendingId, decision, trustSurface });
+): Promise<ResolveConflict | null> {
+  return invoke<ResolveConflict | null>("resolve_pending", {
+    dashboardBase,
+    pendingId,
+    decision,
+    trustSurface,
+  });
 }
 
 export function openInfraPendingStream(agentBase: string, onPending: (e: unknown) => void): () => void {
@@ -143,8 +154,8 @@ export function openInfraPendingStream(agentBase: string, onPending: (e: unknown
   return () => void invoke("stop_infra_pending_stream");
 }
 
-export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<void> {
-  return invoke("resolve_infra_pending", { agentBase, pendingId, decision });
+export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<ResolveConflict | null> {
+  return invoke<ResolveConflict | null>("resolve_infra_pending", { agentBase, pendingId, decision });
 }
 
 export async function listSessions(agentBase: string): Promise<SessionMeta[]> {
