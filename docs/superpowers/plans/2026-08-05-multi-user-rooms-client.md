@@ -242,15 +242,19 @@ In `agent-host/src/server.ts`, add the pattern next to the other module-level co
 const DRAFT_ROOM_KEY_RE = /^draft:[0-9a-f-]{36}$/;
 ```
 
-In the `/messages` handler, add `roomKey` to the destructuring and validate before anything else runs:
+In the `/messages` handler, add the body field to the destructuring and validate before anything else runs. **Rename it on the way out** — `createServer` already has a `roomKey(lane)` helper in scope, and a plain `roomKey` binding would shadow it and 500 every request:
 
 ```ts
-    const { sessionId, prompt, turnId, roomKey } = req.body ?? {};
+    const { sessionId, prompt, turnId, roomKey: requestedRoomKey } = req.body ?? {};
     if (typeof prompt !== "string" || prompt.length === 0) {
       res.status(400).json({ error: "prompt is required" });
       return;
     }
-    if (roomKey !== undefined && (typeof roomKey !== "string" || !DRAFT_ROOM_KEY_RE.test(roomKey))) {
+    // Reject before any queue or broadcast side effect.
+    if (
+      requestedRoomKey !== undefined &&
+      (typeof requestedRoomKey !== "string" || !DRAFT_ROOM_KEY_RE.test(requestedRoomKey))
+    ) {
       res.status(400).json({ error: "roomKey must be a draft key" });
       return;
     }
@@ -259,7 +263,7 @@ In the `/messages` handler, add `roomKey` to the destructuring and validate befo
 Then change the lane derivation:
 
 ```ts
-    const lane = inputId ?? (typeof roomKey === "string" ? roomKey : "");
+    const lane = inputId ?? (typeof requestedRoomKey === "string" ? requestedRoomKey : "");
 ```
 
 Everything downstream already keys off `lane`; nothing else changes.
