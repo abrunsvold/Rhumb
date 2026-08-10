@@ -8,13 +8,13 @@ export function AgentPanel({
   tab,
   slashCommands,
   roster,
-  me = null,
+  me,
   onSend,
 }: {
   tab: TabState;
   slashCommands: string[];
   roster: RosterEntry[];
-  me?: string | null;
+  me: string | null;
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
 }) {
   return (
