@@ -27,21 +27,20 @@ function setup() {
 }
 
 describe("Workspace shell", () => {
-  it("renders the rail with Sessions, System map, and Connection buttons", () => {
+  it("renders the sidebar tabs", () => {
     setup();
-    expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "System map" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Connection" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "MAP" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "HOST" })).toBeTruthy();
   });
 
-  it("gear panel shows hosts and Disconnect works; clicking the icon again collapses", async () => {
+  it("host tab shows both hosts and Disconnect works", async () => {
     const { onDisconnect } = setup();
-    await userEvent.click(screen.getByRole("button", { name: "Connection" }));
+    await userEvent.click(screen.getByRole("tab", { name: "HOST" }));
     expect(screen.getByText("http://a:8787")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: /disconnect/i }));
+    expect(screen.getByText("http://d:8788")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "DISCONNECT" }));
     expect(onDisconnect).toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "Connection" }));
-    expect(screen.queryByText("http://a:8787")).toBeNull();
   });
 
   it("opens with a draft chat tab ready to send", async () => {
@@ -56,7 +55,7 @@ describe("Workspace shell", () => {
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "System map" }));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     const salesButton = await screen.findByRole("button", { name: /sales/i });
     expect(salesButton).toBeTruthy();
     expect(salesButton.getAttribute("aria-current")).toBe("true");
