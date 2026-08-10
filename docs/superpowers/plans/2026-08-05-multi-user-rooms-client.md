@@ -842,8 +842,16 @@ Delete the old `const turnId = crypto.randomUUID();` line that followed the sess
 ```ts
       // A draft room names its own lane so two people starting a new chat at
       // the same moment cannot land on one another's.
+      //
+      // Omit the argument entirely rather than passing `undefined`: existing
+      // useChatSessions tests assert the exact call signature, and vitest
+      // treats a trailing explicit `undefined` as a different call.
       const roomKey = key.startsWith("draft:") ? key : undefined;
-      await sendMessage(agentBase, turnId, prompt, sessionId, roomKey);
+      if (roomKey !== undefined) {
+        await sendMessage(agentBase, turnId, prompt, sessionId, roomKey);
+      } else {
+        await sendMessage(agentBase, turnId, prompt, sessionId);
+      }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
