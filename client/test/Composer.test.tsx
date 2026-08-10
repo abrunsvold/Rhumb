@@ -20,10 +20,10 @@ describe("Composer", () => {
     await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(""));
   });
 
-  it("does not send an empty draft", async () => {
+  it("does not send an empty draft, and renders no send button while it is empty", async () => {
     const { onSend } = setup();
+    expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
-    await userEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -84,14 +84,14 @@ describe("Composer", () => {
     expect((box as HTMLTextAreaElement).value).toBe("/compact ");
   });
 
-  it("shows Sending… while onSend is in flight", async () => {
+  it("shows Sending… while onSend is in flight, then the send affordance disappears once the draft clears", async () => {
     let release!: (v: boolean) => void;
     const onSend = vi.fn(() => new Promise<boolean>((r) => (release = r)));
     render(<Composer slashCommands={[]} onSend={onSend} />);
     await userEvent.type(screen.getByRole("textbox"), "hi{Enter}");
     expect(screen.getByRole("button", { name: /sending…/i })).toBeTruthy();
     await act(async () => release(true));
-    expect(screen.getByRole("button", { name: /^send$/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /send/i })).toBeNull();
   });
 
   it("rejects files over 20MB at staging with an inline notice", async () => {
@@ -115,5 +115,18 @@ describe("Composer", () => {
     expect(await screen.findByText(/bad\.txt could not be read/i)).toBeTruthy();
     expect(await screen.findByText(/good\.txt/)).toBeTruthy();
     FileReader.prototype.readAsDataURL = orig;
+  });
+
+  it("shows the hint row when the draft is empty and the send affordance once it is not", async () => {
+    render(<Composer slashCommands={[]} onSend={vi.fn().mockResolvedValue(true)} />);
+    expect(screen.getByText("/ for commands")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Send/ })).toBeNull();
+    await userEvent.type(screen.getByRole("textbox"), "hi");
+    expect(screen.getByRole("button", { name: /Send/ })).toBeTruthy();
+  });
+
+  it("shows a context label when one is given and the draft is empty", () => {
+    render(<Composer slashCommands={[]} onSend={vi.fn()} contextLabel="18.4k of 200k context" />);
+    expect(screen.getByText("18.4k of 200k context")).toBeTruthy();
   });
 });

@@ -22,9 +22,11 @@ function fileToBase64(file: File): Promise<string> {
 export function Composer({
   slashCommands,
   onSend,
+  contextLabel,
 }: {
   slashCommands: string[];
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
+  contextLabel?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<StagedFile[]>([]);
@@ -94,7 +96,7 @@ export function Composer({
 
   return (
     <div
-      className="relative border-t border-line bg-panel p-2 flex flex-col gap-2"
+      className="relative flex flex-none flex-col gap-3 border-t border-line px-6 pb-4 pt-4.5"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
@@ -102,14 +104,14 @@ export function Composer({
       }}
     >
       {matches.length > 0 && (
-        <ul role="listbox" className="absolute bottom-full left-2 mb-1 w-64 rounded border border-line bg-raised shadow-lg overflow-hidden">
+        <ul role="listbox" className="absolute bottom-full left-2 mb-1 w-64 overflow-hidden rounded border border-line bg-panel shadow-lg">
           {matches.map((c) => (
             <li key={c}>
               <button
                 role="option"
                 aria-selected={false}
                 onClick={() => pick(c)}
-                className="w-full text-left font-mono text-xs px-2 py-1.5 hover:bg-accent-soft"
+                className="w-full px-2 py-1.5 text-left font-mono text-xs hover:bg-raised"
               >
                 {c}
               </button>
@@ -134,9 +136,18 @@ export function Composer({
           ))}
         </div>
       )}
-      <div className="flex items-end gap-2">
-        <label className="cursor-pointer rounded border border-line bg-raised px-2 py-1.5 text-muted hover:text-ink">
-          📎
+      <textarea
+        ref={boxRef}
+        rows={rows}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="Reply, or ask for something new…"
+        className="max-h-[132px] w-full min-w-0 resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-faint"
+      />
+      <div className="flex items-center gap-4">
+        <label className="cursor-pointer text-[11.5px] text-faint hover:text-muted">
+          drop files to attach
           <input
             type="file"
             multiple
@@ -148,22 +159,20 @@ export function Composer({
             }}
           />
         </label>
-        <textarea
-          ref={boxRef}
-          rows={rows}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Message the agent — / for commands"
-          className="flex-1 resize-none rounded border border-line bg-raised px-2 py-1.5 outline-none placeholder:text-muted focus:border-accent"
-        />
-        <button
-          onClick={() => void submit()}
-          disabled={sending || (draft.trim().length === 0 && files.length === 0)}
-          className="rounded bg-accent px-3 py-1.5 font-medium text-white disabled:opacity-40"
-        >
-          {sending ? "Sending…" : "Send"}
-        </button>
+        <span className="text-[11.5px] text-faint">/ for commands</span>
+        <div className="flex-1" />
+        {draft.trim().length > 0 || files.length > 0 ? (
+          <button
+            onClick={() => void submit()}
+            disabled={sending}
+            className="flex items-center gap-2 whitespace-nowrap text-[12.5px] text-accent disabled:opacity-40"
+          >
+            {sending ? "Sending…" : "Send"}
+            <span className="mn text-faint" aria-hidden>⏎</span>
+          </button>
+        ) : (
+          contextLabel && <span className="text-[11.5px] text-faint">{contextLabel}</span>
+        )}
       </div>
     </div>
   );

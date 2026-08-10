@@ -68,7 +68,7 @@ describe("Workspace shell", () => {
     expect(await screen.findByRole("tab", { name: /new session/i })).toBeTruthy();
     // getByRole("textbox") is now ambiguous with the sessions search input
     // (SessionsPanel task 3); target the composer by its placeholder instead.
-    expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/reply, or ask for something new/i)).toBeTruthy();
   });
 
   it("streams the registry and shows surfaces in the panel and canvas", async () => {
