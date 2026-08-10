@@ -31,6 +31,11 @@ export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: st
   }
 
   async function decide(decision: "approve" | "deny") {
+    // Clear any notice left by a previous decision BEFORE resolving this one.
+    // Without this, once any conflict has occurred the notice never goes away:
+    // a later successful, uncontested approval drains the queue and resurrects
+    // the old "already resolved by …" screen, falsely implying it conflicted.
+    setNotice(null);
     const conflict =
       current.origin === "data"
         ? await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust)
