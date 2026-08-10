@@ -1718,6 +1718,25 @@ describe("ConfirmationDialog (approval conflicts)", () => {
 
     expect(await screen.findByText(/already resolved by someone else/i)).toBeTruthy();
   });
+
+  it("does not carry a stale conflict notice into a later successful decision", async () => {
+    resolveSpy.mockResolvedValueOnce({ error: "already resolved", by: "zoe@example.com", decision: "executed" });
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p12", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByText(/ops/);
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await screen.findByText(/already executed by zoe@example\.com/i);
+
+    // An unrelated later item resolves cleanly. Without the setNotice(null) at
+    // the top of decide(), the drained queue resurrects the stale notice and
+    // this dialog stays mounted.
+    resolveSpy.mockResolvedValueOnce(null);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p13", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByRole("button", { name: /approve/i });
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 });
 ```
 
@@ -1736,6 +1755,11 @@ In `client/src/components/ConfirmationDialog.tsx`, add notice state and use the 
 
 ```tsx
   async function decide(decision: "approve" | "deny") {
+    // Clear any notice left by a previous decision BEFORE resolving this one.
+    // Without this, once any conflict has occurred the notice never goes away:
+    // a later successful, uncontested approval drains the queue and resurrects
+    // the old "already resolved by …" screen, falsely implying it conflicted.
+    setNotice(null);
     const conflict =
       current.origin === "data"
         ? await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust)
