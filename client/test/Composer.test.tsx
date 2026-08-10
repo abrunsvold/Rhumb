@@ -5,7 +5,7 @@ import { Composer } from "../src/components/Composer";
 
 function setup(over?: Partial<{ slashCommands: string[]; onSend: (t: string, f: { name: string; contentBase64: string }[]) => Promise<boolean> }>) {
   const onSend = over?.onSend ?? vi.fn().mockResolvedValue(true);
-  render(<Composer slashCommands={over?.slashCommands ?? []} onSend={onSend} />);
+  render(<Composer slashCommands={over?.slashCommands ?? []} roster={[]} onSend={onSend} />);
   return { onSend };
 }
 
@@ -87,7 +87,7 @@ describe("Composer", () => {
   it("shows Sending… while onSend is in flight", async () => {
     let release!: (v: boolean) => void;
     const onSend = vi.fn(() => new Promise<boolean>((r) => (release = r)));
-    render(<Composer slashCommands={[]} onSend={onSend} />);
+    render(<Composer slashCommands={[]} roster={[]} onSend={onSend} />);
     await userEvent.type(screen.getByRole("textbox"), "hi{Enter}");
     expect(screen.getByRole("button", { name: /sending…/i })).toBeTruthy();
     await act(async () => release(true));
@@ -115,5 +115,58 @@ describe("Composer", () => {
     expect(await screen.findByText(/bad\.txt could not be read/i)).toBeTruthy();
     expect(await screen.findByText(/good\.txt/)).toBeTruthy();
     FileReader.prototype.readAsDataURL = orig;
+  });
+});
+
+describe("mention autocomplete", () => {
+  const roster = [
+    { login: "op@example.com", handle: "op" },
+    { login: "zoe@example.com", handle: "zoe" },
+  ];
+
+  function setupMentions() {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<Composer slashCommands={[]} roster={roster} onSend={onSend} />);
+    return { onSend };
+  }
+
+  it("offers matching handles while typing a mention", async () => {
+    setupMentions();
+    await userEvent.type(screen.getByRole("textbox"), "ping @z");
+    expect(screen.getByRole("option", { name: "zoe" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "op" })).not.toBeInTheDocument();
+  });
+
+  it("Enter accepts the top match instead of sending", async () => {
+    const { onSend } = setupMentions();
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "ping @z{Enter}");
+    expect(onSend).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("ping @zoe ");
+  });
+
+  it("Tab accepts the top match", async () => {
+    setupMentions();
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "ping @z{Tab}");
+    expect((box as HTMLTextAreaElement).value).toBe("ping @zoe ");
+  });
+
+  it("does not offer mentions when the roster has no match", async () => {
+    setupMentions();
+    await userEvent.type(screen.getByRole("textbox"), "ping @qq");
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it("sends normally when the draft has no pending mention", async () => {
+    const { onSend } = setupMentions();
+    await userEvent.type(screen.getByRole("textbox"), "ping @zoe hello{Enter}");
+    expect(onSend).toHaveBeenCalledWith("ping @zoe hello", []);
+  });
+
+  it("gives the slash popup precedence over mentions", async () => {
+    setupMentions();
+    await userEvent.type(screen.getByRole("textbox"), "@z");
+    expect(screen.getByRole("option", { name: "zoe" })).toBeInTheDocument();
   });
 });

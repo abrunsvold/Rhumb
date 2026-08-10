@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { RosterEntry } from "../lib/tauri";
 
 export interface StagedFile {
   name: string;
@@ -21,9 +22,11 @@ function fileToBase64(file: File): Promise<string> {
 
 export function Composer({
   slashCommands,
+  roster,
   onSend,
 }: {
   slashCommands: string[];
+  roster: RosterEntry[];
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState("");
@@ -36,6 +39,29 @@ export function Composer({
   const slashPrefix = /^\/\S*$/.test(draft) ? draft : null;
   const matches =
     slashPrefix !== null ? slashCommands.filter((c) => c.startsWith(slashPrefix)) : [];
+
+  const [caret, setCaret] = useState(0);
+  const pendingCaret = useRef<number | null>(null);
+
+  // Applied after the value re-renders, so the cursor lands after the inserted
+  // handle rather than at the end of the textarea.
+  useEffect(() => {
+    if (pendingCaret.current !== null && boxRef.current) {
+      boxRef.current.setSelectionRange(pendingCaret.current, pendingCaret.current);
+      setCaret(pendingCaret.current);
+      pendingCaret.current = null;
+    }
+  }, [draft]);
+
+  // Mentions can appear anywhere, so match the token before the cursor rather
+  // than the whole draft. The slash popup owns the leading token; the two
+  // cannot co-occur, since `slashPrefix` rejects anything containing a space.
+  const mentionMatch = slashPrefix === null ? /@([A-Za-z0-9._+-]*)$/.exec(draft.slice(0, caret)) : null;
+  const mentionPrefix = mentionMatch ? mentionMatch[1] : null;
+  const mentionMatches =
+    mentionPrefix !== null
+      ? roster.filter((r) => r.handle.toLowerCase().startsWith(mentionPrefix.toLowerCase()))
+      : [];
 
   async function submit() {
     const text = draft.trim();
@@ -76,6 +102,13 @@ export function Composer({
     boxRef.current?.focus();
   }
 
+  function pickMention(handle: string) {
+    const start = caret - (mentionPrefix?.length ?? 0) - 1; // step back over the '@'
+    setDraft(`${draft.slice(0, start)}@${handle} ${draft.slice(caret)}`);
+    pendingCaret.current = start + handle.length + 2;
+    boxRef.current?.focus();
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -83,10 +116,15 @@ export function Composer({
         pick(matches[0]);
         return;
       }
+      if (mentionMatches.length > 0 && (mentionPrefix?.length ?? 0) > 0) {
+        pickMention(mentionMatches[0].handle);
+        return;
+      }
       void submit();
-    } else if (e.key === "Tab" && matches.length > 0) {
+    } else if (e.key === "Tab" && (matches.length > 0 || mentionMatches.length > 0)) {
       e.preventDefault();
-      pick(matches[0]);
+      if (matches.length > 0) pick(matches[0]);
+      else pickMention(mentionMatches[0].handle);
     }
   }
 
@@ -112,6 +150,22 @@ export function Composer({
                 className="w-full text-left font-mono text-xs px-2 py-1.5 hover:bg-accent-soft"
               >
                 {c}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {mentionMatches.length > 0 && (
+        <ul role="listbox" className="absolute bottom-full left-2 mb-1 w-64 rounded border border-line bg-raised shadow-lg overflow-hidden">
+          {mentionMatches.map((r) => (
+            <li key={r.login}>
+              <button
+                role="option"
+                aria-selected={false}
+                onClick={() => pickMention(r.handle)}
+                className="w-full text-left font-mono text-xs px-2 py-1.5 hover:bg-accent-soft"
+              >
+                {r.handle}
               </button>
             </li>
           ))}
@@ -152,8 +206,13 @@ export function Composer({
           ref={boxRef}
           rows={rows}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
+          }}
           onKeyDown={onKeyDown}
+          onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           placeholder="Message the agent — / for commands"
           className="flex-1 resize-none rounded border border-line bg-raised px-2 py-1.5 outline-none placeholder:text-muted focus:border-accent"
         />

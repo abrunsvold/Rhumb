@@ -30,7 +30,7 @@ export function AgentPanel({
         roster={roster}
       />
       <Transcript messages={tab.agent.messages} roster={roster} me={me} busy={tab.openTurns > 0} />
-      <Composer slashCommands={slashCommands} onSend={onSend} />
+      <Composer slashCommands={slashCommands} roster={roster} onSend={onSend} />
     </div>
   );
 }
