@@ -34,6 +34,13 @@ export function stripAgentPrefix(url: string): string {
   return rest.startsWith("?") ? `/${rest}` : rest;
 }
 
+// A client may name its own lane ONLY inside the draft namespace. Without this
+// guard a caller could send a roomKey equal to another room's live session id,
+// land its turn on that lane, and be handed that session to resume by
+// `laneSession` — the same cross-room failure roomKey exists to prevent, done
+// on purpose instead of by accident.
+const DRAFT_ROOM_KEY_RE = /^draft:[0-9a-f-]{36}$/;
+
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
@@ -205,9 +212,20 @@ export function createServer(deps: {
   });
 
   app.post("/messages", (req: Request, res: Response) => {
-    const { sessionId, prompt, turnId } = req.body ?? {};
+    // Destructured as `requestedRoomKey`, not `roomKey`: this scope already has
+    // the `roomKey(lane)` helper (lane -> resolved session/pending-bucket id)
+    // defined above, and a same-named const here would shadow it for the rest
+    // of this handler, breaking every `roomKey(lane)` call below.
+    const { sessionId, prompt, turnId, roomKey: requestedRoomKey } = req.body ?? {};
     if (typeof prompt !== "string" || prompt.length === 0) {
       res.status(400).json({ error: "prompt is required" });
+      return;
+    }
+    if (
+      requestedRoomKey !== undefined &&
+      (typeof requestedRoomKey !== "string" || !DRAFT_ROOM_KEY_RE.test(requestedRoomKey))
+    ) {
+      res.status(400).json({ error: "roomKey must be a draft key" });
       return;
     }
     const inputId: string | undefined =
@@ -219,7 +237,7 @@ export function createServer(deps: {
     // about who is speaking.
     const author = readActorLogin(req, deps.identity.insecureDev);
 
-    const lane = inputId ?? "";
+    const lane = inputId ?? (typeof requestedRoomKey === "string" ? requestedRoomKey : "");
 
     // The room sees the question the moment it is accepted. Only one client
     // typed it, but everyone in the session is watching.

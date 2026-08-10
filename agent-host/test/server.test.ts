@@ -740,6 +740,95 @@ describe("agent-host server", () => {
     const res = await request(app).get("/roster");
     expect(res.status).toBe(403);
   });
+
+  it("gives two different draft room keys separate lanes", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(prompt: string) {
+        started.push(prompt);
+        await gate;
+        return "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const roomA = "draft:11111111-1111-1111-1111-111111111111";
+    const roomB = "draft:22222222-2222-2222-2222-222222222222";
+    await request(app).post("/messages").send({ prompt: "one", roomKey: roomA });
+    await request(app).post("/messages").send({ prompt: "two", roomKey: roomB });
+    await new Promise((r) => setImmediate(r));
+
+    // Distinct rooms drain concurrently; sharing "" would have queued the second.
+    expect(started).toHaveLength(2);
+    release();
+    await new Promise((r) => setImmediate(r));
+  });
+
+  it("serializes two turns sent to the same draft room key", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(prompt: string) {
+        started.push(prompt);
+        if (started.length === 1) await gate;
+        return "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const room = "draft:33333333-3333-3333-3333-333333333333";
+    await request(app).post("/messages").send({ prompt: "one", roomKey: room });
+    await request(app).post("/messages").send({ prompt: "two", roomKey: room });
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none"]);
+
+    release();
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("rejects a roomKey outside the draft namespace with 400", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    // A session-shaped key would let a caller land a turn on another room's lane.
+    const res = await request(app)
+      .post("/messages")
+      .send({ prompt: "hi", roomKey: "s-someone-elses-session" });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a malformed draft roomKey with 400", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const res = await request(app).post("/messages").send({ prompt: "hi", roomKey: "draft:nope" });
+    expect(res.status).toBe(400);
+  });
+
+  it("prefers an explicit sessionId over a roomKey", async () => {
+    const resumed: Array<string | undefined> = [];
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        resumed.push(sessionId);
+        return sessionId ?? "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({
+      sessionId: "s1",
+      prompt: "hi",
+      roomKey: "draft:44444444-4444-4444-4444-444444444444",
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual(["s1"]);
+  });
 });
 
 describe("presenceLogins", () => {
