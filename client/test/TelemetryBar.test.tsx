@@ -11,9 +11,15 @@ const n = (id: string, rels: number): OntologyNode => ({
 describe("TelemetryBar", () => {
   it("counts surfaces, nodes, and summed edges", () => {
     render(<TelemetryBar surfaces={6} nodes={[n("a", 2), n("b", 3)]} queued={0} syncedAt={null} />);
-    expect(screen.getByText("6")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("5")).toBeTruthy();
+    expect(screen.getByText((_, element) =>
+      (element?.className?.includes('text-faint') ?? false) && /SURFACES\s+6/.test(element?.textContent ?? "")
+    )).toBeTruthy();
+    expect(screen.getByText((_, element) =>
+      (element?.className?.includes('text-faint') ?? false) && /NODES\s+2/.test(element?.textContent ?? "")
+    )).toBeTruthy();
+    expect(screen.getByText((_, element) =>
+      (element?.className?.includes('text-faint') ?? false) && /EDGES\s+5/.test(element?.textContent ?? "")
+    )).toBeTruthy();
   });
 
   it("reports a clear queue", () => {
