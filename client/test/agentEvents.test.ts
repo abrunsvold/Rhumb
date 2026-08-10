@@ -92,19 +92,77 @@ describe("user messages and slash commands", () => {
   });
 });
 
-describe("room events", () => {
-  it("leaves state untouched for a message event until plan 2 reconciliation lands", () => {
-    const state = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
-    expect(
-      reduceAgent(state, {
-        type: "message",
-        author: "op@example.com",
-        text: "hi",
-        ts: "2026-08-04T00:00:00Z",
-      }),
-    ).toBe(state);
+describe("message reconciliation", () => {
+  it("reconciles the sender's optimistic entry instead of appending a duplicate", () => {
+    const optimistic = appendUserMessage(initialAgentState, "hello", ["a.png"], "turn-1");
+    const next = reduceAgent(optimistic, {
+      type: "message",
+      author: "op@example.com",
+      text: "hello\n\n[Attached files: /w/uploads/a.png]",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-1",
+    });
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0].author).toBe("op@example.com");
+    // Local text and chips win: the wire text is the prompt, with the paths appended.
+    expect(next.messages[0].text).toBe("hello");
+    expect(next.messages[0].attachments).toEqual(["a.png"]);
   });
 
+  it("is idempotent when the same message arrives twice", () => {
+    const optimistic = appendUserMessage(initialAgentState, "hello", undefined, "turn-1");
+    const event = {
+      type: "message" as const,
+      author: "op@example.com",
+      text: "hello",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-1",
+    };
+    const next = reduceAgent(reduceAgent(optimistic, event), event);
+    expect(next.messages).toHaveLength(1);
+  });
+
+  it("appends a message whose turnId it does not own", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "what about the poller?",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-zoe",
+    });
+    expect(next.messages).toEqual([
+      {
+        kind: "user",
+        text: "what about the poller?",
+        author: "zoe@example.com",
+        id: "turn-zoe",
+      },
+    ]);
+  });
+
+  it("renders another person's attachments as chips, not a raw path line", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "see this\n\n[Attached files: /w/uploads/z.png]",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-zoe",
+    });
+    expect(next.messages[0].text).toBe("see this");
+    expect(next.messages[0].attachments).toEqual(["/w/uploads/z.png"]);
+  });
+
+  it("appends a message with no turnId", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "no turn id",
+      ts: "2026-08-05T00:00:00Z",
+    });
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0].id).toBeUndefined();
+  });
 });
 
 describe("room state", () => {
