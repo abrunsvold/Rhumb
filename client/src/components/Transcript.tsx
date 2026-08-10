@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TranscriptMessage } from "../lib/agentEvents";
 import { Markdown } from "./Markdown";
+import type { RosterEntry } from "../lib/tauri";
 
 function ToolChip({ m }: { m: TranscriptMessage }) {
   const [open, setOpen] = useState(false);
@@ -21,34 +22,41 @@ function ToolChip({ m }: { m: TranscriptMessage }) {
   );
 }
 
-function Message({ m }: { m: TranscriptMessage }) {
+function Message({ m, label }: { m: TranscriptMessage; label: string | null }) {
   switch (m.kind) {
     case "user":
       return (
-        <div data-kind="user" className="self-end max-w-[85%] rounded-lg bg-accent-soft border border-line px-3 py-2 whitespace-pre-wrap">
-          {m.text.startsWith("/") ? (
-            (() => {
-              const space = m.text.indexOf(" ");
-              const cmd = space === -1 ? m.text : m.text.slice(0, space);
-              return (
-                <>
-                  <span className="font-mono text-accent">{cmd}</span>
-                  {space === -1 ? "" : m.text.slice(space)}
-                </>
-              );
-            })()
-          ) : (
-            m.text
+        <div data-kind="user" className="self-end max-w-[85%] flex flex-col items-end gap-0.5">
+          {label && (
+            <span data-testid="author" className="text-xs text-muted">
+              {label}
+            </span>
           )}
-          {m.attachments && m.attachments.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {m.attachments.map((a) => (
-                <span key={a} className="font-mono text-xs rounded bg-raised border border-line px-1.5 py-0.5 text-muted">
-{a}
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="rounded-lg bg-accent-soft border border-line px-3 py-2 whitespace-pre-wrap">
+            {m.text.startsWith("/") ? (
+              (() => {
+                const space = m.text.indexOf(" ");
+                const cmd = space === -1 ? m.text : m.text.slice(0, space);
+                return (
+                  <>
+                    <span className="font-mono text-accent">{cmd}</span>
+                    {space === -1 ? "" : m.text.slice(space)}
+                  </>
+                );
+              })()
+            ) : (
+              m.text
+            )}
+            {m.attachments && m.attachments.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {m.attachments.map((a) => (
+                  <span key={a} className="font-mono text-xs rounded bg-raised border border-line px-1.5 py-0.5 text-muted">
+                    {a}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       );
     case "tool":
@@ -76,7 +84,30 @@ function Message({ m }: { m: TranscriptMessage }) {
   }
 }
 
-export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; busy: boolean }) {
+// A solo operator sees no labels once `me` is known. Until then every authored
+// message is labelled, because the alternative — labelling nothing — makes
+// someone else's message read as your own.
+function authorLabel(
+  m: TranscriptMessage,
+  me: string | null,
+  roster: RosterEntry[],
+): string | null {
+  if (m.kind !== "user" || !m.author) return null;
+  if (me !== null && m.author === me) return null;
+  return roster.find((r) => r.login === m.author)?.handle ?? m.author;
+}
+
+export function Transcript({
+  messages,
+  roster,
+  me,
+  busy,
+}: {
+  messages: TranscriptMessage[];
+  roster: RosterEntry[];
+  me: string | null;
+  busy: boolean;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
@@ -128,7 +159,7 @@ export function Transcript({ messages, busy }: { messages: TranscriptMessage[]; 
           <p className="m-auto text-muted">Send a message to start a session.</p>
         )}
         {messages.map((m, i) => (
-          <Message key={m.id ?? i} m={m} />
+          <Message key={m.id ?? i} m={m} label={authorLabel(m, me, roster)} />
         ))}
         {busy && (
           <div className="self-start text-muted text-xs animate-pulse">thinking…</div>

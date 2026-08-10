@@ -8,11 +8,13 @@ export function AgentPanel({
   tab,
   slashCommands,
   roster,
+  me = null,
   onSend,
 }: {
   tab: TabState;
   slashCommands: string[];
   roster: RosterEntry[];
+  me?: string | null;
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
 }) {
   return (
@@ -27,7 +29,7 @@ export function AgentPanel({
         queueDepth={tab.agent.queueDepth}
         roster={roster}
       />
-      <Transcript messages={tab.agent.messages} busy={tab.openTurns > 0} />
+      <Transcript messages={tab.agent.messages} roster={roster} me={me} busy={tab.openTurns > 0} />
       <Composer slashCommands={slashCommands} onSend={onSend} />
     </div>
   );

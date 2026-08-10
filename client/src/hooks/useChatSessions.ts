@@ -18,6 +18,7 @@ export interface ChatSessionsApi {
   close(key: string): void;
   focus(key: string): void;
   send(key: string, text: string, files: StagedFile[]): Promise<boolean>;
+  me: string | null;
 }
 
 const RETRY_DELAYS = [2000, 5000, 15000];
@@ -36,6 +37,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
   const [store, setStore] = useState<ChatStore>(emptyStore);
   const storeRef = useRef(store);
   storeRef.current = store;
+  const [me, setMe] = useState<string | null>(null);
 
   const sessionStops = useRef(new Map<string, () => void>());
   const turnStops = useRef(new Map<string, () => void>());
@@ -66,6 +68,15 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     turnKey.current.delete(turnId);
   }
 
+  // A `message` carrying a turnId this client generated is, by definition, our
+  // own — so its author is us. One learn per app run, nothing persisted, so it
+  // cannot go stale against a changed tailnet login.
+  function noteSelfAuthor(ev: AgentEvent) {
+    if (ev.type === "message" && ev.turnId && turnKey.current.has(ev.turnId)) {
+      setMe((prev) => prev ?? ev.author);
+    }
+  }
+
   function attachSessionStream(sessionId: string) {
     sessionStops.current.get(sessionId)?.();
     setStore((s) => resetQueueDepth(s, sessionId));
@@ -91,6 +102,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       if (ev.type === "result" || ev.type === "error") {
         for (const [tid, k] of turnKey.current.entries()) if (k === sessionId) finishTurn(tid);
       }
+      noteSelfAuthor(ev);
       setStore((s) => reduceEvent(setStale(s, sessionId, false), sessionId, ev));
     });
     sessionStops.current.set(sessionId, stop);
@@ -187,6 +199,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       const targetKey = turnKey.current.get(turnId) ?? k;
       const hasSessionStream = sessionStops.current.has(targetKey);
       const targetTab = storeRef.current.tabs.find((t) => t.key === targetKey);
+      noteSelfAuthor(event);
       if (!hasSessionStream || targetTab?.stale || event.type === "session") {
         setStore((s) => reduceEvent(s, targetKey, event));
       }
@@ -215,5 +228,5 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     return true;
   }
 
-  return { store, openSession, newDraft, close, focus, send };
+  return { store, openSession, newDraft, close, focus, send, me };
 }

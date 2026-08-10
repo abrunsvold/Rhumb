@@ -90,6 +90,7 @@ export function Workspace({
               tab={active}
               slashCommands={active.agent.slashCommands}
               roster={roster}
+              me={chat.me}
               onSend={(text, files) => chat.send(active.key, text, files)}
             />
           ) : (
