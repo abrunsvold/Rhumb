@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   emptyStore, openTab, closeTab, focusTab, reduceEvent, addUserMessage,
-  bumpTurns, promoteDraft, setStale, setTitle, setHistoryNotice,
+  bumpTurns, promoteDraft, setStale, setTitle, setHistoryNotice, resetQueueDepth,
   type ChatStore,
 } from "../lib/chatStore";
 import {
   openAgentStream, openSessionStream, sendMessage, uploadFile, getTranscript,
 } from "../lib/tauri";
+import { withAttachments } from "../lib/attachments";
 import type { AgentEvent } from "../lib/types";
 import type { StagedFile } from "../components/Composer";
 
@@ -67,6 +68,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
 
   function attachSessionStream(sessionId: string) {
     sessionStops.current.get(sessionId)?.();
+    setStore((s) => resetQueueDepth(s, sessionId));
     const stop = openSessionStream(agentBase, sessionId, (raw) => {
       const e = raw as { type?: string };
       if (e?.type === "stream_closed") {
@@ -142,23 +144,25 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
 
   async function send(key: string, text: string, files: StagedFile[]): Promise<boolean> {
     const promptText = text;
+    const turnId = crypto.randomUUID();
     let prompt = text;
     if (files.length > 0) {
       try {
         const paths: string[] = [];
         for (const f of files) paths.push(await uploadFile(agentBase, f.name, f.contentBase64));
-        prompt = `${text}\n\n[Attached files: ${paths.join(", ")}]`;
+        prompt = withAttachments(text, paths);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         setStore((s) => reduceEvent(s, key, { type: "error", message: `Upload failed: ${detail}` }));
         return false;
       }
     }
-    setStore((s) => addUserMessage(s, key, text, files.map((f) => f.name)));
+    // Optimistic: the message appears immediately with its chips, and the
+    // server's broadcast reconciles against this entry by turnId.
+    setStore((s) => addUserMessage(s, key, text, files.map((f) => f.name), turnId));
 
     const tab = storeRef.current.tabs.find((t) => t.key === key);
     const sessionId = tab?.agent.sessionId ?? undefined;
-    const turnId = crypto.randomUUID();
     turnKey.current.set(turnId, key);
     setStore((s) => bumpTurns(s, key, 1));
 
@@ -191,7 +195,16 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     turnStops.current.set(turnId, stop);
 
     try {
-      await sendMessage(agentBase, turnId, prompt, sessionId);
+      // A draft room names its own lane so two people starting a new chat at
+      // the same moment cannot land on one another's. Omit the argument
+      // entirely (rather than pass an explicit undefined) for a resumed
+      // session send.
+      const roomKey = key.startsWith("draft:") ? key : undefined;
+      if (roomKey !== undefined) {
+        await sendMessage(agentBase, turnId, prompt, sessionId, roomKey);
+      } else {
+        await sendMessage(agentBase, turnId, prompt, sessionId);
+      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const k = turnKey.current.get(turnId) ?? key;

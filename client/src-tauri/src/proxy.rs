@@ -218,11 +218,15 @@ pub async fn send_message(
     turn_id: String,
     prompt: String,
     session_id: Option<String>,
+    room_key: Option<String>,
 ) -> Result<(), String> {
     let (url, bearer) = agent_target(&app, &agent_base, "/messages")?;
     let mut body = serde_json::json!({ "turnId": turn_id, "prompt": prompt });
     if let Some(sid) = session_id {
         body["sessionId"] = Value::String(sid);
+    }
+    if let Some(rk) = room_key {
+        body["roomKey"] = Value::String(rk);
     }
     let client = reqwest::Client::new();
     let req = shell_request(client.post(&url).json(&body), &bearer);

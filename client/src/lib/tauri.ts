@@ -81,8 +81,15 @@ export function sendMessage(
   turnId: string,
   prompt: string,
   sessionId?: string,
+  roomKey?: string,
 ): Promise<void> {
-  return invoke("send_message", { agentBase, turnId, prompt, sessionId: sessionId ?? null });
+  return invoke("send_message", {
+    agentBase,
+    turnId,
+    prompt,
+    sessionId: sessionId ?? null,
+    roomKey: roomKey ?? null,
+  });
 }
 
 export function uploadFile(agentBase: string, name: string, contentBase64: string): Promise<string> {

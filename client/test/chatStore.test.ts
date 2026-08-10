@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   emptyStore, openTab, closeTab, focusTab, reduceEvent,
-  addUserMessage, bumpTurns, promoteDraft, setStale,
+  addUserMessage, bumpTurns, promoteDraft, setStale, resetQueueDepth,
 } from "../src/lib/chatStore";
 
 describe("chatStore", () => {
@@ -59,5 +59,27 @@ describe("chatStore", () => {
     let s = openTab(emptyStore, "s1", "One");
     s = setStale(s, "s1", true);
     expect(s.tabs[0].stale).toBe(true);
+  });
+});
+
+describe("room store helpers", () => {
+  it("stamps the turn id onto the optimistic user message", () => {
+    const s = openTab(emptyStore, "s1", "t");
+    const next = addUserMessage(s, "s1", "hello", ["a.png"], "turn-1");
+    expect(next.tabs[0].agent.messages[0]).toEqual({
+      kind: "user",
+      text: "hello",
+      attachments: ["a.png"],
+      id: "turn-1",
+    });
+  });
+
+  it("resets queue depth without touching presence or messages", () => {
+    let s = openTab(emptyStore, "s1", "t");
+    s = reduceEvent(s, "s1", { type: "queue", depth: 3 });
+    s = reduceEvent(s, "s1", { type: "presence", logins: ["op@example.com"] });
+    const next = resetQueueDepth(s, "s1");
+    expect(next.tabs[0].agent.queueDepth).toBe(0);
+    expect(next.tabs[0].agent.presence).toEqual(["op@example.com"]);
   });
 });
