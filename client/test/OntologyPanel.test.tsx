@@ -18,48 +18,76 @@ const snap: OntologySnapshot = {
       props: { host: "192.168.1.95", port: "3000", status: "healthy" },
       relationships: [{ edge: "runs-on", target: "container-105" }],
     },
+    { type: "service", id: "service-api", title: "printer-api", managed: "system", props: {}, relationships: [] },
   ],
 };
 
 const surfaceTabs = [{ id: "spools", title: "spools", url: "/surfaces/spools/" }];
 
-function mount(over: Partial<OntologySnapshot> = {}, onSelect = vi.fn()) {
+function mount(
+  over: Partial<OntologySnapshot> = {},
+  onSelectSurface = vi.fn(),
+  onSelectNode = vi.fn(),
+  selectedNodeId: string | null = null,
+) {
   (getOntology as ReturnType<typeof vi.fn>).mockResolvedValue({ ...snap, ...over });
   render(
-    <OntologyPanel agentBase="http://a" surfaceTabs={surfaceTabs} activeSurfaceId={null} onSelectSurface={onSelect} />,
+    <OntologyPanel
+      agentBase="http://a"
+      surfaceTabs={surfaceTabs}
+      activeSurfaceId={null}
+      selectedNodeId={selectedNodeId}
+      onSelectSurface={onSelectSurface}
+      onSelectNode={onSelectNode}
+    />,
   );
-  return onSelect;
+  return { onSelectSurface, onSelectNode };
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe("OntologyPanel", () => {
-  it("renders sections from the fetched graph", async () => {
+  it("renders nodes from the fetched graph as a flat tree", async () => {
     mount();
-    expect(await screen.findByText("Dashboards")).toBeTruthy();
-    expect(screen.getByText("Services")).toBeTruthy();
+    expect(await screen.findByText("spools")).toBeTruthy();
+    expect(screen.getByText("ghost")).toBeTruthy();
     expect(screen.getByText("Print poller")).toBeTruthy();
   });
 
-  it("clicking a live dashboard selects the surface; dead ones are disabled", async () => {
-    const onSelect = mount();
-    await userEvent.click(await screen.findByRole("button", { name: "spools" }));
-    expect(onSelect).toHaveBeenCalledWith("spools");
-    expect((screen.getByRole("button", { name: "ghost" }) as HTMLButtonElement).disabled).toBe(true);
+  it("clicking a live dashboard selects the surface", async () => {
+    const { onSelectSurface } = mount();
+    await userEvent.click(await screen.findByText("spools"));
+    expect(onSelectSurface).toHaveBeenCalledWith("spools");
   });
 
-  it("expands a non-dashboard node into a detail card", async () => {
-    mount();
-    await userEvent.click(await screen.findByRole("button", { name: /Print poller/ }));
-    expect(screen.getByText(/192\.168\.1\.95/)).toBeTruthy();
-    expect(screen.getByText(/runs-on → container-105/)).toBeTruthy();
+  it("clicking a dashboard whose surface isn't live routes to onSelectNode instead of being disabled", async () => {
+    const { onSelectNode } = mount();
+    await userEvent.click(await screen.findByText("ghost"));
+    expect(onSelectNode).toHaveBeenCalledWith("dashboard-ghost");
   });
 
-  it("filters all sections", async () => {
+  it("routes a non-dashboard node to onSelectNode", async () => {
+    const onSelectNode = vi.fn();
+    render(
+      <OntologyPanel
+        agentBase="http://a"
+        surfaceTabs={[]}
+        activeSurfaceId={null}
+        selectedNodeId={null}
+        onSelectSurface={vi.fn()}
+        onSelectNode={onSelectNode}
+      />,
+    );
+    await userEvent.click(await screen.findByText("printer-api"));
+    expect(onSelectNode).toHaveBeenCalledWith("service-api");
+  });
+
+  it("filters the tree", async () => {
     mount();
-    await screen.findByText("Dashboards");
+    await screen.findByText("spools");
     await userEvent.type(screen.getByPlaceholderText(/filter/i), "poller");
-    expect(screen.queryByText("Dashboards")).toBeNull();
+    expect(screen.queryByText("spools")).toBeNull();
+    expect(screen.queryByText("ghost")).toBeNull();
     expect(screen.getByText("Print poller")).toBeTruthy();
   });
 
@@ -71,7 +99,14 @@ describe("OntologyPanel", () => {
   it("shows fetch errors", async () => {
     (getOntology as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
     render(
-      <OntologyPanel agentBase="http://a" surfaceTabs={[]} activeSurfaceId={null} onSelectSurface={vi.fn()} />,
+      <OntologyPanel
+        agentBase="http://a"
+        surfaceTabs={[]}
+        activeSurfaceId={null}
+        selectedNodeId={null}
+        onSelectSurface={vi.fn()}
+        onSelectNode={vi.fn()}
+      />,
     );
     expect(await screen.findByText(/offline/)).toBeTruthy();
   });

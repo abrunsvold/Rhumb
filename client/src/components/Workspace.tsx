@@ -24,6 +24,7 @@ export function Workspace({
   const active = chat.store.tabs.find((t) => t.key === chat.store.activeKey) ?? null;
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const draftOpened = useRef(false);
   useEffect(() => {
@@ -60,7 +61,9 @@ export function Workspace({
               agentBase={agentBase}
               surfaceTabs={surfTabs}
               activeSurfaceId={activeSurf}
-              onSelectSurface={setActiveSurf}
+              selectedNodeId={selectedNode}
+              onSelectSurface={(id) => { setActiveSurf(id); setSelectedNode(null); }}
+              onSelectNode={setSelectedNode}
             />
           )}
           {tab === "host" && (
