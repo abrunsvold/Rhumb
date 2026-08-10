@@ -5,6 +5,7 @@ import { openPendingStream, resolvePending, openInfraPendingStream, resolveInfra
 export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: string; dashboardBase: string }) {
   const [queue, setQueue] = useState<PendingItem[]>([]);
   const [trust, setTrust] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const stopData = openPendingStream(dashboardBase, (e) => setQueue((p) => reducePending(p, e, "data")));
@@ -13,13 +14,31 @@ export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: st
   }, [agentBase, dashboardBase]);
 
   const current = queue[0];
-  if (!current) return null;
+  if (!current) {
+    if (!notice) return null;
+    return (
+      <div role="dialog" aria-label="Already resolved" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+        <div className="w-full max-w-md rounded-lg border border-line bg-panel p-5 flex flex-col gap-3">
+          <p className="text-sm text-muted">{notice}</p>
+          <div className="flex justify-end">
+            <button onClick={() => setNotice(null)} className="rounded border border-line px-3 py-1.5 text-muted hover:text-ink">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   async function decide(decision: "approve" | "deny") {
-    if (current.origin === "data") {
-      await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust);
-    } else {
-      await resolveInfraPending(agentBase, current.pendingId, decision);
+    const conflict =
+      current.origin === "data"
+        ? await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust)
+        : await resolveInfraPending(agentBase, current.pendingId, decision);
+    // Everyone in the room sees the same dialog, so someone else may have
+    // decided between this dialog rendering and this click.
+    if (conflict) {
+      setNotice(`Already ${conflict.decision || "resolved"} by ${conflict.by || "someone else"}`);
     }
     setQueue((p) => p.filter((x) => x.pendingId !== current.pendingId));
     setTrust(false);
@@ -28,6 +47,7 @@ export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: st
   return (
     <div role="dialog" aria-label="Confirm action" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="w-full max-w-md rounded-lg border border-line bg-panel p-5 flex flex-col gap-3">
+        {notice && <p className="text-xs text-muted">{notice}</p>}
         <div className="flex items-center gap-2">
           <h2 className="text-base font-semibold">
             {current.origin === "data" ? `Write to "${current.source}"` : `Infrastructure: ${current.tool}`}

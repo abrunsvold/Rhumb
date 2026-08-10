@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfirmationDialog } from "../src/components/ConfirmationDialog";
 
@@ -64,5 +64,42 @@ describe("ConfirmationDialog (watchdog proposals)", () => {
     capturedInfra?.({ type: "added", action: { pendingId: "w2", tool: "destroy_vm", input: { id: 3 }, proposedBy: "interactive" } });
     expect(await screen.findByText(/destroy_vm/)).toBeTruthy();
     expect(screen.queryByText(/proposed by the watchdog/i)).toBeNull();
+  });
+});
+
+describe("ConfirmationDialog (approval conflicts)", () => {
+  beforeEach(() => { vi.clearAllMocks(); capturedOnPending = null; capturedInfra = null; });
+
+  it("reports who decided first and drops the item", async () => {
+    resolveSpy.mockResolvedValueOnce({ error: "already resolved", by: "zoe@example.com", decision: "executed" });
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p9", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByText(/ops/);
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    expect(await screen.findByText(/already executed by zoe@example\.com/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+  });
+
+  it("closes silently when the resolve succeeds", async () => {
+    resolveSpy.mockResolvedValueOnce(null);
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p10", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByText(/ops/);
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("names an unknown decider gracefully", async () => {
+    resolveSpy.mockResolvedValueOnce({ error: "already resolved", by: "", decision: "" });
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p11", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByText(/ops/);
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    expect(await screen.findByText(/already resolved by someone else/i)).toBeTruthy();
   });
 });
