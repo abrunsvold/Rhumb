@@ -1289,7 +1289,12 @@ describe("author labels", () => {
 });
 ```
 
-Existing `Transcript` renders in this file will need `roster={[]} me={null}` added — **this is the one permitted edit to existing tests in this task**, and only to satisfy the new required props. Do not change any existing assertion.
+Two existing test files need render-argument additions — **the only permitted edits in this task**, and only to satisfy newly-required props. Change no assertion in either:
+
+- `client/test/Transcript.test.tsx` renders `<Transcript ...>` **19 times**; each needs `roster={[]} me={null}`.
+- `client/test/AgentPanel.test.tsx` renders `<AgentPanel ...>` **3 times**; each needs `me={null}` (they already gained `roster={[]}` in Task 9).
+
+Keep `me` a **required** prop on both components. Do not default it to `null` to avoid the test edit: the same call was made for `roster` in Task 9, and a required prop turns "a caller forgot to thread `me` through" into a compile error rather than a transcript that silently labels your own messages.
 
 - [ ] **Step 2: Run test to verify it fails**
 
