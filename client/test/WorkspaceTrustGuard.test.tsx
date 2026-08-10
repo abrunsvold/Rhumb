@@ -51,6 +51,8 @@ vi.mock("../src/lib/tauri", () => ({
   openAgentStream: vi.fn(() => () => {}),
   openSessionStream: vi.fn(() => () => {}),
   openRegistryStream: vi.fn(() => () => {}),
+  // TopBar probes the agent host on a 15s interval; the workspace mounts it.
+  checkHealthTimed: vi.fn().mockResolvedValue({ ok: true, ms: 12 }),
   openPendingStream: vi.fn(() => () => {}),
   openInfraPendingStream: vi.fn(() => () => {}),
   resolvePending: vi.fn().mockResolvedValue(undefined),

@@ -3,16 +3,20 @@ import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workspace } from "../src/components/Workspace";
 import {
+  openRegistryStream,
   openPendingStream,
   openInfraPendingStream,
   resolvePending,
   resolveInfraPending,
+  getOntology,
 } from "../src/lib/tauri";
 
 vi.mock("../src/lib/tauri", () => ({
   openAgentStream: vi.fn(() => () => {}),
   openSessionStream: vi.fn(() => () => {}),
   openRegistryStream: vi.fn(() => () => {}),
+  // TopBar probes the agent host on a 15s interval; the workspace mounts it.
+  checkHealthTimed: vi.fn().mockResolvedValue({ ok: true, ms: 12 }),
   openPendingStream: vi.fn(() => () => {}),
   openInfraPendingStream: vi.fn(() => () => {}),
   resolvePending: vi.fn().mockResolvedValue(undefined),
@@ -47,6 +51,10 @@ function setup() {
 }
 
 describe("Workspace shell", () => {
+  // Call counts are asserted below (the ontology refresh), so usage data has to
+  // start clean per test. `clearAllMocks` keeps the resolved values above.
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders the sidebar tabs", () => {
     setup();
     expect(screen.getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
@@ -112,6 +120,58 @@ describe("Workspace shell", () => {
     expect(screen.getByText("container")).toBeTruthy();
     expect(screen.getByText("LXC 118")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /DETACH/ })).toBeNull();
+  });
+
+  // Picking a surface has to drop the node selection, or the detail pane stays
+  // pinned on the node and the surface the operator just clicked never shows.
+  it("returns to the surface iframe when a live surface is picked after a node", async () => {
+    setup();
+    const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
+    act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
+    await screen.findByText("Sales");
+
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: /printer-api/i }));
+    expect(document.querySelector("iframe")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /sales/i }));
+    await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+    expect(document.querySelector("iframe")?.getAttribute("src")).toBe("http://d:8788/surfaces/x1/");
+    expect(screen.queryByText("LXC 118")).toBeNull();
+  });
+
+  it("lays out the top bar, three columns, and the telemetry bar", async () => {
+    setup();
+    expect(screen.getByText("RHUMB")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
+    expect(await screen.findByText("QUEUE clear")).toBeTruthy();
+  });
+
+  it("counts registered surfaces and ontology nodes in the telemetry bar", async () => {
+    // Held in an object so TypeScript does not narrow the captured callback to
+    // `null` — it is assigned from inside the stream mock.
+    const emit: { registry?: Parameters<typeof openRegistryStream>[1] } = {};
+    vi.mocked(openRegistryStream).mockImplementation((_b, cb) => { emit.registry = cb; return () => {}; });
+    setup();
+    act(() => {
+      emit.registry?.({ surfaces: [{ id: "x1", title: "Sales", url: "/s/x1", kind: "table", created: "", updated: "" }] });
+    });
+    // The count is a nested <span>, so the label element's own text node is
+    // just "SURFACES " — a /SURFACES\s*1/ text query never matches. Assert on
+    // the label element's full textContent instead.
+    await waitFor(() => expect(screen.getByText(/SURFACES/).textContent).toBe("SURFACES 1"));
+    await waitFor(() => expect(screen.getByText(/NODES/).textContent).toBe("NODES 2"));
+  });
+
+  // The panel no longer owns the fetch, so the only re-sync path is the map's
+  // refresh control reaching back into Workspace. Without it an operator has to
+  // restart the app to pick up a changed ontology.
+  it("re-fetches the ontology from the map refresh control", async () => {
+    setup();
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
   });
 });
 
@@ -263,6 +323,25 @@ describe("Workspace approvals (inline in the transcript)", () => {
     await waitFor(() =>
       expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p2", "approve", false),
     );
+  });
+
+  // The approval modal that used to carry a queue count is gone, so the
+  // telemetry bar is the only place a held write is visible when the operator
+  // is looking at another sidebar tab or has scrolled past the card.
+  it("reports the held queue count in the telemetry bar and clears it on resolve", async () => {
+    const emit = captureStreams();
+    setup();
+    expect(await screen.findByText("QUEUE clear")).toBeTruthy();
+
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" }, "p1")); });
+    await waitFor(() => expect(screen.getByText("QUEUE 1 held")).toBeTruthy());
+    expect(screen.queryByText("QUEUE clear")).toBeNull();
+
+    act(() => { emit.infra?.({ type: "added", action: { pendingId: "a1", tool: "grow_disk", input: {}, proposedBy: "watchdog" } }); });
+    await waitFor(() => expect(screen.getByText("QUEUE 2 held")).toBeTruthy());
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+    await waitFor(() => expect(screen.getByText("QUEUE 1 held")).toBeTruthy());
   });
 
   it("offers no trust checkbox for a delete and says why", async () => {

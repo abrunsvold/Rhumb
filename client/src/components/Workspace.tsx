@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Canvas } from "./Canvas";
+import { TopBar } from "./TopBar";
+import { TelemetryBar } from "./TelemetryBar";
 import { NodeDetail } from "./NodeDetail";
 import { SurfaceFrame } from "./SurfaceFrame";
 import { Sidebar, type SidebarTab } from "./Sidebar";
@@ -23,7 +25,7 @@ import {
   resolveInfraPending,
 } from "../lib/tauri";
 import { buildLineage } from "../lib/lineage";
-import type { OntologyNode } from "../lib/types";
+import type { OntologySnapshot } from "../lib/types";
 
 export function Workspace({
   agentBase,
@@ -40,7 +42,11 @@ export function Workspace({
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [ontologyNodes, setOntologyNodes] = useState<OntologyNode[]>([]);
+  // The ontology snapshot is owned here, not in OntologyPanel: the MAP tree,
+  // the SurfaceFrame breadcrumb and the telemetry counts all read it, and a
+  // per-panel fetch made the MAP tab's unmount silently drop the other two.
+  const [ontology, setOntology] = useState<OntologySnapshot | null>(null);
+  const [ontologyError, setOntologyError] = useState<string | null>(null);
   const [detachError, setDetachError] = useState(false);
   // Pendings carry no session id, so they cannot be attributed to a
   // conversation: they render in whichever transcript is active, and their
@@ -125,34 +131,55 @@ export function Workspace({
     setPending((p) => p.filter((x) => x.pendingId !== item.pendingId));
   }
 
-  useEffect(() => {
-    getOntology(agentBase)
-      .then((s) => setOntologyNodes(s.nodes))
-      .catch(() => setOntologyNodes([])); // breadcrumb degrades to empty; the map panel reports the error
+  const loadOntology = useCallback(async () => {
+    try {
+      setOntology(await getOntology(agentBase));
+      setOntologyError(null);
+    } catch (e) {
+      // Keep the last good snapshot: the breadcrumb and telemetry counts stay
+      // truthful about what was last seen while the map panel names the error.
+      setOntologyError(e instanceof Error ? e.message : String(e));
+    }
   }, [agentBase]);
+
+  useEffect(() => {
+    void loadOntology();
+  }, [loadOntology]);
+
+  const ontologyNodes = ontology?.nodes ?? [];
 
   const selected = selectedNode ? ontologyNodes.find((n) => n.id === selectedNode) ?? null : null;
   const activeSurface = surfTabs.find((t) => t.id === activeSurf) ?? null;
   const lineageId = selected ? selected.id : activeSurf ? `dashboard-${activeSurf}` : null;
+  const userTurns = active ? active.agent.messages.filter((m) => m.kind === "user").length : 0;
 
   return (
-    <div className="flex h-screen">
-      <div className="w-[272px] shrink-0 border-r border-line">
+    <div className="flex h-screen flex-col bg-bg">
+      <TopBar title={active?.title ?? "Rhumb"} turns={userTurns} baseUrl={agentBase} />
+      {/* The gap-px over a bg-line grid draws the 1px column rules. The fixed
+          track widths replace the old resize-x chat column: below ~1152px the
+          grid scrolls horizontally rather than crushing a column. */}
+      <div className="grid min-h-0 flex-1 gap-px overflow-x-auto bg-line [grid-template-columns:272px_minmax(320px,0.9fr)_minmax(560px,1.3fr)]">
         <Sidebar active={tab} onSelect={setTab}>
           {tab === "sessions" && (
             <SessionsPanel
               agentBase={agentBase}
               tabs={chat.store.tabs}
+              activeKey={chat.store.activeKey}
               onOpen={(m) => void chat.openSession({ id: m.id, title: m.title })}
               onNew={() => chat.newDraft()}
             />
           )}
           {tab === "map" && (
             <OntologyPanel
-              agentBase={agentBase}
+              snapshot={ontology}
+              error={ontologyError}
+              onRefresh={() => void loadOntology()}
               surfaceTabs={surfTabs}
               activeSurfaceId={activeSurf}
               selectedNodeId={selectedNode}
+              // Picking a surface must drop any node selection, or the detail
+              // pane stays pinned on the node and the surface never shows.
               onSelectSurface={(id) => { setActiveSurf(id); setSelectedNode(null); }}
               onSelectNode={setSelectedNode}
             />
@@ -161,10 +188,8 @@ export function Workspace({
             <HostPanel agentBase={agentBase} dashboardBase={dashboardBase} onDisconnect={onDisconnect} />
           )}
         </Sidebar>
-      </div>
-      {/* chat + canvas columns unchanged for now — Task 13 replaces this wrapper */}
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <div className="flex min-w-64 w-2/5 max-w-[70%] resize-x flex-col overflow-hidden border-r border-line">
+
+        <div className="flex min-h-0 min-w-0 flex-col bg-bg">
           <ChatTabs
             tabs={chat.store.tabs}
             activeKey={chat.store.activeKey}
@@ -188,12 +213,13 @@ export function Workspace({
             // state; dropping them here would leave a write queued with no way
             // to approve or deny it.
             <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-7">
-              <p className="text-sm text-muted">Open a session or start a new one.</p>
+              <p className="text-[13px] text-faint">Open a session or start a new one.</p>
               <ApprovalQueue pending={pending} resolved={resolved} onResolve={resolve} />
             </div>
           )}
         </div>
-        <div className="min-w-0 flex-1">
+
+        <div className="flex min-h-0 min-w-0 flex-col bg-bg">
           <SurfaceFrame
             lineage={lineageId ? buildLineage(ontologyNodes, lineageId) : []}
             onDetach={selected ? undefined : detach}
@@ -207,6 +233,15 @@ export function Workspace({
           </SurfaceFrame>
         </div>
       </div>
+      {/* `queued` is the only remaining indicator of how many writes and infra
+          actions are held for approval — the modal that used to carry that
+          count is gone, so it must track the real pending array. */}
+      <TelemetryBar
+        surfaces={surfTabs.length}
+        nodes={ontologyNodes}
+        queued={pending.length}
+        syncedAt={ontology?.syncedAt ?? null}
+      />
     </div>
   );
 }

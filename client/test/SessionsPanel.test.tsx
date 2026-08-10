@@ -22,10 +22,10 @@ import { listSessions, renameSession, archiveSession } from "../src/lib/tauri";
 
 beforeEach(() => vi.clearAllMocks());
 
-function setup(tabs: any[] = []) {
+function setup(tabs: any[] = [], activeKey: string | null = null) {
   const onOpen = vi.fn();
   const onNew = vi.fn();
-  render(<SessionsPanel agentBase="http://a:8787" tabs={tabs} onOpen={onOpen} onNew={onNew} />);
+  render(<SessionsPanel agentBase="http://a:8787" tabs={tabs} activeKey={activeKey} onOpen={onOpen} onNew={onNew} />);
   return { onOpen, onNew };
 }
 
@@ -79,6 +79,21 @@ describe("SessionsPanel", () => {
     expect(screen.getByLabelText("s2 unread")).toBeTruthy();
   });
 
+  // The open session has to be findable in the list: without the marker the
+  // sidebar gives no clue which row is the transcript already on screen.
+  it("marks the active session and shows `open` instead of its timestamp", async () => {
+    setup([], "s1");
+    const rows = await screen.findAllByRole("button", { name: /printer digest/i });
+    const active = rows.find((b) => !b.getAttribute("aria-label"))!;
+    expect(active.getAttribute("aria-current")).toBe("true");
+    expect(active.className).toContain("border-accent");
+    expect(screen.getByText("open")).toBeTruthy();
+
+    const others = await screen.findAllByRole("button", { name: /ontology sync/i });
+    const inactive = others.find((b) => !b.getAttribute("aria-label"))!;
+    expect(inactive.getAttribute("aria-current")).toBeNull();
+  });
+
   it("shows an inline error when the list fetch fails and clears it on recovery", async () => {
     (listSessions as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("403"));
     setup();
@@ -87,11 +102,11 @@ describe("SessionsPanel", () => {
 
   it("refetches when the running-tab count drops", async () => {
     const { rerender } = render(
-      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 1, unread: false }]} onOpen={vi.fn()} onNew={vi.fn()} />,
+      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 1, unread: false }]} activeKey={null} onOpen={vi.fn()} onNew={vi.fn()} />,
     );
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
     rerender(
-      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 0, unread: false }]} onOpen={vi.fn()} onNew={vi.fn()} />,
+      <SessionsPanel agentBase="http://a:8787" tabs={[{ key: "s1", openTurns: 0, unread: false }]} activeKey={null} onOpen={vi.fn()} onNew={vi.fn()} />,
     );
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
   });
@@ -99,14 +114,14 @@ describe("SessionsPanel", () => {
   it("filters the list and reports the match count", async () => {
     // uses the file's existing listSessions mock; ensure it resolves at least
     // two sessions with distinct titles before running this
-    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    render(<SessionsPanel agentBase="http://a" tabs={[]} activeKey={null} onOpen={vi.fn()} onNew={vi.fn()} />);
     await screen.findByText(/sessions$/);
     await userEvent.type(screen.getByLabelText("Search sessions"), "zzzznomatch");
     expect(screen.getByText("No session matches that.")).toBeTruthy();
   });
 
   it("filters by title only, keeping the matching row and dropping the other", async () => {
-    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    render(<SessionsPanel agentBase="http://a" tabs={[]} activeKey={null} onOpen={vi.fn()} onNew={vi.fn()} />);
     await screen.findByText(/sessions$/);
     // "printer" is only in s1's title — absent from both previews and s2's title.
     await userEvent.type(screen.getByLabelText("Search sessions"), "printer");
@@ -116,7 +131,7 @@ describe("SessionsPanel", () => {
   });
 
   it("filters by preview only, keeping the matching row and dropping the other", async () => {
-    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    render(<SessionsPanel agentBase="http://a" tabs={[]} activeKey={null} onOpen={vi.fn()} onNew={vi.fn()} />);
     await screen.findByText(/sessions$/);
     // "spool" is only in s1's preview — absent from both titles and s2's preview.
     await userEvent.type(screen.getByLabelText("Search sessions"), "spool");

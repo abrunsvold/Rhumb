@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { OntologyPanel } from "../src/components/OntologyPanel";
-import { getOntology } from "../src/lib/tauri";
 import type { OntologySnapshot } from "../src/lib/types";
 
-vi.mock("../src/lib/tauri", () => ({ getOntology: vi.fn() }));
+// No `vi.mock("../src/lib/tauri")` here: Task 13 lifted the fetch into
+// Workspace, so this panel is pure — it renders whatever snapshot it is given.
 
 const snap: OntologySnapshot = {
   syncedAt: "2026-07-09T12:00:00.000Z",
@@ -29,11 +29,14 @@ function mount(
   onSelectSurface = vi.fn(),
   onSelectNode = vi.fn(),
   selectedNodeId: string | null = null,
+  error: string | null = null,
+  onRefresh = vi.fn(),
 ) {
-  (getOntology as ReturnType<typeof vi.fn>).mockResolvedValue({ ...snap, ...over });
   render(
     <OntologyPanel
-      agentBase="http://a"
+      snapshot={{ ...snap, ...over }}
+      error={error}
+      onRefresh={onRefresh}
       surfaceTabs={surfaceTabs}
       activeSurfaceId={null}
       selectedNodeId={selectedNodeId}
@@ -41,13 +44,13 @@ function mount(
       onSelectNode={onSelectNode}
     />,
   );
-  return { onSelectSurface, onSelectNode };
+  return { onSelectSurface, onSelectNode, onRefresh };
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe("OntologyPanel", () => {
-  it("renders nodes from the fetched graph as a flat tree", async () => {
+  it("renders nodes from the supplied snapshot as a flat tree", async () => {
     mount();
     expect(await screen.findByText("spools")).toBeTruthy();
     expect(screen.getByText("ghost")).toBeTruthy();
@@ -70,7 +73,9 @@ describe("OntologyPanel", () => {
     const onSelectNode = vi.fn();
     render(
       <OntologyPanel
-        agentBase="http://a"
+        snapshot={snap}
+        error={null}
+        onRefresh={vi.fn()}
         surfaceTabs={[]}
         activeSurfaceId={null}
         selectedNodeId={null}
@@ -96,11 +101,12 @@ describe("OntologyPanel", () => {
     expect(await screen.findByText(/projector broke/)).toBeTruthy();
   });
 
-  it("shows fetch errors", async () => {
-    (getOntology as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
+  it("shows the fetch error the owner passed down", async () => {
     render(
       <OntologyPanel
-        agentBase="http://a"
+        snapshot={null}
+        error="offline"
+        onRefresh={vi.fn()}
         surfaceTabs={[]}
         activeSurfaceId={null}
         selectedNodeId={null}
@@ -109,5 +115,13 @@ describe("OntologyPanel", () => {
       />,
     );
     expect(await screen.findByText(/offline/)).toBeTruthy();
+  });
+
+  // The panel stopped fetching in Task 13; without a control wired to
+  // onRefresh there is no way to re-sync the map short of restarting the app.
+  it("asks the owner to re-sync when the refresh control is used", async () => {
+    const { onRefresh } = mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });

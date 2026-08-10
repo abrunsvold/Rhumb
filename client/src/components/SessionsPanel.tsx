@@ -39,11 +39,13 @@ export function groupSessions(
 export function SessionsPanel({
   agentBase,
   tabs,
+  activeKey,
   onOpen,
   onNew,
 }: {
   agentBase: string;
   tabs: BadgeTab[];
+  activeKey: string | null;
   onOpen: (meta: SessionMeta) => void;
   onNew: () => void;
 }) {
@@ -134,6 +136,7 @@ export function SessionsPanel({
             <ul>
               {g.items.map((s) => {
                 const tab = tabs.find((t) => t.key === s.id);
+                const isActive = s.id === activeKey;
                 return (
                   <li key={s.id} className="group relative">
                     {renaming === s.id ? (
@@ -151,10 +154,17 @@ export function SessionsPanel({
                     ) : (
                       <button
                         onClick={() => onOpen(s)}
-                        className="flex w-full items-center gap-2.5 border-l-2 border-transparent px-4 py-2.5 text-left hover:bg-raised"
+                        aria-current={isActive ? "true" : undefined}
+                        className={
+                          isActive
+                            ? "flex w-full items-center gap-2.5 border-l-2 border-accent bg-raised px-4 py-2.5 text-left"
+                            : "flex w-full items-center gap-2.5 border-l-2 border-transparent px-4 py-2.5 text-left hover:bg-raised"
+                        }
                       >
                         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span className="truncate text-[13px] text-muted">{s.title}</span>
+                          <span className={isActive ? "truncate text-[13px] text-ink" : "truncate text-[13px] text-muted"}>
+                            {s.title}
+                          </span>
                           <span className="truncate text-[11.5px] text-faint">{s.preview}</span>
                         </span>
                         {tab && tab.openTurns > 0 && (
@@ -163,7 +173,11 @@ export function SessionsPanel({
                         {tab?.unread && (
                           <span aria-label={`${s.id} unread`} className="h-2 w-2 shrink-0 rounded-full border border-accent" />
                         )}
-                        <span className="mn shrink-0 text-faint">{relTime(s.lastActiveAt)}</span>
+                        {isActive ? (
+                          <span className="mn shrink-0 text-accent">open</span>
+                        ) : (
+                          <span className="mn shrink-0 text-faint">{relTime(s.lastActiveAt)}</span>
+                        )}
                       </button>
                     )}
                     {renaming !== s.id && (

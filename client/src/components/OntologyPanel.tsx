@@ -1,43 +1,34 @@
-import { useCallback, useEffect, useState } from "react";
-import { getOntology } from "../lib/tauri";
+import { useState } from "react";
 import { flattenNodes, filterNodes, registryIdFor } from "../lib/ontologyStore";
 import type { OntologySnapshot } from "../lib/types";
 import type { Tab } from "../lib/registryStore";
 
 export function OntologyPanel({
-  agentBase,
+  snapshot,
+  error,
+  onRefresh,
   surfaceTabs,
   activeSurfaceId,
   selectedNodeId,
   onSelectSurface,
   onSelectNode,
 }: {
-  agentBase: string;
+  snapshot: OntologySnapshot | null;
+  error: string | null;
+  onRefresh: () => void;
   surfaceTabs: Tab[];
   activeSurfaceId: string | null;
   selectedNodeId: string | null;
   onSelectSurface: (id: string) => void;
   onSelectNode: (nodeId: string) => void;
 }) {
-  const [snap, setSnap] = useState<OntologySnapshot | null>(null);
-  const [fetchError, setFetchError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
-  const load = useCallback(async () => {
-    try {
-      setSnap(await getOntology(agentBase));
-      setFetchError(null);
-    } catch (e) {
-      setFetchError(e instanceof Error ? e.message : String(e));
-    }
-  }, [agentBase]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const error = fetchError ?? snap?.syncError ?? null;
-  const rows = snap ? flattenNodes(filterNodes(snap.nodes, query)) : [];
+  // A fetch failure and a host-reported sync failure are different problems but
+  // read the same to the operator; the fetch error wins because a stale
+  // snapshot's syncError describes a run that is no longer the latest attempt.
+  const shownError = error ?? snapshot?.syncError ?? null;
+  const rows = snapshot ? flattenNodes(filterNodes(snapshot.nodes, query)) : [];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -48,16 +39,31 @@ export function OntologyPanel({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Filter nodes"
-            placeholder={snap ? `Filter ${snap.nodes.length} nodes…` : "Filter…"}
+            placeholder={snapshot ? `Filter ${snapshot.nodes.length} nodes…` : "Filter…"}
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-faint"
           />
+          {/* The only way to re-sync the map without restarting the app. The
+              panel no longer owns the fetch, so this has to reach the owner. */}
+          <button
+            type="button"
+            aria-label="Refresh map"
+            title={
+              snapshot?.syncedAt
+                ? `synced ${new Date(snapshot.syncedAt).toLocaleTimeString()}`
+                : "Refresh"
+            }
+            onClick={onRefresh}
+            className="mn shrink-0 text-faint hover:text-ink"
+          >
+            ↻
+          </button>
         </div>
       </div>
-      {error && (
-        <p className="mx-4 mb-2 border border-line bg-raised px-2 py-1 text-xs text-muted">sync problem: {error}</p>
+      {shownError && (
+        <p className="mx-4 mb-2 border border-line bg-raised px-2 py-1 text-xs text-muted">sync problem: {shownError}</p>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {rows.map(({ node, depth }) => {
@@ -90,7 +96,7 @@ export function OntologyPanel({
             </button>
           );
         })}
-        {snap && rows.length === 0 && (
+        {snapshot && rows.length === 0 && (
           <p className="px-4 py-5 text-xs text-faint">Nothing on the map yet.</p>
         )}
       </div>
