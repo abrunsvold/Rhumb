@@ -121,4 +121,17 @@ describe("ConfirmationDialog (approval conflicts)", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
+
+  it("surfaces a notice and drops the item when the resolve call rejects (e.g. a pruned item's 404)", async () => {
+    resolveSpy.mockRejectedValueOnce(new Error("404 Not Found"));
+    render(<ConfirmationDialog agentBase="http://a:8787" dashboardBase="http://d:8788" />);
+    capturedOnPending?.({ type: "added", write: { pendingId: "p14", source: "ops", op: { kind: "insert", table: "t" }, surfaceId: "d1" } });
+    await screen.findByText(/ops/);
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    expect(await screen.findByText(/404 not found/i)).toBeTruthy();
+    // the item is dropped from the queue, so the dialog can't stay inert
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+  });
 });

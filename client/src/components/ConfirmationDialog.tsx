@@ -36,17 +36,27 @@ export function ConfirmationDialog({ agentBase, dashboardBase }: { agentBase: st
     // a later successful, uncontested approval drains the queue and resurrects
     // the old "already resolved by …" screen, falsely implying it conflicted.
     setNotice(null);
-    const conflict =
-      current.origin === "data"
-        ? await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust)
-        : await resolveInfraPending(agentBase, current.pendingId, decision);
-    // Everyone in the room sees the same dialog, so someone else may have
-    // decided between this dialog rendering and this click.
-    if (conflict) {
-      setNotice(`Already ${conflict.decision || "resolved"} by ${conflict.by || "someone else"}`);
+    try {
+      const conflict =
+        current.origin === "data"
+          ? await resolvePending(dashboardBase, current.pendingId, decision, decision === "approve" && trust)
+          : await resolveInfraPending(agentBase, current.pendingId, decision);
+      // Everyone in the room sees the same dialog, so someone else may have
+      // decided between this dialog rendering and this click.
+      if (conflict) {
+        setNotice(`Already ${conflict.decision || "resolved"} by ${conflict.by || "someone else"}`);
+      }
+    } catch (err) {
+      // The item can be pruned (not merely settled) between render and click —
+      // e.g. a 404 from the router. Without this, the promise rejects after
+      // setNotice(null) above and setQueue below never runs, leaving a dialog
+      // that does nothing when clicked and says nothing.
+      const detail = err instanceof Error ? err.message : String(err);
+      setNotice(detail);
+    } finally {
+      setQueue((p) => p.filter((x) => x.pendingId !== current.pendingId));
+      setTrust(false);
     }
-    setQueue((p) => p.filter((x) => x.pendingId !== current.pendingId));
-    setTrust(false);
   }
 
   return (

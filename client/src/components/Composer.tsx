@@ -55,7 +55,9 @@ export function Composer({
 
   // Mentions can appear anywhere, so match the token before the cursor rather
   // than the whole draft. The slash popup owns the leading token; the two
-  // cannot co-occur, since `slashPrefix` rejects anything containing a space.
+  // cannot co-occur because of the `slashPrefix === null ? … : null` guard
+  // below, which suppresses mention matching outright whenever the slash
+  // popup is active.
   const mentionMatch = slashPrefix === null ? /@([A-Za-z0-9._+-]*)$/.exec(draft.slice(0, caret)) : null;
   const mentionPrefix = mentionMatch ? mentionMatch[1] : null;
   const mentionMatches =
