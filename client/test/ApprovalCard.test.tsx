@@ -108,9 +108,13 @@ describe("ApprovalQueue", () => {
     expect(within(region as HTMLElement).getByRole("group", { name: "Update rows in printers.jobs" })).toBeTruthy();
   });
 
-  // A live region announces reliably only when it pre-exists its content, so
-  // the wrapper stays mounted with nothing queued (and out of flow via
-  // `empty:hidden`) rather than appearing along with the first card.
+  // A live region announces an insertion only if it was already in the
+  // accessibility tree, so the wrapper renders with nothing queued rather than
+  // appearing along with the first card. This assertion is only meaningful
+  // because nothing hides the element while it is empty: a `display: none`
+  // rule (the `empty:hidden` this once carried) would leave the node in the
+  // DOM for jsdom to find while removing it from the accessibility tree, and
+  // this test could not tell the difference.
   it("keeps the live region mounted when the queue is empty", () => {
     render(<ApprovalQueue pending={[]} resolved={[]} onResolve={vi.fn()} />);
     expect(document.querySelector('[aria-live="polite"]')).toBeTruthy();

@@ -21,10 +21,18 @@ export function ApprovalQueue({
     // composer or reading further up the transcript. The ConfirmationDialog
     // this queue replaced was a `role="dialog"` that took focus; nothing
     // replaced its announcement, so the region is polite-live instead.
-    // `empty:hidden` keeps the region in the DOM at all times (live regions
-    // announce reliably only when they pre-exist their content) while keeping
-    // it out of the parent's `gap-6` flow when there is nothing queued.
-    <div aria-live="polite" className="flex flex-col gap-6 empty:hidden">
+    //
+    // Rendered unconditionally, INCLUDING when empty. A live region announces
+    // an insertion only if it was already in the accessibility tree; a region
+    // created and filled in the same mutation is the case assistive tech drops.
+    // An earlier version carried `empty:hidden` to keep the empty wrapper out
+    // of the parent's `gap-6` flow, which was self-defeating: that compiles to
+    // `display: none`, which removes the element from the accessibility tree
+    // entirely, so the region did not pre-exist its content after all. The
+    // accepted cost of dropping it is one `gap-6` (24px) of trailing space
+    // below the last transcript entry. Do not re-add a rule that hides this
+    // element while it is empty.
+    <div aria-live="polite" className="flex flex-col gap-6">
       {/* Keyed by position as well as id: a failed resolve records an outcome
           while leaving the pending in place, so one pendingId can legitimately
           produce several entries (each retry) and ids alone are not unique. */}
