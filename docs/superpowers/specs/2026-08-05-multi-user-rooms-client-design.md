@@ -163,9 +163,12 @@ longer in the allowlist, so a departed teammate still reads correctly in history
 
 ### RoomStrip
 
-A new component rendered above the transcript in `AgentPanel`, returning `null`
-unless `presence.length > 1 || queueDepth > 0`. It shows who is present and
-"N waiting". Solo and idle, it is not in the DOM — the single-operator client is
+A new component rendered above the transcript in `AgentPanel`. The wire
+`queueDepth` counts the running turn as well as any queued ones, so the strip
+renders `depth - 1` as "N waiting" — not the raw depth. It returns `null`
+unless `presence.length > 1 || depth - 1 > 0`. It shows who is present and
+"N waiting". Solo and idle (including a lone operator mid-turn, where depth is
+1 and `waiting` is 0), it is not in the DOM — the single-operator client is
 unchanged, which is still the common case.
 
 ### @-mention autocomplete
@@ -225,8 +228,9 @@ in `proxy.rs`. They return the parsed 409 body instead, so the dialog can report
 - `send()` includes `roomKey` for a `draft:` tab and omits it for a real session
 
 **Components**
-- `RoomStrip` renders nothing when solo and idle; renders presence and depth
-  otherwise
+- `RoomStrip` renders nothing when solo and idle (depth 0 or 1, since depth 1
+  is just the lone operator's own running turn); renders presence and
+  `depth - 1` as "N waiting" otherwise
 - `Transcript` labels a message from another author, does not label `me`, and
   labels everything before `me` is known
 - `Composer` @-match against the token before the cursor, accept-on-Enter/Tab,

@@ -105,9 +105,11 @@ everyone else's, so ordering is server-authoritative and a sender's own message
 cannot visually jump the queue.
 
 `queue` carries the current depth for that session, broadcast on every enqueue
-and every drain. The client renders "N waiting" and clears at `depth: 0`. A
-single number is preferred over a per-message `queued` flag the client would
-have to work out how to un-set.
+and every drain. `depth` includes the turn currently running, not just queued
+ones (`depthOf = items.length + (running ? 1 : 0)`), so the client renders
+`depth - 1` as "N waiting" and clears at `depth: 0`. A single number is
+preferred over a per-message `queued` flag the client would have to work out
+how to un-set.
 
 `presence` carries the logins currently subscribed to the session.
 

@@ -39,8 +39,15 @@ describe("RoomStrip", () => {
     expect(screen.getByTestId("room-strip")).toHaveTextContent("gone@example.com");
   });
 
-  it("shows the queue depth even when you are alone", () => {
-    render(<RoomStrip presence={["op@example.com"]} queueDepth={2} roster={roster} />);
+  it("renders nothing when alone with only the running turn counted (depth 1)", () => {
+    const { container } = render(
+      <RoomStrip presence={["op@example.com"]} queueDepth={1} roster={roster} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the queue depth minus the running turn when you are alone", () => {
+    render(<RoomStrip presence={["op@example.com"]} queueDepth={3} roster={roster} />);
     expect(screen.getByTestId("room-strip")).toHaveTextContent("2 waiting");
   });
 });

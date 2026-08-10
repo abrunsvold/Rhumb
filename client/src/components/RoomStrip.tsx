@@ -11,7 +11,11 @@ export function RoomStrip({
   queueDepth: number;
   roster: RosterEntry[];
 }) {
-  if (presence.length <= 1 && queueDepth === 0) return null;
+  // The wire depth counts the RUNNING turn as well as queued ones, so a lone
+  // operator mid-turn reports 1. Only genuinely-waiting turns belong in a
+  // strip whose whole point is to stay invisible when you are alone and idle.
+  const waiting = Math.max(0, queueDepth - 1);
+  if (presence.length <= 1 && waiting === 0) return null;
 
   // A departed teammate is no longer in the allowlist but still belongs in the
   // room's history, so an unknown login renders as itself.
@@ -24,9 +28,9 @@ export function RoomStrip({
       className="flex items-center gap-2 border-b border-line bg-raised px-3 py-1 text-xs text-muted"
     >
       {presence.length > 1 && <span>{presence.map(label).join(", ")}</span>}
-      {queueDepth > 0 && (
+      {waiting > 0 && (
         <span className="ml-auto rounded-full border border-line px-2 py-0.5">
-          {queueDepth} waiting
+          {waiting} waiting
         </span>
       )}
     </div>
