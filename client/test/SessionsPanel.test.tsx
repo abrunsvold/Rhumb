@@ -3,9 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SessionMeta } from "../src/lib/types";
 
+// Previews are distinct, and deliberately share no substring with either
+// title, so tests can prove which field (title vs. preview) a query matched
+// against — see "filters by title only" / "filters by preview only" below.
 const sessions: SessionMeta[] = [
-  { id: "s1", title: "Printer digest", createdAt: "2026-07-01T00:00:00Z", lastActiveAt: "2026-07-02T00:00:00Z", preview: "…", archived: false },
-  { id: "s2", title: "Ontology sync", createdAt: "2026-07-01T00:00:00Z", lastActiveAt: "2026-07-01T12:00:00Z", preview: "…", archived: false },
+  { id: "s1", title: "Printer digest", createdAt: "2026-07-01T00:00:00Z", lastActiveAt: "2026-07-02T00:00:00Z", preview: "Filament levels look low on spool 3", archived: false },
+  { id: "s2", title: "Ontology sync", createdAt: "2026-07-01T00:00:00Z", lastActiveAt: "2026-07-01T12:00:00Z", preview: "Traversal finished without errors", archived: false },
 ];
 
 vi.mock("../src/lib/tauri", () => ({
@@ -100,6 +103,26 @@ describe("SessionsPanel", () => {
     await screen.findByText(/sessions$/);
     await userEvent.type(screen.getByLabelText("Search sessions"), "zzzznomatch");
     expect(screen.getByText("No session matches that.")).toBeTruthy();
+  });
+
+  it("filters by title only, keeping the matching row and dropping the other", async () => {
+    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    await screen.findByText(/sessions$/);
+    // "printer" is only in s1's title — absent from both previews and s2's title.
+    await userEvent.type(screen.getByLabelText("Search sessions"), "printer");
+    expect(await screen.findByText("1 of 2 match")).toBeTruthy();
+    expect(screen.getByText("Printer digest")).toBeTruthy();
+    expect(screen.queryByText("Ontology sync")).toBeNull();
+  });
+
+  it("filters by preview only, keeping the matching row and dropping the other", async () => {
+    render(<SessionsPanel agentBase="http://a" tabs={[]} onOpen={vi.fn()} onNew={vi.fn()} />);
+    await screen.findByText(/sessions$/);
+    // "spool" is only in s1's preview — absent from both titles and s2's preview.
+    await userEvent.type(screen.getByLabelText("Search sessions"), "spool");
+    expect(await screen.findByText("1 of 2 match")).toBeTruthy();
+    expect(screen.getByText("Printer digest")).toBeTruthy();
+    expect(screen.queryByText("Ontology sync")).toBeNull();
   });
 });
 
