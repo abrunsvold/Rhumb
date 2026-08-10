@@ -16,7 +16,7 @@ export function Sidebar({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden bg-panel">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-panel">
       <div role="tablist" aria-label="Sidebar" className="flex flex-none gap-4 px-4 pb-3.5 pt-4">
         {TABS.map((t) => (
           <button
