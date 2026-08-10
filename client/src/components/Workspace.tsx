@@ -8,7 +8,7 @@ import { ChatTabs } from "./ChatTabs";
 import { AgentPanel } from "./AgentPanel";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { reduceRegistry, type Tab } from "../lib/registryStore";
-import { openRegistryStream } from "../lib/tauri";
+import { openRegistryStream, getRoster, type RosterEntry } from "../lib/tauri";
 
 export function Workspace({
   agentBase,
@@ -24,6 +24,10 @@ export function Workspace({
   const active = chat.store.tabs.find((t) => t.key === chat.store.activeKey) ?? null;
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  useEffect(() => {
+    getRoster(agentBase).then(setRoster).catch(() => setRoster([]));
+  }, [agentBase]);
 
   const draftOpened = useRef(false);
   useEffect(() => {
@@ -85,6 +89,7 @@ export function Workspace({
             <AgentPanel
               tab={active}
               slashCommands={active.agent.slashCommands}
+              roster={roster}
               onSend={(text, files) => chat.send(active.key, text, files)}
             />
           ) : (

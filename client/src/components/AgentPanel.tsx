@@ -1,14 +1,18 @@
 import { Transcript } from "./Transcript";
 import { Composer, type StagedFile } from "./Composer";
+import { RoomStrip } from "./RoomStrip";
 import type { TabState } from "../lib/chatStore";
+import type { RosterEntry } from "../lib/tauri";
 
 export function AgentPanel({
   tab,
   slashCommands,
+  roster,
   onSend,
 }: {
   tab: TabState;
   slashCommands: string[];
+  roster: RosterEntry[];
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
 }) {
   return (
@@ -18,6 +22,11 @@ export function AgentPanel({
           Live updates interrupted — reconnecting…
         </div>
       )}
+      <RoomStrip
+        presence={tab.agent.presence}
+        queueDepth={tab.agent.queueDepth}
+        roster={roster}
+      />
       <Transcript messages={tab.agent.messages} busy={tab.openTurns > 0} />
       <Composer slashCommands={slashCommands} onSend={onSend} />
     </div>

@@ -18,24 +18,29 @@ vi.mock("../src/lib/tauri", () => ({
   }),
   renameSession: vi.fn(),
   archiveSession: vi.fn(),
+  getRoster: vi.fn().mockResolvedValue([]),
 }));
 
-function setup() {
+async function setup() {
   const onDisconnect = vi.fn();
-  render(<Workspace agentBase="http://a:8787" dashboardBase="http://d:8788" onDisconnect={onDisconnect} />);
+  // Workspace fetches the roster on mount; flush that microtask inside act()
+  // so the resulting state update doesn't leak past the test as a warning.
+  await act(async () => {
+    render(<Workspace agentBase="http://a:8787" dashboardBase="http://d:8788" onDisconnect={onDisconnect} />);
+  });
   return { onDisconnect };
 }
 
 describe("Workspace shell", () => {
-  it("renders the rail with Sessions, System map, and Connection buttons", () => {
-    setup();
+  it("renders the rail with Sessions, System map, and Connection buttons", async () => {
+    await setup();
     expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "System map" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Connection" })).toBeTruthy();
   });
 
   it("gear panel shows hosts and Disconnect works; clicking the icon again collapses", async () => {
-    const { onDisconnect } = setup();
+    const { onDisconnect } = await setup();
     await userEvent.click(screen.getByRole("button", { name: "Connection" }));
     expect(screen.getByText("http://a:8787")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /disconnect/i }));
@@ -45,14 +50,14 @@ describe("Workspace shell", () => {
   });
 
   it("opens with a draft chat tab ready to send", async () => {
-    setup();
+    await setup();
     expect(await screen.findByRole("tab", { name: /new session/i })).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();
   });
 
   it("streams the registry and shows surfaces in the panel and canvas", async () => {
     const { openRegistryStream } = await import("../src/lib/tauri");
-    setup();
+    await setup();
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     expect(await screen.findByRole("tab", { name: "Sales" })).toBeTruthy();
@@ -63,7 +68,7 @@ describe("Workspace shell", () => {
   });
 
   it("opens exactly one draft even if the mount effect double-fires", async () => {
-    setup();
+    await setup();
     const tabs = await screen.findAllByRole("tab", { name: /new session/i });
     expect(tabs).toHaveLength(1);
   });
