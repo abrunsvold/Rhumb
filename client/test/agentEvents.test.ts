@@ -93,7 +93,7 @@ describe("user messages and slash commands", () => {
 });
 
 describe("room events", () => {
-  it("leaves state untouched for message, queue, and presence in plan 1", () => {
+  it("leaves state untouched for a message event until plan 2 reconciliation lands", () => {
     const state = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
     expect(
       reduceAgent(state, {
@@ -103,8 +103,6 @@ describe("room events", () => {
         ts: "2026-08-04T00:00:00Z",
       }),
     ).toBe(state);
-    expect(reduceAgent(state, { type: "queue", depth: 2 })).toBe(state);
-    expect(reduceAgent(state, { type: "presence", logins: ["op@example.com"] })).toBe(state);
   });
 
 });

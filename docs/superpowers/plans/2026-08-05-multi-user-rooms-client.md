@@ -14,7 +14,7 @@
 
 - Three packages. `agent-host/` uses a `.js` extension on local imports even from `.ts` sources; `client/` does NOT. Follow each package's existing files.
 - Tests live in `<package>/test/`. Run with `npx vitest run <file>` from inside the package.
-- **Do not modify existing tests to make them pass.** If one goes red, the implementation is wrong. Two tasks name a specific existing test they are permitted to extend; those are the only exceptions and each says so.
+- **Do not modify existing tests to make them pass.** If one goes red, the implementation is wrong. Four tasks name a specific existing test they must change; those are the only exceptions and each says so. Three are prop additions that change no assertion. The fourth is `agentEvents.test.ts`'s "leaves state untouched for message, queue, and presence in plan 1", which **asserts the exact behaviour this plan replaces** — it is superseded by design, not made to pass. Task 4 narrows it and Task 5 deletes it.
 - `agent-host/src/types.ts` and `client/src/lib/types.ts` are hand-mirrored by contract. The `AgentEvent` union must stay character-identical between them; Task 13 diffs it.
 - `reduceAgent`'s trailing `default` block with `const _exhaustive: never = event` must survive every edit. It is what makes a client older than the host ignore unknown events instead of white-screening the tab.
 - `roomKey` is validated server-side against `^draft:[0-9a-f-]{36}$`. **This is security, not hygiene** — an unvalidated client-supplied lane name lets a caller land its turn on another room's lane deliberately. Weakening this regex is a defect.
@@ -426,6 +426,24 @@ describe("room state", () => {
 });
 ```
 
+Then narrow the superseded plan-1 test in the same file. `it("leaves state untouched for message, queue, and presence in plan 1", ...)` asserts that all three events are no-ops — which is exactly what this task changes for two of them. Drop its `queue` and `presence` assertions and rename it, leaving only the `message` one (still true until Task 5):
+
+```ts
+  it("leaves state untouched for a message event until plan 2 reconciliation lands", () => {
+    const state = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
+    expect(
+      reduceAgent(state, {
+        type: "message",
+        author: "op@example.com",
+        text: "hi",
+        ts: "2026-08-04T00:00:00Z",
+      }),
+    ).toBe(state);
+  });
+```
+
+This is a permitted, required edit to an existing test — the assertions being removed document behaviour this task deliberately replaces, and no assertion is being weakened to accommodate a bug.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd client && npx vitest run test/agentEvents.test.ts`
@@ -570,6 +588,8 @@ describe("message reconciliation", () => {
   });
 });
 ```
+
+Then delete the plan-1 holdover Task 4 narrowed — `it("leaves state untouched for a message event until plan 2 reconciliation lands", ...)`. This task is what makes `message` non-inert, so the assertion is now false by design, and the five reconciliation tests above cover the behaviour that replaced it. This is a permitted, required deletion, not a test weakened to accommodate a bug.
 
 - [ ] **Step 2: Run test to verify it fails**
 
