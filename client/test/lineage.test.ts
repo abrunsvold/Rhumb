@@ -44,4 +44,38 @@ describe("buildLineage", () => {
     expect(out).toHaveLength(4);
     expect(out[out.length - 1]).toBe("A");
   });
+
+  it("skips unresolvable targets in the relationship loop and continues with the next one", () => {
+    // B's FIRST relationship target "gone" doesn't resolve to any node
+    // B's SECOND relationship target "d" resolves successfully
+    // The chain must skip "gone" and follow D
+    const nodes = [
+      n("b", "B", ["gone", "d"]),
+      n("d", "D", []),
+    ];
+    expect(buildLineage(nodes, "b")).toEqual(["D", "B"]);
+  });
+
+  it("skips already-seen targets in the relationship loop and continues with the next one", () => {
+    // B's FIRST relationship points back to A (which is in seen),
+    // B's SECOND relationship points to a fresh node D.
+    // The chain must skip A and follow D.
+    const nodes = [
+      n("a", "A", ["b"]),
+      n("b", "B", ["a", "d"]),
+      n("d", "D", []),
+    ];
+    expect(buildLineage(nodes, "a")).toEqual(["D", "B", "A"]);
+  });
+
+  it("prefers id over title when both match the same target string", () => {
+    // "collision_id" is the id of node X and the title of node Y.
+    // When resolving "collision_id", it should find X by id, not Y by title.
+    const nodes = [
+      n("app", "Application", ["collision_id"]),
+      n("collision_id", "Primary node"),
+      n("other", "collision_id"),
+    ];
+    expect(buildLineage(nodes, "app")).toEqual(["Primary node", "Application"]);
+  });
 });
