@@ -12,7 +12,17 @@ vi.mock("../src/lib/tauri", () => ({
   getTranscript: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
   getOntology: vi.fn().mockResolvedValue({
-    nodes: [{ type: "dashboard", id: "dashboard-x1", title: "Sales", managed: "system", props: {}, relationships: [] }],
+    nodes: [
+      { type: "dashboard", id: "dashboard-x1", title: "Sales", managed: "system", props: {}, relationships: [] },
+      {
+        type: "service",
+        id: "service-api",
+        title: "printer-api",
+        managed: "system",
+        props: { container: "LXC 118" },
+        relationships: [],
+      },
+    ],
     syncedAt: "2026-07-09T12:00:00.000Z",
     syncError: null,
   }),
@@ -72,5 +82,25 @@ describe("Workspace shell", () => {
     setup();
     const tabs = await screen.findAllByRole("tab", { name: /new session/i });
     expect(tabs).toHaveLength(1);
+  });
+
+  it("shows node detail instead of the surface iframe when a non-dashboard node is selected", async () => {
+    const { openRegistryStream } = await import("../src/lib/tauri");
+    setup();
+    const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
+    act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
+    expect(await screen.findByText("Sales")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    const nodeButton = await screen.findByRole("button", { name: /printer-api/i });
+    await userEvent.click(nodeButton);
+
+    expect(document.querySelector("iframe")).toBeNull();
+    // "printer-api" now appears twice — once in the MAP list, once as the
+    // detail pane title — so assert on detail-only content instead.
+    expect(screen.getByText("container")).toBeTruthy();
+    expect(screen.getByText("LXC 118")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /DETACH/ })).toBeNull();
   });
 });

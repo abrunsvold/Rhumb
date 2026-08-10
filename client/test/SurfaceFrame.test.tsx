@@ -43,4 +43,13 @@ describe("SurfaceFrame", () => {
     );
     expect(screen.getByText("Detach failed")).toBeTruthy();
   });
+
+  it("hides the detach button when onDetach is omitted", () => {
+    render(
+      <SurfaceFrame lineage={["x"]} detachError={false}>
+        <p>body</p>
+      </SurfaceFrame>,
+    );
+    expect(screen.queryByRole("button", { name: /DETACH/ })).toBeNull();
+  });
 });

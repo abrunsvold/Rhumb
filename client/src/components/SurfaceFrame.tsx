@@ -5,7 +5,7 @@ export function SurfaceFrame({
   children,
 }: {
   lineage: string[];
-  onDetach: () => void;
+  onDetach?: () => void;
   detachError: boolean;
   children: React.ReactNode;
 }) {
@@ -22,9 +22,11 @@ export function SurfaceFrame({
         ))}
         <div className="flex-1" />
         {detachError && <span className="mn shrink-0 text-danger">Detach failed</span>}
-        <button onClick={onDetach} className="mn shrink-0 whitespace-nowrap text-muted hover:text-ink">
-          DETACH ↗
-        </button>
+        {onDetach && (
+          <button onClick={onDetach} className="mn shrink-0 whitespace-nowrap text-muted hover:text-ink">
+            DETACH ↗
+          </button>
+        )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </div>

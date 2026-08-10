@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Canvas } from "./Canvas";
+import { NodeDetail } from "./NodeDetail";
 import { SurfaceFrame } from "./SurfaceFrame";
 import { Sidebar, type SidebarTab } from "./Sidebar";
 import { HostPanel } from "./HostPanel";
@@ -72,6 +73,10 @@ export function Workspace({
       .catch(() => setOntologyNodes([])); // breadcrumb degrades to empty; the map panel reports the error
   }, [agentBase]);
 
+  const selected = selectedNode ? ontologyNodes.find((n) => n.id === selectedNode) ?? null : null;
+  const activeSurface = surfTabs.find((t) => t.id === activeSurf) ?? null;
+  const lineageId = selected ? selected.id : activeSurf ? `dashboard-${activeSurf}` : null;
+
   return (
     <div className="flex h-screen">
       <div className="w-[272px] shrink-0 border-r border-line">
@@ -120,11 +125,15 @@ export function Workspace({
         </div>
         <div className="min-w-0 flex-1">
           <SurfaceFrame
-            lineage={activeSurf ? buildLineage(ontologyNodes, `dashboard-${activeSurf}`) : []}
-            onDetach={detach}
+            lineage={lineageId ? buildLineage(ontologyNodes, lineageId) : []}
+            onDetach={selected ? undefined : detach}
             detachError={detachError}
           >
-            <Canvas dashboardBase={dashboardBase} active={surfTabs.find((t) => t.id === activeSurf) ?? null} />
+            {selected ? (
+              <NodeDetail node={selected} />
+            ) : (
+              <Canvas dashboardBase={dashboardBase} active={activeSurface} />
+            )}
           </SurfaceFrame>
         </div>
       </div>
