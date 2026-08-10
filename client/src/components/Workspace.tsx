@@ -15,7 +15,7 @@ import { ApprovalQueue } from "./ApprovalCard";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { reduceRegistry, type Tab } from "../lib/registryStore";
 import { reducePending, type PendingItem, type ResolvedItem } from "../lib/pendingStore";
-import { summarizeOp } from "../lib/opSummary";
+import { summarizeOp, isDelete } from "../lib/opSummary";
 import {
   openRegistryStream,
   getOntology,
@@ -24,7 +24,7 @@ import {
   resolvePending,
   resolveInfraPending,
 } from "../lib/tauri";
-import { buildLineage } from "../lib/lineage";
+import { buildLineage, buildSurfaceLineage } from "../lib/lineage";
 import type { OntologySnapshot } from "../lib/types";
 
 export function Workspace({
@@ -96,10 +96,16 @@ export function Workspace({
 
   async function resolve(item: PendingItem, decision: "approve" | "deny", trust: boolean) {
     const summary = summarizeOp(item);
+    // Trust is an approval qualifier only — a denial never grants it — and a
+    // delete is never trustable. ApprovalCard already withholds the checkbox
+    // for a delete, but that is a RENDER condition: `dashboard-host`'s addTrust
+    // does not look at op kind, so ("approve", true) on a delete would write a
+    // standing insert/update grant for the surface. Duplicated here for the
+    // same reason the surfaceId half of the invariant is duplicated below.
+    const grantTrust = decision === "approve" && trust && !isDelete(item);
     try {
       if (item.origin === "data") {
-        // Trust is an approval qualifier only — a denial never grants it.
-        await resolvePending(dashboardBase, item.pendingId, decision, decision === "approve" && trust);
+        await resolvePending(dashboardBase, item.pendingId, decision, grantTrust);
       } else {
         // Infra actions have no trust concept: there is no fourth argument.
         await resolveInfraPending(agentBase, item.pendingId, decision);
@@ -119,7 +125,7 @@ export function Workspace({
           // without a surface there is nothing to trust, the grant is silently
           // dropped, and claiming one here would report a grant the server
           // never made.
-          trust && item.origin === "data" && !!item.surfaceId
+          grantTrust && item.origin === "data" && !!item.surfaceId
           ? "Approved, and this surface is now trusted for adds and edits."
           // A resolved call means the host accepted the DECISION, not that the
           // write ran — it can still fail server-side afterwards (the audit
@@ -131,7 +137,12 @@ export function Workspace({
     setPending((p) => p.filter((x) => x.pendingId !== item.pendingId));
   }
 
+  // Two effects and a user control can all ask for the ontology; a second
+  // request while one is in flight would only race the first to setState.
+  const ontologyInFlight = useRef(false);
   const loadOntology = useCallback(async () => {
+    if (ontologyInFlight.current) return;
+    ontologyInFlight.current = true;
     try {
       setOntology(await getOntology(agentBase));
       setOntologyError(null);
@@ -139,6 +150,8 @@ export function Workspace({
       // Keep the last good snapshot: the breadcrumb and telemetry counts stay
       // truthful about what was last seen while the map panel names the error.
       setOntologyError(e instanceof Error ? e.message : String(e));
+    } finally {
+      ontologyInFlight.current = false;
     }
   }, [agentBase]);
 
@@ -146,11 +159,26 @@ export function Workspace({
     void loadOntology();
   }, [loadOntology]);
 
+  // The MAP tree is the ONLY way to select a surface, and this snapshot is
+  // otherwise fetched once per mount. A surface published mid-session reaches
+  // `surfTabs` and the telemetry count but not the tree, and a mount-time fetch
+  // failure leaves the tree empty with no surface selectable at all. Re-fetch
+  // on entering the tab — this is the per-mount behaviour OntologyPanel had
+  // before the fetch was lifted up here, not a replacement for the refresh
+  // control (which re-syncs without leaving the tab).
+  useEffect(() => {
+    if (tab === "map") void loadOntology();
+  }, [tab, loadOntology]);
+
   const ontologyNodes = ontology?.nodes ?? [];
 
   const selected = selectedNode ? ontologyNodes.find((n) => n.id === selectedNode) ?? null : null;
   const activeSurface = surfTabs.find((t) => t.id === activeSurf) ?? null;
-  const lineageId = selected ? selected.id : activeSurf ? `dashboard-${activeSurf}` : null;
+  const lineage = selected
+    ? buildLineage(ontologyNodes, selected.id)
+    : activeSurface
+      ? buildSurfaceLineage(ontologyNodes, activeSurface.id, activeSurface.title)
+      : [];
   const userTurns = active ? active.agent.messages.filter((m) => m.kind === "user").length : 0;
 
   return (
@@ -221,7 +249,7 @@ export function Workspace({
 
         <div className="flex min-h-0 min-w-0 flex-col bg-bg">
           <SurfaceFrame
-            lineage={lineageId ? buildLineage(ontologyNodes, lineageId) : []}
+            lineage={lineage}
             onDetach={selected ? undefined : detach}
             detachError={detachError}
           >

@@ -12,7 +12,7 @@ import {
   getOntology,
   listSessions,
 } from "../src/lib/tauri";
-import type { SessionMeta } from "../src/lib/types";
+import type { OntologySnapshot, SessionMeta } from "../src/lib/types";
 
 vi.mock("../src/lib/tauri", () => ({
   openAgentStream: vi.fn(() => () => {}),
@@ -175,6 +175,17 @@ describe("Workspace shell", () => {
     expect(within(columns[0]).getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
     expect(within(columns[1]).getByPlaceholderText(/reply, or ask for something new/i)).toBeTruthy();
     expect(within(columns[2]).getByRole("button", { name: /DETACH/ })).toBeTruthy();
+
+    // `overflow-x-auto` on the grid forces the USED overflow-y to `auto` too
+    // (CSS Overflow 3: a non-visible value on one axis promotes the other), so
+    // the grid is a vertical scroll container whether or not that was intended.
+    // It stays harmless only because every column caps its own height at the
+    // row: `min-h-0` keeps the single implicit row from growing to its
+    // max-content height, so the grid's scrollHeight never exceeds its
+    // clientHeight and the inner `overflow-y-auto` regions do the scrolling.
+    // Drop `min-h-0` from a column and the whole grid becomes the scroller.
+    expect(grid.className).toContain("overflow-x-auto");
+    for (const col of columns) expect(col.className).toContain("min-h-0");
   });
 
   // The top bar's numbers are computed HERE, not in TopBar: `turns` counts
@@ -212,6 +223,34 @@ describe("Workspace shell", () => {
     expect(within(bar).queryByText("0 turns")).toBeNull(); // a hardcoded zero
   });
 
+  // The registry `title` lost its home when the surface tab strip went away.
+  // The breadcrumb shows ONTOLOGY titles, and agent-host's projector sets a
+  // dashboard node's title to its own id — so the surface header read "x1"
+  // where the operator published "Quarterly Sales".
+  it("ends the surface breadcrumb with the registry title, not the ontology node title", async () => {
+    setup();
+    const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
+    act(() => cb({ surfaces: [{ id: "x1", title: "Quarterly Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
+
+    const column = (document.querySelector("div.grid")!.children[2]) as HTMLElement;
+    expect(await within(column).findByText("Quarterly Sales")).toBeTruthy();
+    // The ontology node for the same surface is titled "Sales" in this mock;
+    // it must not be what the breadcrumb terminates on.
+    expect(within(column).queryByText("Sales")).toBeNull();
+  });
+
+  // …and with no ontology node at all — the mount fetch failed, or the surface
+  // was published since the last sync — the breadcrumb must still name what is
+  // on screen instead of rendering an empty strip.
+  it("names the surface in the breadcrumb even when the ontology knows nothing about it", async () => {
+    setup();
+    const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
+    act(() => cb({ surfaces: [{ id: "zz", title: "Spool log", url: "/surfaces/zz/", kind: "file", created: "", updated: "" }] }));
+
+    const column = (document.querySelector("div.grid")!.children[2]) as HTMLElement;
+    expect(await within(column).findByText("Spool log")).toBeTruthy();
+  });
+
   it("counts registered surfaces and ontology nodes in the telemetry bar", async () => {
     // Held in an object so TypeScript does not narrow the captured callback to
     // `null` — it is assigned from inside the stream mock.
@@ -235,7 +274,61 @@ describe("Workspace shell", () => {
     setup();
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    // Opening the tab is itself a re-fetch (pinned below). Let it settle and
+    // measure from there, so this test still says exactly what it always said:
+    // the refresh control adds ONE more call, not zero and not two.
+    await act(async () => {});
+    const before = vi.mocked(getOntology).mock.calls.length;
     await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(before + 1));
+  });
+
+  // The MAP tree is the ONLY surface-selection path and the snapshot was
+  // otherwise fetched once, at mount. A surface published mid-session reached
+  // `surfTabs` and the telemetry count but never the tree, with nothing on
+  // screen saying so — Refresh compensates for stale node properties, not for
+  // a surface being unreachable.
+  it("re-fetches the ontology every time the MAP tab is opened", async () => {
+    setup();
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("tab", { name: "SESSIONS" }));
+    expect(getOntology).toHaveBeenCalledTimes(2);
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(3));
+  });
+
+  // The other half of the same failure: when the mount fetch rejects there is
+  // no snapshot, so the tree has no rows and NO surface can be selected at all
+  // — only the auto-selected surfTabs[0] is viewable. Opening MAP must be able
+  // to recover on its own.
+  it("recovers a map left empty by a failed mount fetch when MAP is opened", async () => {
+    vi.mocked(getOntology).mockRejectedValueOnce(new Error("agent unreachable"));
+    setup();
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    expect(await screen.findByRole("button", { name: /printer-api/i })).toBeTruthy();
+  });
+
+  // Mount, opening MAP and the refresh control can all ask for this snapshot;
+  // a second request while one is in flight only races the first to setState.
+  it("does not stack a second ontology fetch while one is in flight", async () => {
+    const held: { release?: (s: OntologySnapshot) => void } = {};
+    vi.mocked(getOntology).mockImplementationOnce(
+      () => new Promise<OntologySnapshot>((res) => { held.release = res; }),
+    );
+    setup();
+    await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+    expect(getOntology).toHaveBeenCalledTimes(1);
+
+    await act(async () => { held.release!({ nodes: [], syncedAt: null, syncError: null }); });
+    // …and the guard releases: the next open fetches again.
+    await userEvent.click(screen.getByRole("tab", { name: "SESSIONS" }));
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
   });
 
@@ -246,9 +339,13 @@ describe("Workspace shell", () => {
     setup();
     await waitFor(() => expect(screen.getByText(/NODES/).textContent).toBe("NODES 2"));
 
-    vi.mocked(getOntology).mockRejectedValueOnce(new Error("agent unreachable"));
+    // Opening MAP re-fetches, so the rejection is armed AFTER the tab is open;
+    // otherwise the tab's own fetch would consume it and the refresh would
+    // succeed, testing nothing.
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Refresh map" }));
+    await screen.findByRole("button", { name: "Refresh map" });
+    vi.mocked(getOntology).mockRejectedValueOnce(new Error("agent unreachable"));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh map" }));
 
     // The error reaches OntologyPanel through Workspace's `ontologyError`.
     expect(await screen.findByText(/sync problem: agent unreachable/)).toBeTruthy();

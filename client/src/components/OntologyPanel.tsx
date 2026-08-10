@@ -70,11 +70,17 @@ export function OntologyPanel({
           const rid = registryIdFor(node);
           const live = rid !== null && surfaceTabs.some((t) => t.id === rid);
           const selected = rid !== null ? rid === activeSurfaceId : node.id === selectedNodeId;
+          // The active surface stays highlighted while a node is selected —
+          // it is still what the operator returns to — but only ONE row may
+          // report itself current, and a node selection is what the right-hand
+          // column is actually showing. Workspace clears `selectedNode` when a
+          // surface is picked; it does not clear `activeSurf` the other way.
+          const current = selected && (rid === null || selectedNodeId === null);
           return (
             <button
               key={node.id}
               onClick={() => (rid !== null && live ? onSelectSurface(rid) : onSelectNode(node.id))}
-              aria-current={selected ? "true" : undefined}
+              aria-current={current ? "true" : undefined}
               style={{ paddingLeft: `${16 + depth * 16}px` }}
               className={
                 selected

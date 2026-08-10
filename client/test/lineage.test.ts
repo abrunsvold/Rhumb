@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLineage } from "../src/lib/lineage";
+import { buildLineage, buildSurfaceLineage } from "../src/lib/lineage";
 import type { OntologyNode } from "../src/lib/types";
 
 const n = (id: string, title: string, rels: string[] = []): OntologyNode => ({
@@ -77,5 +77,27 @@ describe("buildLineage", () => {
       n("other", "collision_id"),
     ];
     expect(buildLineage(nodes, "app")).toEqual(["Primary node", "Application"]);
+  });
+});
+
+describe("buildSurfaceLineage", () => {
+  // agent-host's projector titles a dashboard node with its own id, so the
+  // derived chain ends in "x1" while the registry calls the surface "Sales".
+  // The ancestry is worth keeping; the last label is not.
+  it("keeps the derived ancestry and replaces the last label with the registry title", () => {
+    const nodes = [
+      n("dashboard-x1", "x1", ["service-api"]),
+      n("service-api", "printer-api", ["container-118"]),
+      n("container-118", "LXC 118"),
+    ];
+    expect(buildSurfaceLineage(nodes, "x1", "Sales")).toEqual(["LXC 118", "printer-api", "Sales"]);
+  });
+
+  it("falls back to the registry title alone when the ontology has no node for the surface", () => {
+    expect(buildSurfaceLineage([n("service-api", "printer-api")], "zz", "Spool log")).toEqual(["Spool log"]);
+  });
+
+  it("returns the title alone when the ontology is empty", () => {
+    expect(buildSurfaceLineage([], "x1", "Sales")).toEqual(["Sales"]);
   });
 });

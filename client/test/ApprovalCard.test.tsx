@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ApprovalCard } from "../src/components/ApprovalCard";
+import { ApprovalCard, ApprovalQueue } from "../src/components/ApprovalCard";
 import type { PendingItem } from "../src/lib/pendingStore";
 
 const write: PendingItem = {
@@ -81,5 +81,50 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard item={write} onResolve={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /details/i }));
     expect(screen.getByText(/"table": "jobs"/)).toBeTruthy();
+  });
+
+  // The ConfirmationDialog this card replaced was a `role="dialog"` with an
+  // aria-label; nothing took over its announcement, so a pending write reached
+  // a screen-reader user as an unnamed div full of buttons.
+  it("is a named group so the ask is announced before its buttons", () => {
+    render(<ApprovalCard item={write} onResolve={vi.fn()} />);
+    const group = screen.getByRole("group", { name: "Update rows in printers.jobs" });
+    expect(within(group).getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  it("names an infra group by the same summary it displays", () => {
+    render(<ApprovalCard item={infra} onResolve={vi.fn()} />);
+    expect(screen.getByRole("group", { name: "Run grow_disk" })).toBeTruthy();
+  });
+});
+
+describe("ApprovalQueue", () => {
+  // Pendings arrive unprompted while the operator is doing something else, so
+  // the region they land in has to be polite-live.
+  it("puts the cards in a polite live region", () => {
+    render(<ApprovalQueue pending={[write]} resolved={[]} onResolve={vi.fn()} />);
+    const region = document.querySelector('[aria-live="polite"]');
+    expect(region).toBeTruthy();
+    expect(within(region as HTMLElement).getByRole("group", { name: "Update rows in printers.jobs" })).toBeTruthy();
+  });
+
+  // A live region announces reliably only when it pre-exists its content, so
+  // the wrapper stays mounted with nothing queued (and out of flow via
+  // `empty:hidden`) rather than appearing along with the first card.
+  it("keeps the live region mounted when the queue is empty", () => {
+    render(<ApprovalQueue pending={[]} resolved={[]} onResolve={vi.fn()} />);
+    expect(document.querySelector('[aria-live="polite"]')).toBeTruthy();
+  });
+
+  it("also announces the resolved outcomes", () => {
+    render(
+      <ApprovalQueue
+        pending={[]}
+        resolved={[{ pendingId: "p1", summary: "Update rows in printers.jobs", outcome: "Approved — sent to the host to run." }]}
+        onResolve={vi.fn()}
+      />,
+    );
+    const region = document.querySelector('[aria-live="polite"]') as HTMLElement;
+    expect(within(region).getByText("Approved — sent to the host to run.")).toBeTruthy();
   });
 });

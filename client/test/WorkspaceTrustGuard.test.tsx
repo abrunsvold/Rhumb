@@ -66,14 +66,17 @@ vi.mock("../src/lib/tauri", () => ({
   archiveSession: vi.fn(),
 }));
 
-function setup(surfaceId: string | null = "farm") {
+function setup(
+  surfaceId: string | null = "farm",
+  op: unknown = { kind: "update", table: "jobs" },
+) {
   const emit: { data?: (e: unknown) => void } = {};
   vi.mocked(openPendingStream).mockImplementation((_b, cb) => { emit.data = cb; return () => {}; });
   render(<Workspace agentBase="http://a:8787" dashboardBase="http://d:8788" onDisconnect={vi.fn()} />);
   act(() => {
     emit.data?.({
       type: "added",
-      write: { pendingId: "p1", source: "printers", op: { kind: "update", table: "jobs" }, surfaceId },
+      write: { pendingId: "p1", source: "printers", op, surfaceId },
     });
   });
 }
@@ -99,6 +102,25 @@ describe("Workspace trust guard", () => {
       expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p1", "approve", true),
     );
     expect(screen.getByText(TRUST_GRANTED)).toBeTruthy();
+  });
+
+  // ApprovalCard withholds the trust checkbox for a delete, but that is only a
+  // render condition — it is not what keeps trust off the wire. `addTrust` in
+  // dashboard-host/src/data/router.ts does not inspect op kind, so an
+  // ("approve", true) reaching it for a delete records a standing insert/update
+  // grant for the surface. The stubbed card above is the only way to present
+  // Workspace with that pair; without the `!isDelete(item)` term this is the
+  // one test on the branch that goes red.
+  it("never puts trust on the wire for a delete, even on an approval that carries it", async () => {
+    setup("farm", { kind: "delete", table: "jobs" });
+    await userEvent.click(await screen.findByRole("button", { name: "approve-with-trust-p1" }));
+    await waitFor(() =>
+      expect(resolvePending).toHaveBeenCalledWith("http://d:8788", "p1", "approve", false),
+    );
+    expect(vi.mocked(resolvePending).mock.calls.every((c) => c[3] === false)).toBe(true);
+    // …and the outcome line must not claim a grant the host never made.
+    expect(screen.getByText(NO_GRANT)).toBeTruthy();
+    expect(screen.queryByText(TRUST_GRANTED)).toBeNull();
   });
 
   // The host writes a trust pair only when the pending carries a surfaceId

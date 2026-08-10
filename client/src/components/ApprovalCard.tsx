@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
-import { summarizeOp } from "../lib/opSummary";
+import { summarizeOp, isDelete } from "../lib/opSummary";
 
 // The approval queue, rendered both inside a transcript and — when no session
 // is open — on its own. It lives in one place because a pending write must
@@ -17,7 +17,14 @@ export function ApprovalQueue({
   onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
 }) {
   return (
-    <>
+    // A pending write arrives unannounced — the operator may be typing in the
+    // composer or reading further up the transcript. The ConfirmationDialog
+    // this queue replaced was a `role="dialog"` that took focus; nothing
+    // replaced its announcement, so the region is polite-live instead.
+    // `empty:hidden` keeps the region in the DOM at all times (live regions
+    // announce reliably only when they pre-exist their content) while keeping
+    // it out of the parent's `gap-6` flow when there is nothing queued.
+    <div aria-live="polite" className="flex flex-col gap-6 empty:hidden">
       {/* Keyed by position as well as id: a failed resolve records an outcome
           while leaving the pending in place, so one pendingId can legitimately
           produce several entries (each retry) and ids alone are not unique. */}
@@ -34,12 +41,8 @@ export function ApprovalQueue({
       {pending.map((p) => (
         <ApprovalCard key={p.pendingId} item={p} onResolve={(d, t) => onResolve(p, d, t)} />
       ))}
-    </>
+    </div>
   );
-}
-
-function isDelete(item: PendingItem): boolean {
-  return item.origin === "data" && (item.op as { kind?: string } | null)?.kind === "delete";
 }
 
 export function ApprovalCard({
@@ -56,7 +59,13 @@ export function ApprovalCard({
   const trustable = item.origin === "data" && !!item.surfaceId && !isDelete(item);
 
   return (
-    <div className="flex max-w-[60ch] flex-col gap-3.5 border-l border-warn pl-3.5">
+    // Named by the same sentence the card leads with, so a screen reader
+    // reaching this group says WHAT is being asked before the buttons.
+    <div
+      role="group"
+      aria-label={summarizeOp(item)}
+      className="flex max-w-[60ch] flex-col gap-3.5 border-l border-warn pl-3.5"
+    >
       <div className="text-[14.5px] leading-[1.75] text-ink-soft">{summarizeOp(item)}</div>
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="self-start text-left text-[12.5px] text-faint">
         <span className="border-b border-line-strong text-muted">{open ? "hide details" : "details"}</span>

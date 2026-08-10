@@ -9,7 +9,11 @@
   --color-ink: #f4f5f7;
   --color-ink-soft: #d7dae0;
   --color-muted: #9ba2ac;
-  --color-faint: #5a616b;
+  /* 5.07:1 on --color-bg. Faint carries real content — the approval card's
+     guardrail line, the resolved-outcome line, two of three sidebar tabs and
+     every non-terminal breadcrumb label — all at 10–12.5px, none of which is
+     large text. The previous #5a616b was 3.15:1 and failed AA everywhere. */
+  --color-faint: #7a828d;
   --color-accent: #ff5a1f;
   --color-accent-soft: #16191d;
   --color-ok: #3dd68c;

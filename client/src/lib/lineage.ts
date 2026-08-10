@@ -32,3 +32,19 @@ export function buildLineage(nodes: OntologyNode[], nodeId: string): string[] {
   }
   return chain.reverse();
 }
+
+// The breadcrumb for an ACTIVE SURFACE, as opposed to an ontology node.
+// `agent-host/src/ontology/projector.ts` titles a dashboard node with its own
+// id, so the derived chain ends in "x1" where the registry knows the surface as
+// "Sales" — and the surface tab strip that used to carry that title is gone.
+// Keep the derived ancestry and replace only the last label; when the ontology
+// knows nothing about the surface, the title alone still names what is on
+// screen rather than leaving the strip blank.
+export function buildSurfaceLineage(
+  nodes: OntologyNode[],
+  surfaceId: string,
+  title: string,
+): string[] {
+  const derived = buildLineage(nodes, `dashboard-${surfaceId}`);
+  return derived.length > 0 ? [...derived.slice(0, -1), title] : [title];
+}

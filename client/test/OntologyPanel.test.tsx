@@ -117,6 +117,50 @@ describe("OntologyPanel", () => {
     expect(await screen.findByText(/offline/)).toBeTruthy();
   });
 
+  // `aria-current` means "the current item in this set" and must be unique.
+  // Workspace clears `selectedNode` when a surface is picked but does NOT clear
+  // `activeSurf` when a node is picked, so both a dashboard row and a node row
+  // can be selected at once — and the node is what the right-hand column is
+  // actually showing.
+  it("marks exactly one row current when a node is selected while a surface is active", async () => {
+    render(
+      <OntologyPanel
+        snapshot={snap}
+        error={null}
+        onRefresh={vi.fn()}
+        surfaceTabs={surfaceTabs}
+        activeSurfaceId="spools"
+        selectedNodeId="service-api"
+        onSelectSurface={vi.fn()}
+        onSelectNode={vi.fn()}
+      />,
+    );
+    await screen.findByText("spools");
+    const current = document.querySelectorAll('[aria-current="true"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("printer-api");
+  });
+
+  // …and with no node selected the active surface is current again.
+  it("marks the active surface current when no node is selected", async () => {
+    render(
+      <OntologyPanel
+        snapshot={snap}
+        error={null}
+        onRefresh={vi.fn()}
+        surfaceTabs={surfaceTabs}
+        activeSurfaceId="spools"
+        selectedNodeId={null}
+        onSelectSurface={vi.fn()}
+        onSelectNode={vi.fn()}
+      />,
+    );
+    await screen.findByText("spools");
+    const current = document.querySelectorAll('[aria-current="true"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("spools");
+  });
+
   // The panel stopped fetching in Task 13; without a control wired to
   // onRefresh there is no way to re-sync the map short of restarting the app.
   it("asks the owner to re-sync when the refresh control is used", async () => {
