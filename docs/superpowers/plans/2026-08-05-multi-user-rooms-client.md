@@ -1509,7 +1509,9 @@ describe("mention autocomplete", () => {
 });
 ```
 
-Existing `Composer` renders in this file need `roster={[]}` added — **this is the one permitted edit to existing tests in this task**, and only to satisfy the new required prop. Do not change any existing assertion.
+`client/test/Composer.test.tsx` renders `<Composer ...>` in **2 places**; each needs `roster={[]}` added. **This is the one permitted edit to existing tests in this task**, and only to satisfy the new required prop — change no assertion.
+
+No other file is affected: the only other render site is `AgentPanel.tsx`, which already receives `roster` as a prop from Task 9, so `AgentPanel`'s own signature and its test file are untouched here. (Verified by enumerating every `<Composer` site before this task was dispatched — four earlier tasks in this plan were tripped up by unenumerated call sites.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
