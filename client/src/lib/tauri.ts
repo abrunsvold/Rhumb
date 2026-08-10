@@ -176,6 +176,16 @@ export function openSessionStream(
   return () => void invoke("stop_session_stream", { sessionId });
 }
 
+export interface RosterEntry {
+  login: string;
+  handle: string;
+}
+
+export async function getRoster(agentBase: string): Promise<RosterEntry[]> {
+  const r = await invoke<{ roster: RosterEntry[] }>("get_roster", { agentBase });
+  return r.roster;
+}
+
 export function getOntology(agentBase: string): Promise<OntologySnapshot> {
   return invoke<OntologySnapshot>("get_ontology", { agentBase });
 }

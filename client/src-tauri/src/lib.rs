@@ -110,6 +110,7 @@ pub fn run() {
             proxy::upload_file,
             proxy::list_sessions,
             proxy::get_ontology,
+            proxy::get_roster,
             proxy::get_transcript,
             proxy::rename_session,
             proxy::archive_session,
