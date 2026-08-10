@@ -1170,6 +1170,11 @@ export function AgentPanel({
 }
 ```
 
+Two existing test files need adjusting, and both are permitted, required edits of the prop-addition kind — **no assertion changes in either**:
+
+- `client/test/AgentPanel.test.tsx` renders `AgentPanel` directly in three places. Add `roster={[]}` to each. Do not make the prop optional to dodge this: a defaulted `roster` means a caller that forgets it silently gets an empty list, and Task 11's autocomplete would offer nothing with no error.
+- `client/test/Workspace.test.tsx` needs a `getRoster` stub added to its existing `../src/lib/tauri` mock, following that file's established pattern, because `Workspace` now fetches on mount. Wrap its `setup()` in `act()` if the new mount-time fetch produces a React `act()` warning — a warning is a finding, and silencing it this way changes no assertion.
+
 In `client/src/components/Workspace.tsx`, fetch the roster once and pass it down. Add to the imports:
 
 ```tsx
