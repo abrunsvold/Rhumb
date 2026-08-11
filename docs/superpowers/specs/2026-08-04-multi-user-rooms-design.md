@@ -303,3 +303,21 @@ Two implementation plans, in order:
 - Display names — needs a source beyond `RHUMB_ALLOWED_USERS`.
 - Fleet-backed rooms, once P0–P2 of the fleet program land and mngr's turn cost
   is addressed.
+
+## Compatibility (release note)
+
+The room frame types (`message`, `queue`, `presence`) are **opt-in**: a stream
+subscriber receives them only when its URL carries `?room=1`, which the
+packaged client sends from this release on. Subscribers that do not opt in get
+exactly the pre-rooms event vocabulary (`session`, `result`, `error`, `raw`).
+
+**Hosts can therefore deploy before clients update.** A pre-rooms packaged
+client — whose event reducer crashes the tab on an unknown frame type — keeps
+working against a rooms-enabled host; it simply does not see authors, presence,
+or queue depth until it is upgraded. The reverse order also works: a rooms
+client against an older host receives no room frames and degrades the same way.
+
+Slash commands (`/compact`, custom commands) are handed to the backend
+**unstamped** — the CLI recognizes a command only at the start of the prompt,
+so command turns carry no `[from:]` envelope and replay unattributed. The live
+`message` broadcast still names the sender.
