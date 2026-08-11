@@ -294,7 +294,13 @@ is what stops nested fleets from spawning without bound.
   agent is created for it. The rest of the batch still spawns. (Earlier
   builds accepted any `placement` and silently ran the agent on localhost
   anyway.)
-- **`liveCount` never reaps.** Nothing currently retires a fleet-spawned
+- **`liveCount` never reaps — and it counts ALL active mngr conversations,
+  not just fleet-spawned agents.** While liveness is stubbed, the count is
+  every active mngr principal in `agents.json`, including the operator's own
+  foreground (depth-0) conversations under `RHUMB_AGENT_BACKEND=mngr` — so
+  on such a box the fleet can be refused after `RHUMB_FLEET_MAX_CONCURRENT`
+  operator conversations even if no fleet agent was ever spawned. Nothing
+  currently retires a fleet-spawned
   agent's record once it finishes, so every agent ever spawned on a given
   `agents.json` keeps counting toward `RHUMB_FLEET_MAX_CONCURRENT` forever.
   On a long-lived workspace this means spawning will eventually be refused
@@ -332,6 +338,15 @@ where infra **is** configured this does not apply — the fleet gate chains to
 the existing infra gate, and that box keeps exactly the policy it had. The
 scheduled watchdog is unaffected either way: it explicitly drops the
 inherited callback.
+
+**Security note: spawned agents leave the model credential on disk.** mngr
+persists each agent's environment — including the `CLAUDE_CODE_OAUTH_TOKEN`
+Rhumb injects via `--env` — in plaintext under `~/.mngr/agents/<id>/env`
+(observed against mngr 0.2.17, docs/dogfood/2026-08-05-fleet-gate.md). Since
+spawned agents are not reaped, every fleet spawn adds a token copy that
+outlives the work. Treat `~/.mngr` as credential storage: restrict access to
+it, and clean up finished agents (`mngr destroy <name> --force -b`), which
+removes the agent's state directory and the token with it.
 
 **`RHUMB_PERMISSION_MODE=bypassPermissions` makes the approval gate inert.**
 The SDK skips the tool-approval callback entirely in that mode, so

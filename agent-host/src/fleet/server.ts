@@ -104,7 +104,10 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
           "*** LIMITATION OF THIS BUILD: spawned agents are never reaped. Each one you " +
           "create permanently consumes a slot of the operator's concurrency cap (default 8) " +
           "for the lifetime of this workspace — destroying the agent does not give the slot " +
-          "back. And because check/collect cannot observe agents in this build (see those " +
+          "back. The cap counts ALL of the operator's active mngr conversations, including " +
+          "their own foreground (depth-0) ones — not just fleet-spawned agents — so fewer " +
+          "slots may be free than your own spawns account for. And because check/collect " +
+          "cannot observe agents in this build (see those " +
           "tools), you will not be able to tell what a spawned agent did. Spawn only what the " +
           "operator actually asked for; do not spend the cap exploring, and tell the operator " +
           "they will need to inspect the results with the mngr CLI themselves. ***",
