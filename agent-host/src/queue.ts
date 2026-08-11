@@ -65,6 +65,17 @@ export function createTurnQueue(deps: {
   // surviving alias[""] would route the next new room's turns into the previous
   // room's lane. server.ts does the same thing with `subscribers.delete("")`
   // when the session event lands.
+  //
+  // KNOWN WINDOW (review F6): dropping the alias the moment the lane drains
+  // means a follow-up turn still posted under the room's DRAFT key — a client
+  // that never processed the `session` event, e.g. its turn stream died
+  // mid-turn before the session stream attached — lands on a fresh lane with
+  // no session to resume and forks the room into a second session. The normal
+  // path is safe: the client learns the session id early in turn 1, long
+  // before this drain fires, and resumed sends carry an explicit sessionId.
+  // A grace TTL on the alias would need a clock and timers threaded into this
+  // module for a race the client can only hit after losing BOTH streams;
+  // accepted as-is until it is observed in practice.
   function dropLane(key: string): void {
     lanes.delete(key);
     for (const [from, to] of alias) {

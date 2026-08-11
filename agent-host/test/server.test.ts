@@ -102,10 +102,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: [], insecureDev: true },
     });
 
@@ -120,10 +124,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: [], insecureDev: true },
     });
 
@@ -348,10 +356,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: [], insecureDev: true },
       now: () => "2026-08-04T00:00:00Z",
     });
@@ -373,10 +385,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: ["op@example.com"], insecureDev: false },
     });
 
@@ -394,10 +410,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: [], insecureDev: true },
     });
 
@@ -491,6 +511,9 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const started: string[] = [];
     let releaseFirst!: () => void;
@@ -553,10 +576,14 @@ describe("agent-host server", () => {
     const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
     const sessionSubscribers = new Map<string, Set<import("express").Response>>();
     sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
 
     const app = createServer({
       manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
       sessionSubscribers,
+      roomCapable,
       identity: { allowedUsers: [], insecureDev: true },
     });
 
@@ -869,7 +896,7 @@ describe("presence over SSE", () => {
         const req = http.get(
           {
             port,
-            path: "/sessions/s1/stream",
+            path: "/sessions/s1/stream?room=1",
             headers: { "Tailscale-User-Login": login, "Sec-Rhumb-Control": "1" },
           },
           (res) => {
@@ -898,5 +925,154 @@ describe("presence over SSE", () => {
 
     first.abort();
     await new Promise<void>((r) => server.close(() => r()));
+  });
+});
+
+describe("slash commands in rooms (review F1)", () => {
+  it("hands a slash command to the backend unstamped", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "/compact now" });
+    await new Promise((r) => setImmediate(r));
+
+    // The CLI only recognizes a command at the START of the prompt; a stamped
+    // "[from: …]\n/compact" silently degrades to literal text.
+    expect(seen).toEqual(["/compact now"]);
+  });
+
+  it("still stamps a prompt that merely mentions a slash mid-text", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "run /compact for me" });
+    await new Promise((r) => setImmediate(r));
+    expect(seen).toEqual(["[from: dev@local]\nrun /compact for me"]);
+  });
+});
+
+describe("room-frame opt-in (review F2/F4)", () => {
+  function serverOn(app: ReturnType<typeof createServer>) {
+    const server = http.createServer(app);
+    return new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
+      server.listen(0, () => {
+        const port = (server.address() as import("node:net").AddressInfo).port;
+        resolve({ port, close: () => new Promise((r) => server.close(() => r())) });
+      });
+    });
+  }
+
+  function open(port: number, path: string) {
+    const frames: string[] = [];
+    return new Promise<{ frames: string[]; abort: () => void }>((resolve) => {
+      const req = http.get(
+        { port, path, headers: { "Tailscale-User-Login": "op@example.com", "Sec-Rhumb-Control": "1" } },
+        (res) => {
+          res.on("data", (c: Buffer) => frames.push(c.toString()));
+          resolve({ frames, abort: () => req.destroy() });
+        },
+      );
+    });
+  }
+
+  it("withholds room frames from a session subscriber that did not opt in", async () => {
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const { port, close } = await serverOn(app);
+
+    const legacy = await open(port, "/sessions/s1/stream");
+    const roomy = await open(port, "/sessions/s1/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const legacyFrames = legacy.frames.join("");
+    const roomyFrames = roomy.frames.join("");
+    // An old packaged client's reducer returns undefined for unknown event
+    // types and crashes the tab render — it must see only pre-rooms types.
+    expect(legacyFrames).not.toContain('"type":"presence"');
+    expect(legacyFrames).not.toContain('"type":"queue"');
+    expect(legacyFrames).not.toContain('"type":"message"');
+    expect(legacyFrames).toContain('"type":"result"');
+    // The opted-in subscriber gets the full room protocol.
+    expect(roomyFrames).toContain('"type":"presence"');
+    expect(roomyFrames).toContain('"type":"queue"');
+    expect(roomyFrames).toContain('"type":"message"');
+    expect(roomyFrames).toContain('"type":"result"');
+
+    legacy.abort();
+    roomy.abort();
+    await close();
+  });
+
+  it("replays presence and the CURRENT queue depth to a new opted-in subscriber", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        await gate;
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+    const { port, close } = await serverOn(app);
+
+    // A turn is mid-flight before this subscriber ever connects.
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await new Promise((r) => setImmediate(r));
+
+    const late = await open(port, "/sessions/s1/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Joining mid-burst must not read as an idle room: the current depth is
+    // replayed on subscribe, exactly like presence.
+    const joined = late.frames.join("");
+    expect(joined).toContain('"type":"presence"');
+    expect(joined).toContain('"type":"queue"');
+    expect(joined).toContain('"depth":1');
+
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    late.abort();
+    await close();
+  });
+
+  it("withholds the message echo from a turn subscriber that did not opt in", async () => {
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const { port, close } = await serverOn(app);
+
+    const legacy = await open(port, "/turns/t1/stream");
+    const roomy = await open(port, "/turns/t2/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await request(app).post("/messages").send({ prompt: "hi", turnId: "t1" });
+    await request(app).post("/messages").send({ prompt: "hi", turnId: "t2" });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(legacy.frames.join("")).not.toContain('"type":"message"');
+    expect(legacy.frames.join("")).toContain('"type":"result"');
+    expect(roomy.frames.join("")).toContain('"type":"message"');
+
+    legacy.abort();
+    roomy.abort();
+    await close();
   });
 });

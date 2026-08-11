@@ -91,6 +91,7 @@ export function createServer(deps: {
   sessionSubscribers?: Map<string, Set<Response>>;
   now?: () => string;
   queue?: TurnQueue;
+  roomCapable?: WeakSet<Response>;
 }): Express {
   const app = express();
 
@@ -104,10 +105,29 @@ export function createServer(deps: {
   // re-key: the same responses simply move to the new bucket.
   const subscriberLogin = new WeakMap<Response, string>();
 
+  // Subscribers that opted into the room protocol with `?room=1` on their
+  // stream URL. Frame types that predate rooms (session/result/error/raw) go
+  // to every subscriber; the room types (message/queue/presence) go ONLY to
+  // subscribers that declared they understand them. This is what lets the host
+  // deploy AHEAD of the packaged clients: an old client's reducer returns
+  // `undefined` for an unknown event type and crashes the tab render, and
+  // `presence` would otherwise be the first frame it ever received (review F2).
+  // Injectable so tests that hand in fake Response objects (which never pass
+  // through the route handlers) can mark them room-capable.
+  const roomCapable = deps.roomCapable ?? new WeakSet<Response>();
+  const ROOM_EVENT_TYPES: ReadonlySet<AgentEvent["type"]> = new Set(["message", "queue", "presence"]);
+  function writeEvent(r: Response, e: AgentEvent): void {
+    if (ROOM_EVENT_TYPES.has(e.type) && !roomCapable.has(r)) return;
+    writeSseEvent(r, e);
+  }
+
   function broadcastPresence(id: string): void {
     const subs = subscribers.get(id);
+    // Presence COUNTS every subscriber with a login — an operator watching
+    // from an old client is still in the room — even though only opted-in
+    // subscribers are SENT the frame.
     const logins = presenceLogins(subs, (r) => subscriberLogin.get(r));
-    for (const r of subs ?? []) writeSseEvent(r, { type: "presence", logins });
+    for (const r of subs ?? []) writeEvent(r, { type: "presence", logins });
   }
 
   // Lane key -> the session id turns on that lane should resume. Populated when
@@ -150,7 +170,7 @@ export function createServer(deps: {
           laneSession.delete(lane);
         }
         for (const r of subscribers.get(room) ?? []) {
-          writeSseEvent(r, { type: "queue", depth });
+          writeEvent(r, { type: "queue", depth });
         }
       },
     });
@@ -188,10 +208,16 @@ export function createServer(deps: {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
     const id = req.params.id;
+    if (req.query.room === "1") roomCapable.add(res);
     subscriberLogin.set(res, readActorLogin(req, deps.identity.insecureDev));
     subsFor(subscribers, id).add(res);
     attachHeartbeat(res, req);
     broadcastPresence(id);
+    // Replay the room's CURRENT turn-queue depth to the newcomer, exactly as
+    // presence is replayed above. Depth is otherwise emitted only on change,
+    // so a subscriber joining (or reconnecting) mid-burst would collapse
+    // "no signal yet" into "idle" and read a busy room as free (review F4).
+    writeEvent(res, { type: "queue", depth: queue.depth(id) });
     req.on("close", () => {
       pruneSubscriber(subscribers, id, res);
       broadcastPresence(id);
@@ -206,6 +232,7 @@ export function createServer(deps: {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
     const turnId = req.params.turnId;
+    if (req.query.room === "1") roomCapable.add(res);
     subsFor(turnSubscribers, turnId).add(res);
     attachHeartbeat(res, req);
     req.on("close", () => pruneSubscriber(turnSubscribers, turnId, res));
@@ -251,8 +278,8 @@ export function createServer(deps: {
       ts: now(),
       ...(turn ? { turnId: turn } : {}),
     };
-    for (const r of subscribers.get(roomKey(lane)) ?? []) writeSseEvent(r, message);
-    if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, message);
+    for (const r of subscribers.get(roomKey(lane)) ?? []) writeEvent(r, message);
+    if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, message);
 
     queue.enqueue(lane, async () => {
       // Resolved at run time, not enqueue time: a turn queued against a draft
@@ -281,9 +308,9 @@ export function createServer(deps: {
           adoptSession(e.sessionId);
           deps.sessions?.upsertFromTurn(e.sessionId, prompt);
         }
-        for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
+        for (const r of subscribers.get(targetId) ?? []) writeEvent(r, e);
         if (turn) {
-          for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, e);
+          for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, e);
         }
       };
 
@@ -293,8 +320,16 @@ export function createServer(deps: {
       // contract guarantees only that `run` RETURNS it. Adopting the return value
       // too means a backend that stays quiet cannot leave the next queued turn to
       // start a second session — the exact fork this queue exists to prevent.
+      // A slash command must reach the backend with "/" as its FIRST byte —
+      // the CLI recognizes a command only at the start of the prompt, so a
+      // stamped "/compact" would silently degrade to literal text (review F1).
+      // Command turns therefore run unstamped: their transcript entry carries
+      // no [from:] envelope, and replayed attribution for them is dropped on
+      // purpose. Live attribution is unaffected — the `message` broadcast
+      // above already named the sender.
+      const outbound = prompt.startsWith("/") ? prompt : stampAuthor(author, prompt);
       try {
-        adoptSession(await deps.manager.run(stampAuthor(author, prompt), resume, onEvent));
+        adoptSession(await deps.manager.run(outbound, resume, onEvent));
       } catch (err) {
         // queue.ts swallows this rejection by design (a failed turn must
         // advance the lane, never wedge it) but the room still needs to know
@@ -303,8 +338,8 @@ export function createServer(deps: {
         // on to the next turn.
         const message = err instanceof Error ? err.message : String(err);
         const errorEvent: AgentEvent = { type: "error", message };
-        for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, errorEvent);
-        if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, errorEvent);
+        for (const r of subscribers.get(targetId) ?? []) writeEvent(r, errorEvent);
+        if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, errorEvent);
         return;
       }
     });
