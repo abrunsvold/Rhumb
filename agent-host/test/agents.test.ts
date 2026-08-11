@@ -132,3 +132,28 @@ describe("agent registry", () => {
     expect(recheck?.status).toBe("active");
   });
 });
+
+describe("lineage", () => {
+  it("defaults to a root record with no parent at depth 0", () => {
+    const rec = makeRegistry().create("solo", "mngr");
+    expect(rec.parentAgentId).toBeNull();
+    expect(rec.depth).toBe(0);
+  });
+
+  it("records an explicit parent and depth", () => {
+    const reg = makeRegistry();
+    const parent = reg.create("parent", "mngr");
+    const child = reg.create("child", "mngr", { parentAgentId: parent.agentId, depth: 1 });
+    expect(child.parentAgentId).toBe(parent.agentId);
+    expect(child.depth).toBe(1);
+  });
+
+  it("persists lineage across instances", () => {
+    const reg = makeRegistry();
+    const parent = reg.create("parent", "mngr");
+    const child = reg.create("child", "mngr", { parentAgentId: parent.agentId, depth: 1 });
+    const reloaded = createAgentRegistry({ indexPath, now: () => "2026-08-04T00:00:00.000Z", id: () => "unused" });
+    expect(reloaded.get(child.agentId)?.parentAgentId).toBe(parent.agentId);
+    expect(reloaded.get(child.agentId)?.depth).toBe(1);
+  });
+});

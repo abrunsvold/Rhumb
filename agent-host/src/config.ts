@@ -1,5 +1,6 @@
 import { loadProvider, type ProviderConfig } from "./provider.js";
 import type { BackendId } from "./backends/types.js";
+import { loadFleetCaps, type FleetCaps } from "./fleet/caps.js";
 
 export interface Config {
   port: number;
@@ -11,6 +12,39 @@ export interface Config {
   insecureDev: boolean;
   watchdogMinutes: number | null;
   agentBackend: BackendId;
+  /** Master switch for model-directed agent spawning. Default OFF — see
+   *  `loadFleetEnabled`. */
+  fleetEnabled: boolean;
+  fleetCaps: FleetCaps;
+}
+
+/** `RHUMB_FLEET_ENABLED` — the fleet's kill switch, and the ONLY thing that
+ *  turns model-directed agent spawning on.
+ *
+ *  Default OFF, deliberately. The fleet spawns through mngr regardless of
+ *  `RHUMB_AGENT_BACKEND`, so without an explicit switch every box that
+ *  happens to have `mngr` on PATH would SILENTLY gain model-directed
+ *  spawning on upgrade — a capability the operator never asked for and might
+ *  not know about. Caps cannot express "off" either (`loadFleetCaps` rejects
+ *  0), so this is the only place that can.
+ *
+ *  Fails closed on anything unrecognised rather than throwing: an
+ *  unparseable value must never be read as "on", and a host that is already
+ *  running must not be prevented from booting by a typo in an OPTIONAL
+ *  feature flag (unlike a malformed cap, which is only ever set by an
+ *  operator who has already opted in, and where failing loud is right). The
+ *  typo is warned about by name so it is not silent. */
+export function loadFleetEnabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.RHUMB_FLEET_ENABLED?.trim().toLowerCase();
+  if (!raw) return false;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  console.warn(
+    `[rhumb] WARNING: RHUMB_FLEET_ENABLED="${env.RHUMB_FLEET_ENABLED}" is not a recognised ` +
+      "boolean (use 1/0, true/false, yes/no, on/off). Treating it as OFF: the fleet tools " +
+      "will NOT be available this boot.",
+  );
+  return false;
 }
 
 const VALID_PERMISSION_MODES = new Set([
@@ -79,5 +113,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       return Number.isInteger(n) && n > 0 ? n : null;
     })(),
     agentBackend,
+    fleetEnabled: loadFleetEnabled(env),
+    fleetCaps: loadFleetCaps(env),
   };
 }
