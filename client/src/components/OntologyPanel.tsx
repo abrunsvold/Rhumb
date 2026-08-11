@@ -30,6 +30,26 @@ export function OntologyPanel({
   const shownError = error ?? snapshot?.syncError ?? null;
   const rows = snapshot ? flattenNodes(filterNodes(snapshot.nodes, query)) : [];
 
+  // This tree is the ONLY surface-selection path, but its rows come from the
+  // ontology projection — which lags a just-published surface and is absent
+  // entirely when agent-host is unreachable while dashboard-host still streams
+  // the registry. A surface the registry knows must stay selectable anyway, so
+  // registry entries with no matching dashboard node get a minimal fallback
+  // row (title only, no lineage — the ontology knows nothing else about them).
+  // Membership is judged against the UNFILTERED snapshot: a node the query
+  // hides is still known, so its surface must not reappear as a fallback.
+  const q = query.trim().toLowerCase();
+  const knownSurfaceIds = new Set(
+    (snapshot?.nodes ?? [])
+      .map((n) => registryIdFor(n))
+      .filter((id): id is string => id !== null),
+  );
+  const fallbackSurfaces = surfaceTabs.filter(
+    (t) =>
+      !knownSurfaceIds.has(t.id) &&
+      (q === "" || t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)),
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex-none px-4 pb-3">
@@ -102,7 +122,38 @@ export function OntologyPanel({
             </button>
           );
         })}
-        {snapshot && rows.length === 0 && (
+        {fallbackSurfaces.map((t) => {
+          const selected = t.id === activeSurfaceId;
+          const current = selected && selectedNodeId === null;
+          return (
+            <button
+              key={`registry:${t.id}`}
+              onClick={() => onSelectSurface(t.id)}
+              aria-current={current ? "true" : undefined}
+              style={{ paddingLeft: "16px" }}
+              className={
+                selected
+                  ? "flex w-full items-center gap-2.5 border-l-2 border-accent bg-raised py-1.5 pr-4 text-left"
+                  : "flex w-full items-center gap-2.5 border-l-2 border-transparent py-1.5 pr-4 text-left hover:bg-raised"
+              }
+            >
+              <span
+                className={
+                  selected
+                    ? "min-w-0 flex-1 truncate text-[12.5px] text-ink"
+                    : "min-w-0 flex-1 truncate text-[12.5px] text-muted"
+                }
+              >
+                {t.title}
+              </span>
+              {/* Honest about what this row is: the registry knows the surface,
+                  the map does not — "dashboard" here would claim a projection
+                  that never happened. */}
+              <span className="mn shrink-0 text-faint">unmapped</span>
+            </button>
+          );
+        })}
+        {snapshot && rows.length === 0 && fallbackSurfaces.length === 0 && (
           <p className="px-4 py-5 text-xs text-faint">Nothing on the map yet.</p>
         )}
       </div>

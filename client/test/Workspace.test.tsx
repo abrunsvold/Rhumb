@@ -110,6 +110,59 @@ describe("Workspace shell", () => {
     expect(tabs).toHaveLength(1);
   });
 
+  // MAP is the only surface-selection path, and its rows come from the
+  // ontology projection. A surface the registry streams but the projector has
+  // not (or cannot) project must still be reachable — the registry auto-selects
+  // only surfTabs[0], so without a fallback row every later surface is
+  // registered, counted in SURFACES, and unopenable.
+  it("keeps a registry surface selectable when the ontology has no node for it", async () => {
+    setup();
+    const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
+    act(() =>
+      cb({
+        surfaces: [
+          { id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" },
+          { id: "zz", title: "Spool log", url: "/surfaces/zz/", kind: "file", created: "", updated: "" },
+        ],
+      }),
+    );
+    // x1 is auto-selected; zz has no dashboard node in the ontology mock.
+    await waitFor(() =>
+      expect(document.querySelector("iframe")?.getAttribute("src")).toBe("http://d:8788/surfaces/x1/"),
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: /spool log/i }));
+    await waitFor(() =>
+      expect(document.querySelector("iframe")?.getAttribute("src")).toBe("http://d:8788/surfaces/zz/"),
+    );
+  });
+
+  // …and the same must hold when the ontology fetch failed outright: with no
+  // snapshot at all, the registry list is the only truth the client has.
+  it("keeps registry surfaces selectable when the ontology fetch failed", async () => {
+    // Both the mount fetch and the MAP-open re-fetch fail; `Once` twice rather
+    // than a persistent rejection so later tests keep the factory default.
+    vi.mocked(getOntology)
+      .mockRejectedValueOnce(new Error("agent unreachable"))
+      .mockRejectedValueOnce(new Error("agent unreachable"));
+    setup();
+    const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
+    act(() =>
+      cb({
+        surfaces: [
+          { id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" },
+          { id: "zz", title: "Spool log", url: "/surfaces/zz/", kind: "file", created: "", updated: "" },
+        ],
+      }),
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
+    await userEvent.click(await screen.findByRole("button", { name: /spool log/i }));
+    await waitFor(() =>
+      expect(document.querySelector("iframe")?.getAttribute("src")).toBe("http://d:8788/surfaces/zz/"),
+    );
+  });
+
   it("shows node detail instead of the surface iframe when a non-dashboard node is selected", async () => {
     const { openRegistryStream } = await import("../src/lib/tauri");
     setup();

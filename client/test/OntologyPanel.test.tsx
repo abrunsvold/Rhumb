@@ -169,3 +169,73 @@ describe("OntologyPanel", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });
+
+// MAP is the ONLY surface-selection path, but its rows come from the ontology
+// projection — which can lag a just-published surface or be missing entirely
+// when agent-host's /ontology is down while dashboard-host still streams the
+// registry. A surface the registry knows must stay selectable regardless, so
+// registry entries with no matching dashboard node get a minimal fallback row.
+describe("OntologyPanel registry fallback rows", () => {
+  const twoSurfaces = [
+    { id: "spools", title: "spools", url: "/surfaces/spools/" },
+    { id: "orphan", title: "Orphan board", url: "/surfaces/orphan/" },
+  ];
+
+  function mountWith(
+    snapshot: OntologySnapshot | null,
+    tabs = twoSurfaces,
+    activeSurfaceId: string | null = null,
+  ) {
+    const onSelectSurface = vi.fn();
+    render(
+      <OntologyPanel
+        snapshot={snapshot}
+        error={null}
+        onRefresh={vi.fn()}
+        surfaceTabs={tabs}
+        activeSurfaceId={activeSurfaceId}
+        selectedNodeId={null}
+        onSelectSurface={onSelectSurface}
+        onSelectNode={vi.fn()}
+      />,
+    );
+    return { onSelectSurface };
+  }
+
+  it("lists a registry surface the ontology does not know, and clicking it selects the surface", async () => {
+    const { onSelectSurface } = mountWith(snap);
+    await userEvent.click(await screen.findByText("Orphan board"));
+    expect(onSelectSurface).toHaveBeenCalledWith("orphan");
+  });
+
+  it("does not duplicate a surface the ontology already lists", async () => {
+    mountWith(snap);
+    await screen.findByText("Orphan board");
+    // "spools" appears once, as its ontology row — not again as a fallback.
+    expect(screen.getAllByText("spools")).toHaveLength(1);
+  });
+
+  it("lists every registry surface when there is no snapshot at all", async () => {
+    const { onSelectSurface } = mountWith(null);
+    await userEvent.click(await screen.findByText("spools"));
+    expect(onSelectSurface).toHaveBeenCalledWith("spools");
+    await userEvent.click(screen.getByText("Orphan board"));
+    expect(onSelectSurface).toHaveBeenCalledWith("orphan");
+  });
+
+  it("marks an active fallback surface as current", async () => {
+    mountWith(snap, twoSurfaces, "orphan");
+    await screen.findByText("Orphan board");
+    const current = document.querySelectorAll('[aria-current="true"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("Orphan board");
+  });
+
+  it("filters fallback rows with the same query as the tree", async () => {
+    mountWith(snap);
+    await screen.findByText("Orphan board");
+    await userEvent.type(screen.getByLabelText("Filter nodes"), "poller");
+    expect(screen.queryByText("Orphan board")).toBeNull();
+    expect(screen.getByText("Print poller")).toBeTruthy();
+  });
+});
