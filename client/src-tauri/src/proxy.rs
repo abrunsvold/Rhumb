@@ -245,7 +245,11 @@ pub async fn start_agent_stream(
     turn_id: String,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
-    let (url, bearer) = agent_target(&app, &agent_base, &format!("/turns/{}/stream", turn_id))?;
+    // `room=1` opts this subscriber into the room protocol (message/queue/
+    // presence frames). The host withholds those frames from subscribers that
+    // do not declare them, so an old packaged client keeps working against a
+    // newer host; this client understands them and says so.
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/turns/{}/stream?room=1", turn_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
         old.cancel();
@@ -399,7 +403,9 @@ pub async fn start_session_stream(
     if !valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
-    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream", session_id))?;
+    // See start_agent_stream: `room=1` declares this subscriber understands
+    // the room protocol's frame types.
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream?room=1", session_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.session.lock().unwrap().insert(session_id.clone(), token.clone()) {
         old.cancel();

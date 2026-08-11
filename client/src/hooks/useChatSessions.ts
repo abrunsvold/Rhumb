@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   emptyStore, openTab, closeTab, focusTab, reduceEvent, addUserMessage,
-  bumpTurns, promoteDraft, setStale, setTitle, setHistoryNotice, resetQueueDepth,
+  bumpTurns, promoteDraft, setStale, setTitle, setHistoryNotice,
   type ChatStore,
 } from "../lib/chatStore";
 import {
@@ -79,7 +79,10 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
 
   function attachSessionStream(sessionId: string) {
     sessionStops.current.get(sessionId)?.();
-    setStore((s) => resetQueueDepth(s, sessionId));
+    // No depth reset here (review F4): the host replays the room's CURRENT
+    // queue depth as a first frame on every subscribe, exactly like presence.
+    // Zeroing the store while waiting for it would collapse "no signal yet"
+    // into "idle" and show a busy room as free to whoever just (re)connected.
     const stop = openSessionStream(agentBase, sessionId, (raw) => {
       const e = raw as { type?: string };
       if (e?.type === "stream_closed") {

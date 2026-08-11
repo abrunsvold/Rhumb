@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   emptyStore, openTab, closeTab, focusTab, reduceEvent,
-  addUserMessage, bumpTurns, promoteDraft, setStale, resetQueueDepth,
+  addUserMessage, bumpTurns, promoteDraft, setStale,
 } from "../src/lib/chatStore";
 
 describe("chatStore", () => {
@@ -74,12 +74,13 @@ describe("room store helpers", () => {
     });
   });
 
-  it("resets queue depth without touching presence or messages", () => {
+  // Review F4: the host replays the room's current depth on subscribe, so a
+  // (re)connecting client trusts the wire instead of zeroing its own state —
+  // the replayed frame lands through the ordinary queue reducer.
+  it("adopts a replayed queue depth through the ordinary reducer", () => {
     let s = openTab(emptyStore, "s1", "t");
     s = reduceEvent(s, "s1", { type: "queue", depth: 3 });
-    s = reduceEvent(s, "s1", { type: "presence", logins: ["op@example.com"] });
-    const next = resetQueueDepth(s, "s1");
-    expect(next.tabs[0].agent.queueDepth).toBe(0);
-    expect(next.tabs[0].agent.presence).toEqual(["op@example.com"]);
+    s = reduceEvent(s, "s1", { type: "queue", depth: 1 });
+    expect(s.tabs[0].agent.queueDepth).toBe(1);
   });
 });

@@ -79,12 +79,6 @@ export function addUserMessage(
   return mapTab(s, key, (t) => ({ ...t, agent: appendUserMessage(t.agent, text, attachments, id) }));
 }
 
-// The server re-broadcasts presence when a subscriber connects but emits depth
-// only on change, so a reconnecting client would otherwise show a stale
-// "N waiting" forever.
-export function resetQueueDepth(s: ChatStore, key: string): ChatStore {
-  return mapTab(s, key, (t) => ({ ...t, agent: { ...t.agent, queueDepth: 0 } }));
-}
 
 export function bumpTurns(s: ChatStore, key: string, delta: 1 | -1): ChatStore {
   return mapTab(s, key, (t) => ({ ...t, openTurns: Math.max(0, t.openTurns + delta) }));

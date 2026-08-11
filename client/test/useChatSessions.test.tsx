@@ -230,7 +230,11 @@ describe("useChatSessions", () => {
     );
   });
 
-  it("resets queue depth when the session stream (re)attaches after a reconnect", async () => {
+  // Review F4: the host replays the room's CURRENT queue depth as a first
+  // frame on every subscribe. A reconnecting client therefore keeps its last
+  // known depth until the authoritative replay lands — zeroing it locally
+  // would collapse "no signal yet" into "idle" and show a busy room as free.
+  it("keeps the last known queue depth across a reconnect until the host's replay lands", async () => {
     vi.useFakeTimers();
     try {
       const { result } = renderHook(() => useChatSessions("http://a:8787"));
@@ -244,7 +248,11 @@ describe("useChatSessions", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000);
       });
-      expect(result.current.store.tabs[0].agent.queueDepth).toBe(0);
+      // Not zeroed by the reattach itself…
+      expect(result.current.store.tabs[0].agent.queueDepth).toBe(3);
+      // …and the host's replayed frame is what corrects it.
+      act(() => sessionHandlers.get("s1")!({ type: "queue", depth: 1 }));
+      expect(result.current.store.tabs[0].agent.queueDepth).toBe(1);
     } finally {
       vi.useRealTimers();
     }

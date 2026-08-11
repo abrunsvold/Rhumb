@@ -582,6 +582,56 @@ describe("Workspace approvals (inline in the transcript)", () => {
     await waitFor(() => expect(screen.getByText("QUEUE 1 held")).toBeTruthy());
   });
 
+  // Everyone in the room sees the same card, so the host can answer a resolve
+  // with 409 naming whoever decided first. The card is spent (not retryable),
+  // the outcome names the winner, and the wire's internal status name
+  // ("executing"/"executed") is mapped to plain wording, never echoed.
+  it("reports who decided first on a 409 and drops the card", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "zoe@example.com", decision: "executing",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already approved by zoe@example.com.")).toBeTruthy());
+    expect(screen.queryByText(/executing/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByText(/^Approved/)).toBeNull();
+  });
+
+  it("reports a 409 denial as denied, naming an unknown winner gracefully", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "", decision: "denied",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already denied by someone else.")).toBeTruthy());
+  });
+
+  // Review F7, client half: a loser whose approve carried the trust box must
+  // not be told a grant happened — their approval never did.
+  it("claims no trust grant when a trust-carrying approve loses the race", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "zoe@example.com", decision: "executed",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByLabelText(/Trust this surface/));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already approved by zoe@example.com.")).toBeTruthy());
+    expect(screen.queryByText(/trusted/i)).toBeNull();
+  });
+
   it("offers no trust checkbox for a delete and says why", async () => {
     const emit = captureStreams();
     await setup();
