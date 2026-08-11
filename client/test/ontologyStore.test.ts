@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupNodes, filterNodes, registryIdFor } from "../src/lib/ontologyStore";
+import { flattenNodes, filterNodes, registryIdFor } from "../src/lib/ontologyStore";
 import type { OntologyNode } from "../src/lib/types";
 
 const n = (over: Partial<OntologyNode>): OntologyNode => ({
@@ -7,32 +7,51 @@ const n = (over: Partial<OntologyNode>): OntologyNode => ({
   props: {}, relationships: [], ...over,
 });
 
-describe("groupNodes", () => {
-  it("puts the Nodes section first — the box roots the map", () => {
-    const groups = groupNodes([
-      n({ type: "dashboard", id: "dashboard-d1", title: "d1" }),
-      n({ type: "node", id: "node-MicroPX", title: "MicroPX" }),
+const nRel = (id: string, type: string, rels: string[] = []): OntologyNode => ({
+  type, id, title: id, managed: "system", props: {},
+  relationships: rels.map((target) => ({ edge: "uses", target })),
+});
+
+describe("flattenNodes", () => {
+  it("puts dashboards at depth 0 with their dependencies nested under them", () => {
+    const out = flattenNodes([
+      nRel("dashboard-farm", "dashboard", ["service-api"]),
+      nRel("service-api", "service", ["container-118"]),
+      nRel("container-118", "container"),
     ]);
-    expect(groups.map((g) => g.label)).toEqual(["Nodes", "Dashboards"]);
+    expect(out.map((r) => [r.node.id, r.depth])).toEqual([
+      ["dashboard-farm", 0],
+      ["service-api", 1],
+      ["container-118", 2],
+    ]);
   });
 
-  it("groups by type in fixed order and omits empty sections", () => {
-    const groups = groupNodes([
-      n({ type: "datasource", id: "datasource-a", title: "a" }),
-      n({ type: "dashboard", id: "dashboard-d1", title: "d1" }),
-      n({ type: "service", id: "service-s", title: "S" }),
+  it("lists nodes no dashboard reaches at depth 0, after the dashboards", () => {
+    const out = flattenNodes([
+      nRel("dashboard-farm", "dashboard"),
+      nRel("vm-nuc", "vm"),
     ]);
-    expect(groups.map((g) => g.label)).toEqual(["Dashboards", "Services", "Data sources"]);
+    expect(out.map((r) => [r.node.id, r.depth])).toEqual([
+      ["dashboard-farm", 0],
+      ["vm-nuc", 0],
+    ]);
   });
 
-  it("folds unknown types and domain entities into Domain", () => {
-    const groups = groupNodes([
-      n({ type: "entity", id: "customer-1", title: "Acme", managed: "domain" }),
-      n({ type: "weird", id: "w-1", title: "w" }),
+  it("emits each node once even when two dashboards share a dependency", () => {
+    const out = flattenNodes([
+      nRel("dashboard-a", "dashboard", ["datasource-pg"]),
+      nRel("dashboard-b", "dashboard", ["datasource-pg"]),
+      nRel("datasource-pg", "datasource"),
     ]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].label).toBe("Domain");
-    expect(groups[0].nodes.map((x) => x.id)).toEqual(["customer-1", "w-1"]);
+    expect(out.filter((r) => r.node.id === "datasource-pg")).toHaveLength(1);
+  });
+
+  it("terminates on a relationship cycle", () => {
+    const out = flattenNodes([
+      nRel("dashboard-a", "dashboard", ["service-x"]),
+      nRel("service-x", "service", ["dashboard-a"]),
+    ]);
+    expect(out).toHaveLength(2);
   });
 });
 
