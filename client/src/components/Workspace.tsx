@@ -266,7 +266,9 @@ export function Workspace({
           count is gone, so it must track the real pending array. */}
       <TelemetryBar
         surfaces={surfTabs.length}
-        nodes={ontologyNodes}
+        // `null` (never synced) and `[]` (synced, genuinely empty) diverge
+        // here on purpose: the bar renders a placeholder for the former.
+        nodes={ontology ? ontology.nodes : null}
         queued={pending.length}
         syncedAt={ontology?.syncedAt ?? null}
       />

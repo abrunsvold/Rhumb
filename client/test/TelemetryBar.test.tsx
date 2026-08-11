@@ -32,4 +32,21 @@ describe("TelemetryBar", () => {
     render(<TelemetryBar surfaces={0} nodes={[]} queued={0} syncedAt={null} />);
     expect(screen.queryByText(/synced/)).toBeNull();
   });
+
+  // With no snapshot at all (mount fetch pending or failed) there is nothing
+  // to count: "NODES 0" would be an affirmative claim that the map is empty,
+  // which the client cannot support — the same principle the refresh-failure
+  // path already follows by keeping the last good snapshot.
+  it("shows a placeholder, not zero, while there is no ontology snapshot", () => {
+    render(<TelemetryBar surfaces={0} nodes={null} queued={0} syncedAt={null} />);
+    expect(screen.getByText(/NODES/).textContent).toBe("NODES —");
+    expect(screen.getByText(/EDGES/).textContent).toBe("EDGES —");
+    expect(screen.queryByText(/NODES 0/)).toBeNull();
+  });
+
+  it("still shows a real zero once an empty snapshot HAS synced", () => {
+    render(<TelemetryBar surfaces={0} nodes={[]} queued={0} syncedAt={null} />);
+    expect(screen.getByText(/NODES/).textContent).toBe("NODES 0");
+    expect(screen.getByText(/EDGES/).textContent).toBe("EDGES 0");
+  });
 });
