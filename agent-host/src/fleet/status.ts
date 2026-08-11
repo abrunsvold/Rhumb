@@ -58,7 +58,20 @@ export function deriveAgentStatus(deps: {
         }
         return "working";
       }
-      // Other/absent waiting reason: fall back to transcript check.
+      // An UNRECOGNISED non-empty waiting reason is UNKNOWABLE, exactly like
+      // an unrecognised state (the `default` branch below): mngr is saying
+      // WHY the agent is waiting in a vocabulary this build does not speak,
+      // and PERMISSIONS proves that some waiting reasons mean "not done no
+      // matter what the transcript's last finish_reason says". Collapsing a
+      // future member (a RATE_LIMITED, a PERMISSIONS-like variant) into
+      // "done" would let collect() hand back a stale prior-segment answer as
+      // the confirmed final one — the exact bug class P0 exists to prevent,
+      // reintroduced by version skew.
+      if (waitingReason !== "") {
+        return "unknown";
+      }
+      // ABSENT waiting reason: there is nothing to recognise, so fall back
+      // to the transcript's own terminality signal.
       if (!isTerminalFinishReason(lastAssistantFinishReason)) {
         return "working";
       }

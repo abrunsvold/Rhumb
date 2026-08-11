@@ -165,5 +165,28 @@ describe("deriveAgentStatus", () => {
         lastAssistantFinishReason: "some_future_reason",
       })).toBe("working");
     });
+
+    it("an UNRECOGNISED non-empty waiting_reason reads as unknown, never done — even with a terminal finish_reason", () => {
+      // The same version-skew defence the `state` axis already has (an
+      // unrecognised AgentLifecycleState returns "unknown"): if a future mngr
+      // adds a WaitingReason member (say RATE_LIMITED, or a PERMISSIONS-like
+      // variant), an agent blocked mid-task whose PREVIOUS segment ended
+      // end_turn must not read as "done" — collect() would hand back that
+      // stale prior text as the confirmed final answer.
+      expect(deriveAgentStatus({
+        liveness: { state: "WAITING", waitingReason: "RATE_LIMITED" },
+        lastAssistantFinishReason: "end_turn",
+      })).toBe("unknown");
+    });
+
+    it("an unrecognised waiting_reason with a NON-terminal finish_reason is also unknown (not working)", () => {
+      // Symmetry: the reason is unrecognised either way; the transcript
+      // fallback is reserved for an ABSENT reason, where there is nothing to
+      // recognise, not for a value this build has never seen.
+      expect(deriveAgentStatus({
+        liveness: { state: "WAITING", waitingReason: "RATE_LIMITED" },
+        lastAssistantFinishReason: "tool_use",
+      })).toBe("unknown");
+    });
   });
 });
