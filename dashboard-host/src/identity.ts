@@ -25,3 +25,23 @@ export function requireShellHeader(): RequestHandler {
     res.status(403).json({ error: "shell only" });
   };
 }
+
+// In dev mode there is no `tailscale serve` and therefore no identity header,
+// but an approval still needs an actor. One fixed sentinel is clearer than a
+// per-request guess. Mirrors agent-host/src/identity.ts.
+export const DEV_ACTOR = "dev@local";
+
+// Mirrors agent-host/src/identity.ts. Unforgeable only in identity mode,
+// behind `tailscale serve`: serve injects the header and strips any
+// caller-supplied Tailscale-* headers. In `RHUMB_INSECURE_DEV` there is no
+// identity guard at all — the header (and so the approval actor recorded in
+// the audit log) is whatever the caller sends. That is consistent with dev
+// mode's documented trust posture, not a gap in this function.
+export function readActorLogin(
+  req: { get(name: string): string | undefined },
+  insecureDev: boolean,
+): string {
+  const login = req.get("tailscale-user-login")?.trim().toLowerCase() ?? "";
+  if (login) return login;
+  return insecureDev ? DEV_ACTOR : "";
+}

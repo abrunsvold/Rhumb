@@ -3,12 +3,18 @@ import type { TranscriptMessage } from "../lib/agentEvents";
 import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
 import { ApprovalQueue } from "./ApprovalCard";
 import { Markdown } from "./Markdown";
+import type { RosterEntry } from "../lib/tauri";
 
-function Message({ m }: { m: TranscriptMessage }) {
+function Message({ m, label }: { m: TranscriptMessage; label: string | null }) {
   switch (m.kind) {
     case "user":
       return (
-        <div data-kind="user" className="flex justify-end">
+        <div data-kind="user" className="flex flex-col items-end gap-1">
+          {label && (
+            <span data-testid="author" className="mn text-faint">
+              {label}
+            </span>
+          )}
           <div className="max-w-[82%] whitespace-pre-wrap rounded-sm bg-raised px-3.5 py-2.5 text-[14px] leading-relaxed text-ink">
             {m.text.startsWith("/") ? (
               (() => {
@@ -74,14 +80,31 @@ function ToolChip({ m }: { m: TranscriptMessage }) {
   );
 }
 
+// A solo operator sees no labels once `me` is known. Until then every authored
+// message is labelled, because the alternative — labelling nothing — makes
+// someone else's message read as your own.
+function authorLabel(
+  m: TranscriptMessage,
+  me: string | null,
+  roster: RosterEntry[],
+): string | null {
+  if (m.kind !== "user" || !m.author) return null;
+  if (me !== null && m.author === me) return null;
+  return roster.find((r) => r.login === m.author)?.handle ?? m.author;
+}
+
 export function Transcript({
   messages,
+  roster,
+  me,
   busy,
   pending,
   resolved,
   onResolve,
 }: {
   messages: TranscriptMessage[];
+  roster: RosterEntry[];
+  me: string | null;
   busy: boolean;
   pending: PendingItem[];
   resolved: ResolvedItem[];
@@ -144,7 +167,7 @@ export function Transcript({
           <p className="m-auto text-muted">Send a message to start a session.</p>
         )}
         {messages.map((m, i) => (
-          <Message key={m.id ?? i} m={m} />
+          <Message key={m.id ?? i} m={m} label={authorLabel(m, me, roster)} />
         ))}
         <ApprovalQueue pending={pending} resolved={resolved} onResolve={onResolve} />
         {busy && (

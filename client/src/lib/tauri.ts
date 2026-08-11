@@ -94,8 +94,15 @@ export function sendMessage(
   turnId: string,
   prompt: string,
   sessionId?: string,
+  roomKey?: string,
 ): Promise<void> {
-  return invoke("send_message", { agentBase, turnId, prompt, sessionId: sessionId ?? null });
+  return invoke("send_message", {
+    agentBase,
+    turnId,
+    prompt,
+    sessionId: sessionId ?? null,
+    roomKey: roomKey ?? null,
+  });
 }
 
 export function uploadFile(agentBase: string, name: string, contentBase64: string): Promise<string> {
@@ -133,13 +140,24 @@ export function openPendingStream(
   return () => void invoke("stop_pending_stream");
 }
 
+export interface ResolveConflict {
+  error: string;
+  by: string;
+  decision: string;
+}
+
 export function resolvePending(
   dashboardBase: string,
   pendingId: string,
   decision: "approve" | "deny",
   trustSurface: boolean,
-): Promise<void> {
-  return invoke("resolve_pending", { dashboardBase, pendingId, decision, trustSurface });
+): Promise<ResolveConflict | null> {
+  return invoke<ResolveConflict | null>("resolve_pending", {
+    dashboardBase,
+    pendingId,
+    decision,
+    trustSurface,
+  });
 }
 
 export function openInfraPendingStream(agentBase: string, onPending: (e: unknown) => void): () => void {
@@ -149,8 +167,8 @@ export function openInfraPendingStream(agentBase: string, onPending: (e: unknown
   return () => void invoke("stop_infra_pending_stream");
 }
 
-export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<void> {
-  return invoke("resolve_infra_pending", { agentBase, pendingId, decision });
+export function resolveInfraPending(agentBase: string, pendingId: string, decision: "approve" | "deny"): Promise<ResolveConflict | null> {
+  return invoke<ResolveConflict | null>("resolve_infra_pending", { agentBase, pendingId, decision });
 }
 
 export async function listSessions(agentBase: string): Promise<SessionMeta[]> {
@@ -180,6 +198,16 @@ export function openSessionStream(
   channel.onmessage = onEvent;
   void invoke("start_session_stream", { agentBase, sessionId, onEvent: channel });
   return () => void invoke("stop_session_stream", { sessionId });
+}
+
+export interface RosterEntry {
+  login: string;
+  handle: string;
+}
+
+export async function getRoster(agentBase: string): Promise<RosterEntry[]> {
+  const r = await invoke<{ roster: RosterEntry[] }>("get_roster", { agentBase });
+  return r.roster;
 }
 
 export function getOntology(agentBase: string): Promise<OntologySnapshot> {

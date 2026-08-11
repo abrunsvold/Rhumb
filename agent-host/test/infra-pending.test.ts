@@ -113,3 +113,29 @@ describe("PendingActions (persistence + boot expiry)", () => {
     expect(q2.list().map((a) => a.pendingId)).toEqual(["a2"]);
   });
 });
+
+describe("resolution actor", () => {
+  it("records who resolved the action", () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    const { action } = pending.enqueue("create_vm", {});
+    expect(pending.resolve("p1", "approve", "op@example.com")).toBe(true);
+    expect(pending.get("p1")?.resolvedBy).toBe("op@example.com");
+    expect(action.status).toBe("approved");
+  });
+
+  it("leaves resolvedBy unset when no actor is supplied", () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    pending.enqueue("create_vm", {});
+    pending.resolve("p1", "approve");
+    expect(pending.get("p1")?.resolvedBy).toBeUndefined();
+  });
+
+  it("keeps the first decision when two people resolve the same action", () => {
+    const pending = new PendingActions({ now: () => "2026-08-04T00:00:00Z", id: () => "p1" });
+    pending.enqueue("create_vm", {});
+    expect(pending.resolve("p1", "approve", "first@example.com")).toBe(true);
+    expect(pending.resolve("p1", "deny", "second@example.com")).toBe(false);
+    expect(pending.get("p1")?.status).toBe("approved");
+    expect(pending.get("p1")?.resolvedBy).toBe("first@example.com");
+  });
+});

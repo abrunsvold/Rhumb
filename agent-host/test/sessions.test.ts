@@ -212,3 +212,52 @@ describe("index backfill", () => {
     expect(svc.list()).toEqual([]);
   });
 });
+
+describe("transcript attribution", () => {
+  function withTranscript(lines: unknown[]) {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-attr-"));
+    const workspace = join(dir, "ws");
+    const projectsDir = join(dir, "projects");
+    const sessionDir = join(projectsDir, encodeProjectDir(resolve(workspace)));
+    mkdirSyncFs(sessionDir, { recursive: true });
+    writeFileSync(
+      join(sessionDir, "s1.jsonl"),
+      lines.map((l) => JSON.stringify(l)).join("\n"),
+    );
+    const svc = createSessionService({
+      indexPath: join(dir, "sessions.json"),
+      projectsDir,
+      workspace,
+      now: () => "2026-08-04T00:00:00Z",
+    });
+    return svc;
+  }
+
+  const userLine = (text: string) => ({ type: "user", message: { content: text } });
+
+  it("lifts the envelope author out of a user message and strips it from the text", () => {
+    const svc = withTranscript([userLine("[from: op@example.com]\nwhat is up")]);
+    expect(svc.readTranscript("s1")).toEqual([
+      { kind: "user", text: "what is up", author: "op@example.com" },
+    ]);
+  });
+
+  it("replays a pre-envelope transcript unattributed", () => {
+    const svc = withTranscript([userLine("plain old prompt")]);
+    expect(svc.readTranscript("s1")).toEqual([{ kind: "user", text: "plain old prompt" }]);
+  });
+
+  it("strips the envelope from user text blocks in array content", () => {
+    const svc = withTranscript([
+      { type: "user", message: { content: [{ type: "text", text: "[from: a@b.com]\nhi" }] } },
+    ]);
+    expect(svc.readTranscript("s1")).toEqual([{ kind: "user", text: "hi", author: "a@b.com" }]);
+  });
+
+  it("titles a backfilled session from the stripped text, never the login", () => {
+    const svc = withTranscript([userLine("[from: op@example.com]\nfix the header")]);
+    const [s] = svc.list();
+    expect(s.title).toBe("fix the header");
+    expect(s.preview).toBe("fix the header");
+  });
+});

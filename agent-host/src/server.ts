@@ -4,8 +4,11 @@ import { join, parse as parsePath } from "node:path";
 import type { AgentEvent } from "./types.js";
 import { writeSseEvent, attachHeartbeat } from "./sse.js";
 import { createControlTokenGuard } from "./auth.js";
-import { createIdentityGuard, requireShellHeader } from "./identity.js";
+import { createIdentityGuard, requireShellHeader, readActorLogin } from "./identity.js";
+import { stampAuthor } from "./envelope.js";
 import type { SessionService } from "./sessions.js";
+import { createTurnQueue, type TurnQueue } from "./queue.js";
+import { buildRoster } from "./roster.js";
 
 export interface IdentityDeps {
   allowedUsers: string[];
@@ -30,6 +33,13 @@ export function stripAgentPrefix(url: string): string {
   if (rest === "") return "/";
   return rest.startsWith("?") ? `/${rest}` : rest;
 }
+
+// A client may name its own lane ONLY inside the draft namespace. Without this
+// guard a caller could send a roomKey equal to another room's live session id,
+// land its turn on that lane, and be handed that session to resume by
+// `laneSession` — the same cross-room failure roomKey exists to prevent, done
+// on purpose instead of by accident.
+const DRAFT_ROOM_KEY_RE = /^draft:[0-9a-f-]{36}$/;
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -57,19 +67,113 @@ export function pruneSubscriber(
   if (set.size === 0) map.delete(id);
 }
 
+// Two connections from one person (a reconnect, or a second window) are one
+// presence entry. Responses with no recorded login are subscribers that
+// predate the login being tracked, and are skipped rather than shown blank.
+export function presenceLogins(
+  subs: Set<Response> | undefined,
+  loginOf: (r: Response) => string | undefined,
+): string[] {
+  const out = new Set<string>();
+  for (const r of subs ?? []) {
+    const login = loginOf(r);
+    if (login) out.add(login);
+  }
+  return [...out].sort();
+}
+
 export function createServer(deps: {
   manager: ManagerLike;
   turnSubscribers?: Map<string, Set<Response>>;
   identity: IdentityDeps;
   workspace?: string;
   sessions?: SessionService;
+  sessionSubscribers?: Map<string, Set<Response>>;
+  now?: () => string;
+  queue?: TurnQueue;
+  roomCapable?: WeakSet<Response>;
 }): Express {
   const app = express();
 
   // session id -> SSE responses ("" is the pending bucket for new sessions).
-  const subscribers = new Map<string, Set<Response>>();
+  const subscribers = deps.sessionSubscribers ?? new Map<string, Set<Response>>();
   // turn id -> SSE responses (stream-first: client subscribes before posting).
   const turnSubscribers = deps.turnSubscribers ?? new Map<string, Set<Response>>();
+  const now = deps.now ?? (() => new Date().toISOString());
+
+  // Keyed by the response object, so presence survives the "" -> session id
+  // re-key: the same responses simply move to the new bucket.
+  const subscriberLogin = new WeakMap<Response, string>();
+
+  // Subscribers that opted into the room protocol with `?room=1` on their
+  // stream URL. Frame types that predate rooms (session/result/error/raw) go
+  // to every subscriber; the room types (message/queue/presence) go ONLY to
+  // subscribers that declared they understand them. This is what lets the host
+  // deploy AHEAD of the packaged clients: an old client's reducer returns
+  // `undefined` for an unknown event type and crashes the tab render, and
+  // `presence` would otherwise be the first frame it ever received (review F2).
+  // Injectable so tests that hand in fake Response objects (which never pass
+  // through the route handlers) can mark them room-capable.
+  const roomCapable = deps.roomCapable ?? new WeakSet<Response>();
+  const ROOM_EVENT_TYPES: ReadonlySet<AgentEvent["type"]> = new Set(["message", "queue", "presence"]);
+  function writeEvent(r: Response, e: AgentEvent): void {
+    if (ROOM_EVENT_TYPES.has(e.type) && !roomCapable.has(r)) return;
+    writeSseEvent(r, e);
+  }
+
+  function broadcastPresence(id: string): void {
+    const subs = subscribers.get(id);
+    // Presence COUNTS every subscriber with a login — an operator watching
+    // from an old client is still in the room — even though only opted-in
+    // subscribers are SENT the frame.
+    const logins = presenceLogins(subs, (r) => subscriberLogin.get(r));
+    for (const r of subs ?? []) writeEvent(r, { type: "presence", logins });
+  }
+
+  // Lane key -> the session id turns on that lane should resume. Populated when
+  // the first turn in a draft room emits its `session` event, so a turn queued
+  // before the id existed continues that session instead of starting a new one.
+  const laneSession = new Map<string, string>();
+  const roomKey = (lane: string): string => laneSession.get(lane) ?? lane;
+
+  // The mapping must not outlive the lane. "" is a process-wide bucket shared by
+  // every room whose session id has not arrived yet, so a surviving
+  // laneSession[""] would make the NEXT new chat resume the previous chat's
+  // session and broadcast into its room. The queue drops its aliases on the same
+  // event (`dropLane` in queue.ts), and `subscribers` drops its "" bucket on
+  // re-key; this is the third map with that lifetime.
+  function forgetLaneSession(sessionId: string): void {
+    for (const [lane, id] of laneSession) {
+      if (id === sessionId) laneSession.delete(lane);
+    }
+  }
+
+  const queue =
+    deps.queue ??
+    createTurnQueue({
+      onDepth: (lane, depth) => {
+        // Room target must be resolved before any cleanup below, which can
+        // remove the very laneSession entry roomKey(lane) would otherwise use.
+        const room = roomKey(lane);
+        // Depth zero means the lane is empty and idle: no queued turn can still
+        // need this mapping, and the queue is about to drop the lane itself.
+        // Cleanup runs before the broadcast loop (not after) so a throwing
+        // subscriber can never skip it and leave laneSession stale.
+        if (depth === 0) {
+          forgetLaneSession(lane);
+          // forgetLaneSession matches by session-id VALUE. When adoptSession's
+          // rekey was refused (both lanes running), laneSession still holds
+          // lane -> id but the queue never aliased `lane`, so this lane's own
+          // drain-to-zero never matches by value. Delete the lane's own key
+          // too, so that orphaned entry doesn't survive to misroute the next
+          // draft room.
+          laneSession.delete(lane);
+        }
+        for (const r of subscribers.get(room) ?? []) {
+          writeEvent(r, { type: "queue", depth });
+        }
+      },
+    });
 
   // tailscale serve --set-path forwards the original URI, so requests routed
   // through the /agent mount arrive as e.g. /agent/messages. Normalize before
@@ -104,24 +208,51 @@ export function createServer(deps: {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
     const id = req.params.id;
+    if (req.query.room === "1") roomCapable.add(res);
+    subscriberLogin.set(res, readActorLogin(req, deps.identity.insecureDev));
     subsFor(subscribers, id).add(res);
     attachHeartbeat(res, req);
-    req.on("close", () => pruneSubscriber(subscribers, id, res));
+    broadcastPresence(id);
+    // Replay the room's CURRENT turn-queue depth to the newcomer, exactly as
+    // presence is replayed above. Depth is otherwise emitted only on change,
+    // so a subscriber joining (or reconnecting) mid-burst would collapse
+    // "no signal yet" into "idle" and read a busy room as free (review F4).
+    writeEvent(res, { type: "queue", depth: queue.depth(id) });
+    req.on("close", () => {
+      pruneSubscriber(subscribers, id, res);
+      broadcastPresence(id);
+    });
+  });
+
+  app.get("/roster", (_req: Request, res: Response) => {
+    res.json({ roster: buildRoster(deps.identity.allowedUsers) });
   });
 
   app.get("/turns/:turnId/stream", (req: Request, res: Response) => {
     res.set(SSE_HEADERS);
     res.flushHeaders?.();
     const turnId = req.params.turnId;
+    if (req.query.room === "1") roomCapable.add(res);
     subsFor(turnSubscribers, turnId).add(res);
     attachHeartbeat(res, req);
     req.on("close", () => pruneSubscriber(turnSubscribers, turnId, res));
   });
 
   app.post("/messages", (req: Request, res: Response) => {
-    const { sessionId, prompt, turnId } = req.body ?? {};
+    // Destructured as `requestedRoomKey`, not `roomKey`: this scope already has
+    // the `roomKey(lane)` helper (lane -> resolved session/pending-bucket id)
+    // defined above, and a same-named const here would shadow it for the rest
+    // of this handler, breaking every `roomKey(lane)` call below.
+    const { sessionId, prompt, turnId, roomKey: requestedRoomKey } = req.body ?? {};
     if (typeof prompt !== "string" || prompt.length === 0) {
       res.status(400).json({ error: "prompt is required" });
+      return;
+    }
+    if (
+      requestedRoomKey !== undefined &&
+      (typeof requestedRoomKey !== "string" || !DRAFT_ROOM_KEY_RE.test(requestedRoomKey))
+    ) {
+      res.status(400).json({ error: "roomKey must be a draft key" });
       return;
     }
     const inputId: string | undefined =
@@ -129,28 +260,89 @@ export function createServer(deps: {
     const turn: string | undefined =
       typeof turnId === "string" && turnId.length > 0 ? turnId : undefined;
 
-    let targetId = inputId ?? "";
+    // Server-derived, never from the body: the room must not be able to lie
+    // about who is speaking.
+    const author = readActorLogin(req, deps.identity.insecureDev);
 
-    const onEvent = (e: AgentEvent) => {
-      if (e.type === "session" && e.sessionId && e.sessionId !== targetId) {
+    const lane = inputId ?? (typeof requestedRoomKey === "string" ? requestedRoomKey : "");
+
+    // The room sees the question the moment it is accepted. Only one client
+    // typed it, but everyone in the session is watching.
+    // The sender receives this on BOTH its turn stream and the session stream.
+    // Carrying the turnId lets it recognize its own echo by identity rather
+    // than by a text-and-recency guess.
+    const message: AgentEvent = {
+      type: "message",
+      author,
+      text: prompt,
+      ts: now(),
+      ...(turn ? { turnId: turn } : {}),
+    };
+    for (const r of subscribers.get(roomKey(lane)) ?? []) writeEvent(r, message);
+    if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, message);
+
+    queue.enqueue(lane, async () => {
+      // Resolved at run time, not enqueue time: a turn queued against a draft
+      // room must resume whatever session the turn ahead of it created.
+      const resume = inputId ?? laneSession.get(lane);
+      let targetId = resume ?? "";
+
+      // Move the room onto its real session id. Subscribers, the lane->session
+      // mapping, and the queue lane all follow together; calling it twice with
+      // the same id is a no-op.
+      const adoptSession = (id: string): void => {
+        if (!id || id === targetId) return;
         const pending = subscribers.get(targetId);
         if (pending) {
-          const dest = subsFor(subscribers, e.sessionId);
+          const dest = subsFor(subscribers, id);
           for (const r of pending) dest.add(r);
           if (targetId === "") subscribers.delete("");
         }
-        targetId = e.sessionId;
-      }
-      if (e.type === "session" && e.sessionId) {
-        deps.sessions?.upsertFromTurn(e.sessionId, prompt);
-      }
-      for (const r of subscribers.get(targetId) ?? []) writeSseEvent(r, e);
-      if (turn) {
-        for (const r of turnSubscribers.get(turn) ?? []) writeSseEvent(r, e);
-      }
-    };
+        laneSession.set(lane, id);
+        queue.rekey(lane, id);
+        targetId = id;
+      };
 
-    void deps.manager.run(prompt, inputId, onEvent);
+      const onEvent = (e: AgentEvent) => {
+        if (e.type === "session" && e.sessionId) {
+          adoptSession(e.sessionId);
+          deps.sessions?.upsertFromTurn(e.sessionId, prompt);
+        }
+        for (const r of subscribers.get(targetId) ?? []) writeEvent(r, e);
+        if (turn) {
+          for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, e);
+        }
+      };
+
+      // `prompt` stays raw for session titles; only the backend sees the envelope.
+      //
+      // The `session` event is the normal source of the id, but the AgentBackend
+      // contract guarantees only that `run` RETURNS it. Adopting the return value
+      // too means a backend that stays quiet cannot leave the next queued turn to
+      // start a second session — the exact fork this queue exists to prevent.
+      // A slash command must reach the backend with "/" as its FIRST byte —
+      // the CLI recognizes a command only at the start of the prompt, so a
+      // stamped "/compact" would silently degrade to literal text (review F1).
+      // Command turns therefore run unstamped: their transcript entry carries
+      // no [from:] envelope, and replayed attribution for them is dropped on
+      // purpose. Live attribution is unaffected — the `message` broadcast
+      // above already named the sender.
+      const outbound = prompt.startsWith("/") ? prompt : stampAuthor(author, prompt);
+      try {
+        adoptSession(await deps.manager.run(outbound, resume, onEvent));
+      } catch (err) {
+        // queue.ts swallows this rejection by design (a failed turn must
+        // advance the lane, never wedge it) but the room still needs to know
+        // the turn died, or the sender's spinner never stops. Broadcast to the
+        // same two buckets `onEvent` writes to, then return so the queue moves
+        // on to the next turn.
+        const message = err instanceof Error ? err.message : String(err);
+        const errorEvent: AgentEvent = { type: "error", message };
+        for (const r of subscribers.get(targetId) ?? []) writeEvent(r, errorEvent);
+        if (turn) for (const r of turnSubscribers.get(turn) ?? []) writeEvent(r, errorEvent);
+        return;
+      }
+    });
 
     res.status(202).json({ sessionId: inputId ?? "", turnId: turn ?? "" });
   });

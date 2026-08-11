@@ -218,11 +218,15 @@ pub async fn send_message(
     turn_id: String,
     prompt: String,
     session_id: Option<String>,
+    room_key: Option<String>,
 ) -> Result<(), String> {
     let (url, bearer) = agent_target(&app, &agent_base, "/messages")?;
     let mut body = serde_json::json!({ "turnId": turn_id, "prompt": prompt });
     if let Some(sid) = session_id {
         body["sessionId"] = Value::String(sid);
+    }
+    if let Some(rk) = room_key {
+        body["roomKey"] = Value::String(rk);
     }
     let client = reqwest::Client::new();
     let req = shell_request(client.post(&url).json(&body), &bearer);
@@ -241,7 +245,11 @@ pub async fn start_agent_stream(
     turn_id: String,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
-    let (url, bearer) = agent_target(&app, &agent_base, &format!("/turns/{}/stream", turn_id))?;
+    // `room=1` opts this subscriber into the room protocol (message/queue/
+    // presence frames). The host withholds those frames from subscribers that
+    // do not declare them, so an old packaged client keeps working against a
+    // newer host; this client understands them and says so.
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/turns/{}/stream?room=1", turn_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.agent.lock().unwrap().insert(turn_id.clone(), token.clone()) {
         old.cancel();
@@ -318,7 +326,7 @@ pub async fn resolve_pending(
     pending_id: String,
     decision: String,
     trust_surface: bool,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     let (url, bearer) = dashboard_target(&app, &dashboard_base, &format!("/data/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(
@@ -328,10 +336,15 @@ pub async fn resolve_pending(
         &bearer,
     );
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    // 409 is not a transport failure: someone else decided first, and the body
+    // names them. Anything else non-2xx stays an error.
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return resp.json::<Value>().await.map(Some).map_err(|e| e.to_string());
+    }
     if !resp.status().is_success() {
         return Err(format!("dashboard host returned {}", resp.status()));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[tauri::command]
@@ -363,15 +376,20 @@ pub async fn resolve_infra_pending(
     agent_base: String,
     pending_id: String,
     decision: String,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     let (url, bearer) = agent_target(&app, &agent_base, &format!("/infra/pending/{}/resolve", pending_id))?;
     let client = reqwest::Client::new();
     let req = shell_request(client.post(&url).json(&serde_json::json!({ "decision": decision })), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    // 409 is not a transport failure: someone else decided first, and the body
+    // names them. Anything else non-2xx stays an error.
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return resp.json::<Value>().await.map(Some).map_err(|e| e.to_string());
+    }
     if !resp.status().is_success() {
         return Err(format!("agent host returned {}", resp.status()));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[tauri::command]
@@ -385,7 +403,9 @@ pub async fn start_session_stream(
     if !valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
-    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream", session_id))?;
+    // See start_agent_stream: `room=1` declares this subscriber understands
+    // the room protocol's frame types.
+    let (url, bearer) = agent_target(&app, &agent_base, &format!("/sessions/{}/stream?room=1", session_id))?;
     let token = CancellationToken::new();
     if let Some(old) = state.session.lock().unwrap().insert(session_id.clone(), token.clone()) {
         old.cancel();
@@ -449,6 +469,18 @@ pub async fn list_sessions(app: tauri::AppHandle, agent_base: String) -> Result<
 #[tauri::command]
 pub async fn get_ontology(app: tauri::AppHandle, agent_base: String) -> Result<Value, String> {
     let (url, bearer) = agent_target(&app, &agent_base, "/ontology")?;
+    let client = reqwest::Client::new();
+    let req = shell_request(client.get(&url), &bearer);
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("agent host returned {}", resp.status()));
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_roster(app: tauri::AppHandle, agent_base: String) -> Result<Value, String> {
+    let (url, bearer) = agent_target(&app, &agent_base, "/roster")?;
     let client = reqwest::Client::new();
     let req = shell_request(client.get(&url), &bearer);
     let resp = req.send().await.map_err(|e| e.to_string())?;

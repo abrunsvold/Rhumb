@@ -7,7 +7,7 @@ import type { PendingItem } from "../src/lib/pendingStore";
 
 // Approvals now live in the transcript (Task 9); the cases below are about
 // everything else, so they render with an empty approval queue.
-const noApprovals = { pending: [], resolved: [], onResolve: () => {} };
+const noApprovals = { pending: [], resolved: [], onResolve: () => {}, roster: [], me: null };
 
 function setGeometry(el: HTMLElement, { scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
   Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
@@ -198,7 +198,7 @@ describe("Transcript", () => {
 
     it("renders a pending approval card in the message flow and forwards the decision", async () => {
       const onResolve = vi.fn();
-      render(<Transcript messages={[]} busy={false} pending={pending} resolved={[]} onResolve={onResolve} />);
+      render(<Transcript messages={[]} roster={[]} me={null} busy={false} pending={pending} resolved={[]} onResolve={onResolve} />);
       expect(screen.getByText("Update rows in printers.jobs")).toBeTruthy();
       await userEvent.click(screen.getByRole("button", { name: "Approve" }));
       expect(onResolve).toHaveBeenCalledWith(pending[0], "approve", false);
@@ -242,9 +242,76 @@ describe("Transcript", () => {
     const pending: PendingItem[] = [
       { origin: "data", pendingId: "p1", source: "printers", op: { kind: "update", table: "jobs" }, surfaceId: "farm" },
     ];
-    rerender(<Transcript messages={one} busy={false} pending={pending} resolved={[]} onResolve={() => {}} />);
+    rerender(<Transcript messages={one} roster={[]} me={null} busy={false} pending={pending} resolved={[]} onResolve={() => {}} />);
 
     expect(container.scrollTop).toBe(0); // still not auto-scrolled…
     expect(queryByTestId("jump-latest")).toBeTruthy(); // …but now signposted
+  });
+});
+
+describe("author labels", () => {
+  const roster = [
+    { login: "op@example.com", handle: "op" },
+    { login: "zoe@example.com", handle: "zoe" },
+  ];
+  const approvals = { pending: [], resolved: [], onResolve: () => {} };
+
+  it("labels a message from someone else by handle", () => {
+    render(
+      <Transcript
+        {...approvals}
+        messages={[{ kind: "user", text: "hi", author: "zoe@example.com" }]}
+        roster={roster}
+        me="op@example.com"
+        busy={false}
+      />,
+    );
+    expect(screen.getByText("zoe")).toBeInTheDocument();
+  });
+
+  it("does not label your own message once you are known", () => {
+    render(
+      <Transcript
+        {...approvals}
+        messages={[{ kind: "user", text: "hi", author: "op@example.com" }]}
+        roster={roster}
+        me="op@example.com"
+        busy={false}
+      />,
+    );
+    expect(screen.queryByText("op")).not.toBeInTheDocument();
+  });
+
+  it("labels every authored message before you are known", () => {
+    render(
+      <Transcript
+        {...approvals}
+        messages={[{ kind: "user", text: "hi", author: "op@example.com" }]}
+        roster={roster}
+        me={null}
+        busy={false}
+      />,
+    );
+    expect(screen.getByText("op")).toBeInTheDocument();
+  });
+
+  it("labels an author who has left the allowlist by full login", () => {
+    render(
+      <Transcript
+        {...approvals}
+        messages={[{ kind: "user", text: "hi", author: "gone@example.com" }]}
+        roster={roster}
+        me="op@example.com"
+        busy={false}
+      />,
+    );
+    expect(screen.getByText("gone@example.com")).toBeInTheDocument();
+  });
+
+  it("does not label a message with no author", () => {
+    const { container } = render(
+      <Transcript {...approvals} messages={[{ kind: "user", text: "hi" }]} roster={roster} me={null} busy={false} />,
+    );
+    expect(container.querySelector("[data-testid='author']")).toBeNull();
   });
 });

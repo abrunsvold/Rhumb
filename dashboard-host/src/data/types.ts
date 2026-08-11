@@ -28,8 +28,11 @@ export interface AuditEntry {
   source: string;
   surfaceId: string | null;
   op: DataOp;
-  decision: "executed" | "denied" | "error";
+  decision: "executed" | "denied" | "error" | "trust-granted";
   rowCount?: number;
   error?: string;
   auth?: "approval" | "trust";
+  // Who approved this write. Set only when auth === "approval": a trust-path
+  // execution has no human in the loop, so an actor there would be a lie.
+  actor?: string;
 }

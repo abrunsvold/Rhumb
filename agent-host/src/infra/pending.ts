@@ -72,12 +72,13 @@ export class PendingActions {
     return { action, decision };
   }
 
-  resolve(pendingId: string, decision: "approve" | "deny"): boolean {
+  resolve(pendingId: string, decision: "approve" | "deny", actor?: string): boolean {
     const entry = this.entries.get(pendingId);
     if (!entry || entry.settled) return false;
     entry.settled = true;
     entry.action.status = decision === "approve" ? "approved" : "denied";
     entry.action.resolvedAt = this.now();
+    if (actor) entry.action.resolvedBy = actor;
     entry.resolve(decision);
     this.save();
     for (const fn of this.listeners) fn("resolved", entry.action);

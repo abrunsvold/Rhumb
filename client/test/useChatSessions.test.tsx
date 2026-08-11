@@ -219,4 +219,61 @@ describe("useChatSessions", () => {
     act(() => sessionHandlers.get("real-4")!({ type: "result", result: "done", isError: false }));
     expect(result.current.store.tabs[0].openTurns).toBe(0);
   });
+
+  it("send() passes roomKey for a draft: tab", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    await act(() => result.current.send(draftKey, "hello", []));
+    expect(sendMessage).toHaveBeenCalledWith(
+      "http://a:8787", expect.any(String), "hello", undefined, draftKey,
+    );
+  });
+
+  // Review F4: the host replays the room's CURRENT queue depth as a first
+  // frame on every subscribe. A reconnecting client therefore keeps its last
+  // known depth until the authoritative replay lands — zeroing it locally
+  // would collapse "no signal yet" into "idle" and show a busy room as free.
+  it("keeps the last known queue depth across a reconnect until the host's replay lands", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useChatSessions("http://a:8787"));
+      await act(async () => {
+        await result.current.openSession({ id: "s1", title: "One" });
+      });
+      act(() => sessionHandlers.get("s1")!({ type: "queue", depth: 3 }));
+      expect(result.current.store.tabs[0].agent.queueDepth).toBe(3);
+
+      act(() => sessionHandlers.get("s1")!({ type: "stream_closed" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      // Not zeroed by the reattach itself…
+      expect(result.current.store.tabs[0].agent.queueDepth).toBe(3);
+      // …and the host's replayed frame is what corrects it.
+      act(() => sessionHandlers.get("s1")!({ type: "queue", depth: 1 }));
+      expect(result.current.store.tabs[0].agent.queueDepth).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("learns `me` from a self-authored message event on its own turn", async () => {
+    const { result } = renderHook(() => useChatSessions("http://a:8787"));
+    expect(result.current.me).toBeNull();
+    act(() => result.current.newDraft());
+    const draftKey = result.current.store.tabs[0].key;
+    await act(() => result.current.send(draftKey, "hello", []));
+    const turnId = [...turnHandlers.keys()][0];
+    act(() =>
+      turnHandlers.get(turnId)!({
+        type: "message",
+        turnId,
+        author: "op@example.com",
+        text: "hello",
+        ts: "t",
+      }),
+    );
+    expect(result.current.me).toBe("op@example.com");
+  });
 });

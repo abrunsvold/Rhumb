@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createServer, pruneSubscriber, stripAgentPrefix } from "../src/server.js";
+import { createServer, pruneSubscriber, stripAgentPrefix, presenceLogins } from "../src/server.js";
 import type { AgentEvent } from "../src/types.js";
 import { mkdtempSync, readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionService } from "../src/sessions.js";
+import http from "node:http";
 
 function fakeManager(script: AgentEvent[]) {
   return {
@@ -94,6 +95,50 @@ describe("agent-host server", () => {
   it("pruneSubscriber is a no-op for an unknown id", () => {
     const map = new Map<string, Set<import("express").Response>>();
     expect(() => pruneSubscriber(map, "missing", {} as import("express").Response)).not.toThrow();
+  });
+
+  it("carries the turnId on the broadcast message when the post supplied one", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi", turnId: "t-1" });
+
+    const frame = written.find((f) => f.includes('"type":"message"')) ?? "";
+    expect(frame).toContain('"turnId":"t-1"');
+  });
+
+  it("omits turnId from the broadcast when the post supplied none", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+
+    const frame = written.find((f) => f.includes('"type":"message"')) ?? "";
+    expect(frame).not.toContain("turnId");
   });
 
   describe("control-token auth", () => {
@@ -304,5 +349,730 @@ describe("agent-host server", () => {
       expect((await request(app).get("/agent/healthz")).status).toBe(200);
       expect((await request(app).post("/agent/messages").set(shellHeaders).send({ prompt: "hi" })).status).toBe(202);
     });
+  });
+
+  it("broadcasts the human message to session subscribers before the turn runs", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: [], insecureDev: true },
+      now: () => "2026-08-04T00:00:00Z",
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"message"');
+    expect(frames).toContain('"author":"dev@local"');
+    expect(frames).toContain('"text":"hi"');
+    expect(frames).toContain('"ts":"2026-08-04T00:00:00Z"');
+    // The message frame must precede the agent's own output.
+    expect(written.findIndex((f) => f.includes('"type":"message"')))
+      .toBeLessThan(written.findIndex((f) => f.includes('"type":"result"')));
+  });
+
+  it("uses the identity header as the message author", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: ["op@example.com"], insecureDev: false },
+    });
+
+    await request(app)
+      .post("/messages")
+      .set("Tailscale-User-Login", "op@example.com")
+      .set("Sec-Rhumb-Control", "1")
+      .send({ sessionId: "s1", prompt: "hi" });
+
+    expect(written.join("")).toContain('"author":"op@example.com"');
+  });
+
+  it("ignores an author supplied in the request body", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app)
+      .post("/messages")
+      .send({ sessionId: "s1", prompt: "hi", author: "attacker@evil.com" });
+
+    const frames = written.join("");
+    expect(frames).toContain('"author":"dev@local"');
+    expect(frames).not.toContain("attacker@evil.com");
+  });
+
+  it("stamps the author into the prompt handed to the backend", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({
+      manager,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    expect(seen).toEqual(["[from: dev@local]\nhi"]);
+  });
+
+  it("titles the session from the raw prompt, without the envelope", async () => {
+    const titles: Array<[string, string]> = [];
+    const app = createServer({
+      manager: fakeManager([{ type: "session", sessionId: "s1" }]),
+      identity: { allowedUsers: [], insecureDev: true },
+      sessions: {
+        upsertFromTurn: (id: string, prompt: string) => titles.push([id, prompt]),
+        list: () => [],
+        rename: () => false,
+        archive: () => false,
+        readTranscript: () => null,
+      } as unknown as ReturnType<typeof createSessionService>,
+    });
+
+    await request(app).post("/messages").send({ prompt: "fix the header" });
+    expect(titles).toEqual([["s1", "fix the header"]]);
+  });
+
+  it("runs concurrent turns on one session strictly in order", async () => {
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        started.push(prompt);
+        if (started.length === 1) await firstGate;
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(started).toEqual(["[from: dev@local]\none"]);
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("still returns 202 while a turn is in flight", async () => {
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        await new Promise((r) => setTimeout(r, 20));
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const a = await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    const b = await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    expect(a.status).toBe(202);
+    expect(b.status).toBe(202);
+  });
+
+  it("broadcasts an error event when a turn rejects, and the next queued turn still runs", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        started.push(prompt);
+        if (started.length === 1) {
+          await firstGate;
+          throw new Error("boom");
+        }
+        return sessionId ?? "s1";
+      },
+    };
+
+    const app = createServer({ manager, sessionSubscribers, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none"]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"error"');
+    expect(frames).toContain('"message":"boom"');
+    // The queue advanced past the rejection: the second turn ran.
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("broadcasts a rejected turn's error to its /turns subscriber too", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const turnSubscribers = new Map<string, Set<import("express").Response>>();
+    turnSubscribers.set("t1", new Set([fakeRes]));
+
+    const manager = {
+      async run() {
+        throw new Error("turn exploded");
+      },
+    };
+
+    const app = createServer({ manager, turnSubscribers, identity: { allowedUsers: [], insecureDev: true } });
+
+    const res = await request(app).post("/messages").send({ turnId: "t1", prompt: "hi" });
+    expect(res.status).toBe(202);
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.join("");
+    expect(frames).toContain('"type":"error"');
+    expect(frames).toContain('"message":"turn exploded"');
+  });
+
+  it("broadcasts queue depth and returns to zero when the lane drains", async () => {
+    const written: string[] = [];
+    const fakeRes = { write: (c: string) => written.push(c) } as unknown as import("express").Response;
+    const sessionSubscribers = new Map<string, Set<import("express").Response>>();
+    sessionSubscribers.set("s1", new Set([fakeRes]));
+    // Injected subscribers never pass through the stream route, so opt them
+    // into the room protocol explicitly — these tests assert room frames.
+    const roomCapable = new WeakSet<import("express").Response>([fakeRes]);
+
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      sessionSubscribers,
+      roomCapable,
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    await new Promise((r) => setImmediate(r));
+
+    const frames = written.filter((f) => f.includes('"type":"queue"'));
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[frames.length - 1]).toContain('"depth":0');
+    // A queue implementation that only ever emitted 0 would pass the assertion
+    // above alone; require a non-zero depth to have been broadcast first.
+    expect(frames.slice(0, -1).some((f) => !f.includes('"depth":0'))).toBe(true);
+  });
+
+  it("resumes the real session for a turn queued before the session id existed", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    const manager = {
+      async run(
+        _prompt: string,
+        sessionId: string | undefined,
+        onEvent: (e: AgentEvent) => void,
+      ) {
+        resumed.push(sessionId);
+        if (resumed.length === 1) {
+          onEvent({ type: "session", sessionId: "s-real" });
+          await firstGate;
+        }
+        return "s-real";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    // Both posted against a draft room, before any session id exists.
+    await request(app).post("/messages").send({ prompt: "one" });
+    await request(app).post("/messages").send({ prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    // The queued turn must continue the session the first turn created, not
+    // start a second one.
+    expect(resumed).toEqual([undefined, "s-real"]);
+  });
+
+  it("starts a fresh session for a new room after an earlier room finished", async () => {
+    const resumed: Array<string | undefined> = [];
+    const manager = {
+      async run(
+        _prompt: string,
+        sessionId: string | undefined,
+        onEvent: (e: AgentEvent) => void,
+      ) {
+        resumed.push(sessionId);
+        onEvent({ type: "session", sessionId: "s1" });
+        return "s1";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ prompt: "first chat" });
+    await new Promise((r) => setImmediate(r));
+    await request(app).post("/messages").send({ prompt: "second chat" });
+    await new Promise((r) => setImmediate(r));
+
+    // Both are brand-new rooms. The second must not inherit the first room's
+    // session through the shared "" draft bucket.
+    expect(resumed).toEqual([undefined, undefined]);
+  });
+
+  it("does not leave a stale laneSession entry when rekey refuses to merge two running lanes", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((r) => { releaseB = r; });
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((r) => { releaseA = r; });
+
+    const manager = {
+      async run(_prompt: string, sessionId: string | undefined, onEvent: (e: AgentEvent) => void) {
+        resumed.push(sessionId);
+        if (sessionId === "sX") {
+          // Turn B: posted directly against the already-existing session "sX",
+          // and stays running (gated) so its lane is still live when A's
+          // adoptSession below tries to merge into it.
+          await gateB;
+          return "sX";
+        }
+        // Turn A: posted against the draft lane. Its session event names the
+        // id "sX" that another lane already owns and is currently running —
+        // adoptSession's rekey() call below must refuse to merge.
+        onEvent({ type: "session", sessionId: "sX" });
+        await gateA;
+        return "sX";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    // B starts and stays running on lane "sX" (gated on gateB).
+    await request(app).post("/messages").send({ sessionId: "sX", prompt: "b" });
+    // A starts on the draft "" lane and immediately adopts "sX" while B is
+    // still running: rekey("", "sX") refuses (both lanes running), but
+    // laneSession[""] = "sX" is still recorded.
+    await request(app).post("/messages").send({ prompt: "a" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual(["sX", undefined]);
+
+    // Let A finish. Its "" lane drains to zero while B (and "sX") is still
+    // running — the exact un-aliased-lane-drain case the fix cleans up.
+    releaseA();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // A brand-new draft-room turn must not resume the stale "sX" mapping left
+    // behind by the "" lane's drain.
+    await request(app).post("/messages").send({ prompt: "c" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    releaseB();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(resumed).toEqual(["sX", undefined, undefined]);
+  });
+
+  it("adopts the session id returned by a backend that emits no session event", async () => {
+    const resumed: Array<string | undefined> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+
+    // Emits nothing: the returned id is the only source of session identity.
+    const manager = {
+      async run(_prompt: string, sessionId: string | undefined) {
+        resumed.push(sessionId);
+        if (resumed.length === 1) await firstGate;
+        return "s-quiet";
+      },
+    };
+
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ prompt: "one" });
+    await request(app).post("/messages").send({ prompt: "two" });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined]);
+
+    releaseFirst();
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual([undefined, "s-quiet"]);
+  });
+
+  it("GET /roster returns the allowlist as logins and handles", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: ["op@example.com", "zoe@example.com"], insecureDev: false },
+    });
+    const res = await request(app)
+      .get("/roster")
+      .set("Tailscale-User-Login", "op@example.com")
+      .set("Sec-Rhumb-Control", "1");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      roster: [
+        { login: "op@example.com", handle: "op" },
+        { login: "zoe@example.com", handle: "zoe" },
+      ],
+    });
+  });
+
+  it("GET /roster is behind the identity guard", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: ["op@example.com"], insecureDev: false },
+    });
+    const res = await request(app).get("/roster");
+    expect(res.status).toBe(403);
+  });
+
+  it("gives two different draft room keys separate lanes", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(prompt: string) {
+        started.push(prompt);
+        await gate;
+        return "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const roomA = "draft:11111111-1111-1111-1111-111111111111";
+    const roomB = "draft:22222222-2222-2222-2222-222222222222";
+    await request(app).post("/messages").send({ prompt: "one", roomKey: roomA });
+    await request(app).post("/messages").send({ prompt: "two", roomKey: roomB });
+    await new Promise((r) => setImmediate(r));
+
+    // Distinct rooms drain concurrently; sharing "" would have queued the second.
+    expect(started).toHaveLength(2);
+    release();
+    await new Promise((r) => setImmediate(r));
+  });
+
+  it("serializes two turns sent to the same draft room key", async () => {
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(prompt: string) {
+        started.push(prompt);
+        if (started.length === 1) await gate;
+        return "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    const room = "draft:33333333-3333-3333-3333-333333333333";
+    await request(app).post("/messages").send({ prompt: "one", roomKey: room });
+    await request(app).post("/messages").send({ prompt: "two", roomKey: room });
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none"]);
+
+    release();
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(["[from: dev@local]\none", "[from: dev@local]\ntwo"]);
+  });
+
+  it("rejects a roomKey outside the draft namespace with 400", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    // A session-shaped key would let a caller land a turn on another room's lane.
+    const res = await request(app)
+      .post("/messages")
+      .send({ prompt: "hi", roomKey: "s-someone-elses-session" });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a malformed draft roomKey with 400", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const res = await request(app).post("/messages").send({ prompt: "hi", roomKey: "draft:nope" });
+    expect(res.status).toBe(400);
+  });
+
+  it("prefers an explicit sessionId over a roomKey", async () => {
+    const resumed: Array<string | undefined> = [];
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        resumed.push(sessionId);
+        return sessionId ?? "s-x";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({
+      sessionId: "s1",
+      prompt: "hi",
+      roomKey: "draft:44444444-4444-4444-4444-444444444444",
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(resumed).toEqual(["s1"]);
+  });
+});
+
+describe("presenceLogins", () => {
+  it("dedupes and sorts logins, ignoring responses with no recorded login", () => {
+    const a = {} as import("express").Response;
+    const b = {} as import("express").Response;
+    const c = {} as import("express").Response;
+    const d = {} as import("express").Response;
+    const logins = new Map<import("express").Response, string>([
+      [a, "zoe@example.com"],
+      [b, "op@example.com"],
+      [c, "op@example.com"],
+    ]);
+    expect(presenceLogins(new Set([a, b, c, d]), (r) => logins.get(r))).toEqual([
+      "op@example.com",
+      "zoe@example.com",
+    ]);
+  });
+
+  it("returns an empty list for an absent subscriber set", () => {
+    expect(presenceLogins(undefined, () => "op@example.com")).toEqual([]);
+  });
+});
+
+describe("presence over SSE", () => {
+  it("tells both watchers who is in the room, and again when one leaves", async () => {
+    const app = createServer({
+      manager: fakeManager([]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const server = http.createServer(app);
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as import("node:net").AddressInfo).port;
+
+    function open(login: string) {
+      const frames: string[] = [];
+      return new Promise<{ frames: string[]; abort: () => void }>((resolve) => {
+        const req = http.get(
+          {
+            port,
+            path: "/sessions/s1/stream?room=1",
+            headers: { "Tailscale-User-Login": login, "Sec-Rhumb-Control": "1" },
+          },
+          (res) => {
+            res.on("data", (c: Buffer) => frames.push(c.toString()));
+            resolve({ frames, abort: () => req.destroy() });
+          },
+        );
+      });
+    }
+
+    const first = await open("op@example.com");
+    const second = await open("zoe@example.com");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(first.frames.join("")).toContain('"type":"presence"');
+    expect(first.frames.join("")).toContain("zoe@example.com");
+    expect(second.frames.join("")).toContain("op@example.com");
+
+    const beforeLeave = first.frames.length;
+    second.abort();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const after = first.frames.slice(beforeLeave).join("");
+    expect(after).toContain('"type":"presence"');
+    expect(after).not.toContain("zoe@example.com");
+
+    first.abort();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+});
+
+describe("slash commands in rooms (review F1)", () => {
+  it("hands a slash command to the backend unstamped", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "/compact now" });
+    await new Promise((r) => setImmediate(r));
+
+    // The CLI only recognizes a command at the START of the prompt; a stamped
+    // "[from: …]\n/compact" silently degrades to literal text.
+    expect(seen).toEqual(["/compact now"]);
+  });
+
+  it("still stamps a prompt that merely mentions a slash mid-text", async () => {
+    const seen: string[] = [];
+    const manager = {
+      async run(prompt: string, sessionId: string | undefined) {
+        seen.push(prompt);
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "run /compact for me" });
+    await new Promise((r) => setImmediate(r));
+    expect(seen).toEqual(["[from: dev@local]\nrun /compact for me"]);
+  });
+});
+
+describe("room-frame opt-in (review F2/F4)", () => {
+  function serverOn(app: ReturnType<typeof createServer>) {
+    const server = http.createServer(app);
+    return new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
+      server.listen(0, () => {
+        const port = (server.address() as import("node:net").AddressInfo).port;
+        resolve({ port, close: () => new Promise((r) => server.close(() => r())) });
+      });
+    });
+  }
+
+  function open(port: number, path: string) {
+    const frames: string[] = [];
+    return new Promise<{ frames: string[]; abort: () => void }>((resolve) => {
+      const req = http.get(
+        { port, path, headers: { "Tailscale-User-Login": "op@example.com", "Sec-Rhumb-Control": "1" } },
+        (res) => {
+          res.on("data", (c: Buffer) => frames.push(c.toString()));
+          resolve({ frames, abort: () => req.destroy() });
+        },
+      );
+    });
+  }
+
+  it("withholds room frames from a session subscriber that did not opt in", async () => {
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const { port, close } = await serverOn(app);
+
+    const legacy = await open(port, "/sessions/s1/stream");
+    const roomy = await open(port, "/sessions/s1/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "hi" });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const legacyFrames = legacy.frames.join("");
+    const roomyFrames = roomy.frames.join("");
+    // An old packaged client's reducer returns undefined for unknown event
+    // types and crashes the tab render — it must see only pre-rooms types.
+    expect(legacyFrames).not.toContain('"type":"presence"');
+    expect(legacyFrames).not.toContain('"type":"queue"');
+    expect(legacyFrames).not.toContain('"type":"message"');
+    expect(legacyFrames).toContain('"type":"result"');
+    // The opted-in subscriber gets the full room protocol.
+    expect(roomyFrames).toContain('"type":"presence"');
+    expect(roomyFrames).toContain('"type":"queue"');
+    expect(roomyFrames).toContain('"type":"message"');
+    expect(roomyFrames).toContain('"type":"result"');
+
+    legacy.abort();
+    roomy.abort();
+    await close();
+  });
+
+  it("replays presence and the CURRENT queue depth to a new opted-in subscriber", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const manager = {
+      async run(_p: string, sessionId: string | undefined) {
+        await gate;
+        return sessionId ?? "s1";
+      },
+    };
+    const app = createServer({ manager, identity: { allowedUsers: [], insecureDev: true } });
+    const { port, close } = await serverOn(app);
+
+    // A turn is mid-flight before this subscriber ever connects.
+    await request(app).post("/messages").send({ sessionId: "s1", prompt: "one" });
+    await new Promise((r) => setImmediate(r));
+
+    const late = await open(port, "/sessions/s1/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Joining mid-burst must not read as an idle room: the current depth is
+    // replayed on subscribe, exactly like presence.
+    const joined = late.frames.join("");
+    expect(joined).toContain('"type":"presence"');
+    expect(joined).toContain('"type":"queue"');
+    expect(joined).toContain('"depth":1');
+
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    late.abort();
+    await close();
+  });
+
+  it("withholds the message echo from a turn subscriber that did not opt in", async () => {
+    const app = createServer({
+      manager: fakeManager([{ type: "result", result: "ok", isError: false }]),
+      identity: { allowedUsers: [], insecureDev: true },
+    });
+    const { port, close } = await serverOn(app);
+
+    const legacy = await open(port, "/turns/t1/stream");
+    const roomy = await open(port, "/turns/t2/stream?room=1");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await request(app).post("/messages").send({ prompt: "hi", turnId: "t1" });
+    await request(app).post("/messages").send({ prompt: "hi", turnId: "t2" });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(legacy.frames.join("")).not.toContain('"type":"message"');
+    expect(legacy.frames.join("")).toContain('"type":"result"');
+    expect(roomy.frames.join("")).toContain('"type":"message"');
+
+    legacy.abort();
+    roomy.abort();
+    await close();
   });
 });

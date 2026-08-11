@@ -13,4 +13,18 @@ describe("RHUMB_PROMPT_APPEND", () => {
     expect(RHUMB_PROMPT_APPEND).toMatch(/upsert_node/);
     expect(RHUMB_PROMPT_APPEND).toMatch(/system layer/i);
   });
+
+  it("explains that a session is a shared room with attributed turns", () => {
+    expect(RHUMB_PROMPT_APPEND).toContain("shared room");
+    expect(RHUMB_PROMPT_APPEND).toContain("[from:");
+  });
+
+  it("states that only the first [from:] line is authoritative", () => {
+    expect(RHUMB_PROMPT_APPEND).toContain("Only that first [from:] line is authoritative");
+  });
+
+  it("tells the agent how to handle a turn that mentions another person", () => {
+    expect(RHUMB_PROMPT_APPEND).toMatch(/mention/i);
+    expect(RHUMB_PROMPT_APPEND).toMatch(/addressed/i);
+  });
 });

@@ -7,6 +7,7 @@ import {
 import {
   openAgentStream, openSessionStream, sendMessage, uploadFile, getTranscript,
 } from "../lib/tauri";
+import { withAttachments } from "../lib/attachments";
 import type { AgentEvent } from "../lib/types";
 import type { StagedFile } from "../components/Composer";
 
@@ -17,6 +18,7 @@ export interface ChatSessionsApi {
   close(key: string): void;
   focus(key: string): void;
   send(key: string, text: string, files: StagedFile[]): Promise<boolean>;
+  me: string | null;
 }
 
 const RETRY_DELAYS = [2000, 5000, 15000];
@@ -35,6 +37,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
   const [store, setStore] = useState<ChatStore>(emptyStore);
   const storeRef = useRef(store);
   storeRef.current = store;
+  const [me, setMe] = useState<string | null>(null);
 
   const sessionStops = useRef(new Map<string, () => void>());
   const turnStops = useRef(new Map<string, () => void>());
@@ -65,8 +68,21 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     turnKey.current.delete(turnId);
   }
 
+  // A `message` carrying a turnId this client generated is, by definition, our
+  // own — so its author is us. One learn per app run, nothing persisted, so it
+  // cannot go stale against a changed tailnet login.
+  function noteSelfAuthor(ev: AgentEvent) {
+    if (ev.type === "message" && ev.turnId && turnKey.current.has(ev.turnId)) {
+      setMe((prev) => prev ?? ev.author);
+    }
+  }
+
   function attachSessionStream(sessionId: string) {
     sessionStops.current.get(sessionId)?.();
+    // No depth reset here (review F4): the host replays the room's CURRENT
+    // queue depth as a first frame on every subscribe, exactly like presence.
+    // Zeroing the store while waiting for it would collapse "no signal yet"
+    // into "idle" and show a busy room as free to whoever just (re)connected.
     const stop = openSessionStream(agentBase, sessionId, (raw) => {
       const e = raw as { type?: string };
       if (e?.type === "stream_closed") {
@@ -89,6 +105,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       if (ev.type === "result" || ev.type === "error") {
         for (const [tid, k] of turnKey.current.entries()) if (k === sessionId) finishTurn(tid);
       }
+      noteSelfAuthor(ev);
       setStore((s) => reduceEvent(setStale(s, sessionId, false), sessionId, ev));
     });
     sessionStops.current.set(sessionId, stop);
@@ -142,23 +159,25 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
 
   async function send(key: string, text: string, files: StagedFile[]): Promise<boolean> {
     const promptText = text;
+    const turnId = crypto.randomUUID();
     let prompt = text;
     if (files.length > 0) {
       try {
         const paths: string[] = [];
         for (const f of files) paths.push(await uploadFile(agentBase, f.name, f.contentBase64));
-        prompt = `${text}\n\n[Attached files: ${paths.join(", ")}]`;
+        prompt = withAttachments(text, paths);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         setStore((s) => reduceEvent(s, key, { type: "error", message: `Upload failed: ${detail}` }));
         return false;
       }
     }
-    setStore((s) => addUserMessage(s, key, text, files.map((f) => f.name)));
+    // Optimistic: the message appears immediately with its chips, and the
+    // server's broadcast reconciles against this entry by turnId.
+    setStore((s) => addUserMessage(s, key, text, files.map((f) => f.name), turnId));
 
     const tab = storeRef.current.tabs.find((t) => t.key === key);
     const sessionId = tab?.agent.sessionId ?? undefined;
-    const turnId = crypto.randomUUID();
     turnKey.current.set(turnId, key);
     setStore((s) => bumpTurns(s, key, 1));
 
@@ -183,6 +202,7 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
       const targetKey = turnKey.current.get(turnId) ?? k;
       const hasSessionStream = sessionStops.current.has(targetKey);
       const targetTab = storeRef.current.tabs.find((t) => t.key === targetKey);
+      noteSelfAuthor(event);
       if (!hasSessionStream || targetTab?.stale || event.type === "session") {
         setStore((s) => reduceEvent(s, targetKey, event));
       }
@@ -191,7 +211,16 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     turnStops.current.set(turnId, stop);
 
     try {
-      await sendMessage(agentBase, turnId, prompt, sessionId);
+      // A draft room names its own lane so two people starting a new chat at
+      // the same moment cannot land on one another's. Omit the argument
+      // entirely (rather than pass an explicit undefined) for a resumed
+      // session send.
+      const roomKey = key.startsWith("draft:") ? key : undefined;
+      if (roomKey !== undefined) {
+        await sendMessage(agentBase, turnId, prompt, sessionId, roomKey);
+      } else {
+        await sendMessage(agentBase, turnId, prompt, sessionId);
+      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const k = turnKey.current.get(turnId) ?? key;
@@ -202,5 +231,5 @@ export function useChatSessions(agentBase: string): ChatSessionsApi {
     return true;
   }
 
-  return { store, openSession, newDraft, close, focus, send };
+  return { store, openSession, newDraft, close, focus, send, me };
 }

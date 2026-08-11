@@ -63,6 +63,7 @@ vi.mock("../src/lib/tauri", () => ({
   listSessions: vi.fn().mockResolvedValue([]),
   getOntology: vi.fn().mockResolvedValue({ nodes: [], syncedAt: null, syncError: null }),
   renameSession: vi.fn(),
+  getRoster: vi.fn().mockResolvedValue([]),
   archiveSession: vi.fn(),
 }));
 

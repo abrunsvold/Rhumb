@@ -45,11 +45,16 @@ vi.mock("../src/lib/tauri", () => ({
   }),
   renameSession: vi.fn(),
   archiveSession: vi.fn(),
+  getRoster: vi.fn().mockResolvedValue([]),
 }));
 
-function setup() {
+async function setup() {
   const onDisconnect = vi.fn();
-  render(<Workspace agentBase="http://a:8787" dashboardBase="http://d:8788" onDisconnect={onDisconnect} />);
+  // Workspace fetches the roster on mount; flush that microtask inside act()
+  // so the resulting state update doesn't leak past the test as a warning.
+  await act(async () => {
+    render(<Workspace agentBase="http://a:8787" dashboardBase="http://d:8788" onDisconnect={onDisconnect} />);
+  });
   return { onDisconnect };
 }
 
@@ -63,15 +68,15 @@ describe("Workspace shell", () => {
     vi.mocked(listSessions).mockResolvedValue([]);
   });
 
-  it("renders the sidebar tabs", () => {
-    setup();
+  it("renders the sidebar tabs", async () => {
+    await setup();
     expect(screen.getByRole("tab", { name: "SESSIONS" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "MAP" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "HOST" })).toBeTruthy();
   });
 
   it("host tab shows both hosts and Disconnect works", async () => {
-    const { onDisconnect } = setup();
+    const { onDisconnect } = await setup();
     await userEvent.click(screen.getByRole("tab", { name: "HOST" }));
     expect(screen.getByText("http://a:8787")).toBeTruthy();
     expect(screen.getByText("http://d:8788")).toBeTruthy();
@@ -80,7 +85,7 @@ describe("Workspace shell", () => {
   });
 
   it("opens with a draft chat tab ready to send", async () => {
-    setup();
+    await setup();
     expect(await screen.findByRole("tab", { name: /new session/i })).toBeTruthy();
     // getByRole("textbox") is now ambiguous with the sessions search input
     // (SessionsPanel task 3); target the composer by its placeholder instead.
@@ -89,7 +94,7 @@ describe("Workspace shell", () => {
 
   it("streams the registry and shows surfaces in the panel and canvas", async () => {
     const { openRegistryStream } = await import("../src/lib/tauri");
-    setup();
+    await setup();
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     // Surface selection now lives in the MAP sidebar tab (Task 6); the canvas
@@ -105,7 +110,7 @@ describe("Workspace shell", () => {
   });
 
   it("opens exactly one draft even if the mount effect double-fires", async () => {
-    setup();
+    await setup();
     const tabs = await screen.findAllByRole("tab", { name: /new session/i });
     expect(tabs).toHaveLength(1);
   });
@@ -116,7 +121,7 @@ describe("Workspace shell", () => {
   // only surfTabs[0], so without a fallback row every later surface is
   // registered, counted in SURFACES, and unopenable.
   it("keeps a registry surface selectable when the ontology has no node for it", async () => {
-    setup();
+    await setup();
     const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
     act(() =>
       cb({
@@ -146,7 +151,7 @@ describe("Workspace shell", () => {
     vi.mocked(getOntology)
       .mockRejectedValueOnce(new Error("agent unreachable"))
       .mockRejectedValueOnce(new Error("agent unreachable"));
-    setup();
+    await setup();
     const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
     act(() =>
       cb({
@@ -165,7 +170,7 @@ describe("Workspace shell", () => {
 
   it("shows node detail instead of the surface iframe when a non-dashboard node is selected", async () => {
     const { openRegistryStream } = await import("../src/lib/tauri");
-    setup();
+    await setup();
     const cb = (openRegistryStream as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     expect(await screen.findByText("Sales")).toBeTruthy();
@@ -186,7 +191,7 @@ describe("Workspace shell", () => {
   // Picking a surface has to drop the node selection, or the detail pane stays
   // pinned on the node and the surface the operator just clicked never shows.
   it("returns to the surface iframe when a live surface is picked after a node", async () => {
-    setup();
+    await setup();
     const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
     await screen.findByText("Sales");
@@ -205,7 +210,7 @@ describe("Workspace shell", () => {
   // list and what each track holds — a wordmark plus a telemetry string is
   // equally true of a single-column stack.
   it("lays out the top bar, three columns, and the telemetry bar", async () => {
-    setup();
+    await setup();
     expect(screen.getByText("RHUMB")).toBeTruthy(); // top row
     expect(await screen.findByText("QUEUE clear")).toBeTruthy(); // bottom row
     await screen.findByPlaceholderText(/reply, or ask for something new/i);
@@ -250,7 +255,7 @@ describe("Workspace shell", () => {
       lastActiveAt: "2026-07-02T00:00:00Z", preview: "spool 3", archived: false,
     };
     vi.mocked(listSessions).mockResolvedValue([meta]);
-    setup();
+    await setup();
 
     const rows = await screen.findAllByRole("button", { name: /printer digest/i });
     await userEvent.click(rows.find((b) => !b.getAttribute("aria-label"))!);
@@ -281,7 +286,7 @@ describe("Workspace shell", () => {
   // dashboard node's title to its own id — so the surface header read "x1"
   // where the operator published "Quarterly Sales".
   it("ends the surface breadcrumb with the registry title, not the ontology node title", async () => {
-    setup();
+    await setup();
     const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "x1", title: "Quarterly Sales", url: "/surfaces/x1/", kind: "file", created: "", updated: "" }] }));
 
@@ -296,7 +301,7 @@ describe("Workspace shell", () => {
   // was published since the last sync — the breadcrumb must still name what is
   // on screen instead of rendering an empty strip.
   it("names the surface in the breadcrumb even when the ontology knows nothing about it", async () => {
-    setup();
+    await setup();
     const cb = vi.mocked(openRegistryStream).mock.calls.at(-1)![1];
     act(() => cb({ surfaces: [{ id: "zz", title: "Spool log", url: "/surfaces/zz/", kind: "file", created: "", updated: "" }] }));
 
@@ -309,7 +314,7 @@ describe("Workspace shell", () => {
     // `null` — it is assigned from inside the stream mock.
     const emit: { registry?: Parameters<typeof openRegistryStream>[1] } = {};
     vi.mocked(openRegistryStream).mockImplementation((_b, cb) => { emit.registry = cb; return () => {}; });
-    setup();
+    await setup();
     act(() => {
       emit.registry?.({ surfaces: [{ id: "x1", title: "Sales", url: "/s/x1", kind: "table", created: "", updated: "" }] });
     });
@@ -324,7 +329,7 @@ describe("Workspace shell", () => {
   // refresh control reaching back into Workspace. Without it an operator has to
   // restart the app to pick up a changed ontology.
   it("re-fetches the ontology from the map refresh control", async () => {
-    setup();
+    await setup();
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     // Opening the tab is itself a re-fetch (pinned below). Let it settle and
@@ -342,7 +347,7 @@ describe("Workspace shell", () => {
   // screen saying so — Refresh compensates for stale node properties, not for
   // a surface being unreachable.
   it("re-fetches the ontology every time the MAP tab is opened", async () => {
-    setup();
+    await setup();
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
@@ -358,7 +363,7 @@ describe("Workspace shell", () => {
   // to recover on its own.
   it("recovers a map left empty by a failed mount fetch when MAP is opened", async () => {
     vi.mocked(getOntology).mockRejectedValueOnce(new Error("agent unreachable"));
-    setup();
+    await setup();
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
     expect(await screen.findByRole("button", { name: /printer-api/i })).toBeTruthy();
@@ -371,7 +376,7 @@ describe("Workspace shell", () => {
     vi.mocked(getOntology).mockImplementationOnce(
       () => new Promise<OntologySnapshot>((res) => { held.release = res; }),
     );
-    setup();
+    await setup();
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(1));
 
     await userEvent.click(screen.getByRole("tab", { name: "MAP" }));
@@ -389,7 +394,7 @@ describe("Workspace shell", () => {
   // an affirmative claim that the map is empty, which the client cannot
   // support — the honest report is the last successful sync plus a named error.
   it("keeps the last good ontology when a refresh fails, and names the error", async () => {
-    setup();
+    await setup();
     await waitFor(() => expect(screen.getByText(/NODES/).textContent).toBe("NODES 2"));
 
     // Opening MAP re-fetches, so the rejection is armed AFTER the tab is open;
@@ -427,7 +432,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
 
   it("renders a pending write in the transcript and resolves it in place", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
 
     expect(await screen.findByText("Update rows in printers.jobs")).toBeTruthy();
@@ -442,7 +447,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
 
   it("grants trust only when an approval carries it", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
     await screen.findByText("Update rows in printers.jobs");
 
@@ -459,7 +464,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
   // A denial must never grant trust: the checkbox qualifies an approval only.
   it("never grants trust on a denial, even with the box checked", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
     await screen.findByText("Update rows in printers.jobs");
 
@@ -476,7 +481,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
   it("keeps the pending on screen when the host rejects the resolve", async () => {
     const emit = captureStreams();
     vi.mocked(resolvePending).mockRejectedValueOnce(new Error("host unreachable"));
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
     await screen.findByText("Update rows in printers.jobs");
 
@@ -488,7 +493,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
 
   it("resolves an infra action with no trust concept at all", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => {
       emit.infra?.({
         type: "added",
@@ -509,7 +514,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
   // stops drawing is a write nobody can approve or deny.
   it("keeps the queue reachable after the last chat tab is closed", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
     expect(await screen.findByText("Update rows in printers.jobs")).toBeTruthy();
 
@@ -533,7 +538,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
   // resolves, which would grant standing trust on an op nobody saw.
   it("does not carry a ticked trust box from one pending onto the next", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => {
       emit.data?.(dataWrite({ kind: "update", table: "jobs" }, "p1"));
       emit.data?.(dataWrite({ kind: "update", table: "spools" }, "p2"));
@@ -563,7 +568,7 @@ describe("Workspace approvals (inline in the transcript)", () => {
   // is looking at another sidebar tab or has scrolled past the card.
   it("reports the held queue count in the telemetry bar and clears it on resolve", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     expect(await screen.findByText("QUEUE clear")).toBeTruthy();
 
     act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" }, "p1")); });
@@ -577,9 +582,59 @@ describe("Workspace approvals (inline in the transcript)", () => {
     await waitFor(() => expect(screen.getByText("QUEUE 1 held")).toBeTruthy());
   });
 
+  // Everyone in the room sees the same card, so the host can answer a resolve
+  // with 409 naming whoever decided first. The card is spent (not retryable),
+  // the outcome names the winner, and the wire's internal status name
+  // ("executing"/"executed") is mapped to plain wording, never echoed.
+  it("reports who decided first on a 409 and drops the card", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "zoe@example.com", decision: "executing",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already approved by zoe@example.com.")).toBeTruthy());
+    expect(screen.queryByText(/executing/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByText(/^Approved/)).toBeNull();
+  });
+
+  it("reports a 409 denial as denied, naming an unknown winner gracefully", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "", decision: "denied",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already denied by someone else.")).toBeTruthy());
+  });
+
+  // Review F7, client half: a loser whose approve carried the trust box must
+  // not be told a grant happened — their approval never did.
+  it("claims no trust grant when a trust-carrying approve loses the race", async () => {
+    const emit = captureStreams();
+    vi.mocked(resolvePending).mockResolvedValueOnce({
+      error: "already resolved", by: "zoe@example.com", decision: "executed",
+    });
+    await setup();
+    act(() => { emit.data?.(dataWrite({ kind: "update", table: "jobs" })); });
+    await screen.findByText("Update rows in printers.jobs");
+
+    await userEvent.click(screen.getByLabelText(/Trust this surface/));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByText("Already approved by zoe@example.com.")).toBeTruthy());
+    expect(screen.queryByText(/trusted/i)).toBeNull();
+  });
+
   it("offers no trust checkbox for a delete and says why", async () => {
     const emit = captureStreams();
-    setup();
+    await setup();
     act(() => { emit.data?.(dataWrite({ kind: "delete", table: "jobs" }, "p9")); });
 
     expect(await screen.findByText("Delete rows from printers.jobs")).toBeTruthy();

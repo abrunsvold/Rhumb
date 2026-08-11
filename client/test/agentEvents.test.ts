@@ -91,3 +91,101 @@ describe("user messages and slash commands", () => {
     expect(s.slashCommands).toEqual(["/compact", "/cost", "/review"]);
   });
 });
+
+describe("message reconciliation", () => {
+  it("reconciles the sender's optimistic entry instead of appending a duplicate", () => {
+    const optimistic = appendUserMessage(initialAgentState, "hello", ["a.png"], "turn-1");
+    const next = reduceAgent(optimistic, {
+      type: "message",
+      author: "op@example.com",
+      text: "hello\n\n[Attached files: /w/uploads/a.png]",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-1",
+    });
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0].author).toBe("op@example.com");
+    // Local text and chips win: the wire text is the prompt, with the paths appended.
+    expect(next.messages[0].text).toBe("hello");
+    expect(next.messages[0].attachments).toEqual(["a.png"]);
+  });
+
+  it("is idempotent when the same message arrives twice", () => {
+    const optimistic = appendUserMessage(initialAgentState, "hello", undefined, "turn-1");
+    const event = {
+      type: "message" as const,
+      author: "op@example.com",
+      text: "hello",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-1",
+    };
+    const next = reduceAgent(reduceAgent(optimistic, event), event);
+    expect(next.messages).toHaveLength(1);
+  });
+
+  it("appends a message whose turnId it does not own", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "what about the poller?",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-zoe",
+    });
+    expect(next.messages).toEqual([
+      {
+        kind: "user",
+        text: "what about the poller?",
+        author: "zoe@example.com",
+        id: "turn-zoe",
+      },
+    ]);
+  });
+
+  it("renders another person's attachments as chips, not a raw path line", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "see this\n\n[Attached files: /w/uploads/z.png]",
+      ts: "2026-08-05T00:00:00Z",
+      turnId: "turn-zoe",
+    });
+    expect(next.messages[0].text).toBe("see this");
+    expect(next.messages[0].attachments).toEqual(["/w/uploads/z.png"]);
+  });
+
+  it("appends a message with no turnId", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "message",
+      author: "zoe@example.com",
+      text: "no turn id",
+      ts: "2026-08-05T00:00:00Z",
+    });
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0].id).toBeUndefined();
+  });
+});
+
+describe("room state", () => {
+  it("starts with nobody present and an empty queue", () => {
+    expect(initialAgentState.presence).toEqual([]);
+    expect(initialAgentState.queueDepth).toBe(0);
+  });
+
+  it("reduces a presence event into per-session state", () => {
+    const next = reduceAgent(initialAgentState, {
+      type: "presence",
+      logins: ["op@example.com", "zoe@example.com"],
+    });
+    expect(next.presence).toEqual(["op@example.com", "zoe@example.com"]);
+  });
+
+  it("reduces a queue event into per-session state", () => {
+    const next = reduceAgent(initialAgentState, { type: "queue", depth: 2 });
+    expect(next.queueDepth).toBe(2);
+  });
+
+  it("leaves messages untouched when reducing room state", () => {
+    const seeded = { ...initialAgentState, messages: [{ kind: "text" as const, text: "hi" }] };
+    expect(reduceAgent(seeded, { type: "queue", depth: 1 }).messages).toBe(seeded.messages);
+  });
+});

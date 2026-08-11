@@ -79,3 +79,42 @@ describe("PendingQueue", () => {
     expect(events).toEqual(["added", "resolved"]);
   });
 });
+
+describe("audit actor", () => {
+  it("records the approver on an approved write", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-actor-"));
+    const auditPath = join(dir, "audit.jsonl");
+    const executor = { run: async () => ({ rows: [], rowCount: 1 }) };
+
+    await executeWrite(
+      { getExecutor: () => executor, auditPath, now: () => "2026-08-04T00:00:00Z", id: () => "w1" },
+      "printers",
+      { kind: "insert", table: "spools", values: { name: "x" } },
+      "filament-spools",
+      "approval",
+      "op@example.com",
+    );
+
+    const entry = JSON.parse(readFileSync(auditPath, "utf8").trim());
+    expect(entry.auth).toBe("approval");
+    expect(entry.actor).toBe("op@example.com");
+  });
+
+  it("leaves actor unset on a trust-path write", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rhumb-actor-"));
+    const auditPath = join(dir, "audit.jsonl");
+    const executor = { run: async () => ({ rows: [], rowCount: 1 }) };
+
+    await executeWrite(
+      { getExecutor: () => executor, auditPath, now: () => "2026-08-04T00:00:00Z", id: () => "w1" },
+      "printers",
+      { kind: "insert", table: "spools", values: { name: "x" } },
+      "filament-spools",
+      "trust",
+    );
+
+    const entry = JSON.parse(readFileSync(auditPath, "utf8").trim());
+    expect(entry.auth).toBe("trust");
+    expect(entry.actor).toBeUndefined();
+  });
+});

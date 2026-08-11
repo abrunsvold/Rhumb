@@ -4,6 +4,13 @@ import { dirname } from "node:path";
 export interface TrustPair {
   source: string;
   surfaceId: string;
+  // Who created this standing rule, and when (review F3). In a shared room a
+  // grant auto-executes OTHER people's future writes, so "someone trusted this
+  // surface" has to answer who. Optional: pairs written before attribution
+  // existed stay valid — a missing granter reads as "unknown, pre-rooms",
+  // never as a reason to drop the grant.
+  grantedBy?: string;
+  grantedAt?: string;
 }
 
 export function loadTrust(path: string): TrustPair[] {

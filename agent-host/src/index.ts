@@ -34,6 +34,7 @@ import {
   preAllowedFleetToolNames,
 } from "./fleet/server.js";
 import { createInfraRouter } from "./infra/router.js";
+import { readActorLogin } from "./identity.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
 import { createSshExec } from "./services/ssh.js";
@@ -789,8 +790,9 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     app.use("/infra", express.json(), createInfraRouter({
       pending: infraPending,
       executeParked,
-      auditResolution: (a, decision) =>
-        appendInfraAudit(infra.auditPath, { ts: new Date().toISOString(), tool: `mcp__infra__${a.tool}`, input: a.input, decision }),
+      actorOf: (req) => readActorLogin(req, deps.config.insecureDev),
+      auditResolution: (a, decision, actor) =>
+        appendInfraAudit(infra.auditPath, { ts: new Date().toISOString(), tool: `mcp__infra__${a.tool}`, input: a.input, decision, actor: actor || undefined }),
     }));
   }
   app.use("/ontology", createOntologyRouter({ ops: ontologyOps, refresh: refreshExternal }));

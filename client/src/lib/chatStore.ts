@@ -74,9 +74,11 @@ export function addUserMessage(
   key: string,
   text: string,
   attachments?: string[],
+  id?: string,
 ): ChatStore {
-  return mapTab(s, key, (t) => ({ ...t, agent: appendUserMessage(t.agent, text, attachments) }));
+  return mapTab(s, key, (t) => ({ ...t, agent: appendUserMessage(t.agent, text, attachments, id) }));
 }
+
 
 export function bumpTurns(s: ChatStore, key: string, delta: 1 | -1): ChatStore {
   return mapTab(s, key, (t) => ({ ...t, openTurns: Math.max(0, t.openTurns + delta) }));

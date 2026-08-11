@@ -1,4 +1,5 @@
 import type { AgentEvent } from "./types";
+import { splitAttachments } from "./attachments";
 
 export interface TranscriptMessage {
   kind: "text" | "result" | "error" | "tool" | "user";
@@ -6,23 +7,44 @@ export interface TranscriptMessage {
   toolName?: string;
   toolInput?: unknown;
   attachments?: string[];
-  // Optional stable identifier for list rendering. Nothing populates this
-  // yet — reducer reshaping to assign ids is out of scope here — so
-  // consumers fall back to index (`m.id ?? i`), matching current behavior.
+  // Stable identifier for list rendering. User messages carry the turnId that
+  // produced them, which is also what reconciles the sender's optimistic entry
+  // against the server's broadcast; agent output carries none, so consumers
+  // still fall back to index (`m.id ?? i`).
   id?: string;
+  // Sender login for user messages in a shared room. Rendering lands in plan 2.
+  author?: string;
 }
 
 export interface AgentState {
   sessionId: string | null;
   slashCommands: string[];
   messages: TranscriptMessage[];
+  // Room state, per session, fed by the session stream.
+  presence: string[];
+  queueDepth: number;
 }
 
-export const initialAgentState: AgentState = { sessionId: null, slashCommands: [], messages: [] };
+export const initialAgentState: AgentState = {
+  sessionId: null,
+  slashCommands: [],
+  messages: [],
+  presence: [],
+  queueDepth: 0,
+};
 
-export function appendUserMessage(state: AgentState, text: string, attachments?: string[]): AgentState {
-  const msg: TranscriptMessage =
-    attachments && attachments.length > 0 ? { kind: "user", text, attachments } : { kind: "user", text };
+export function appendUserMessage(
+  state: AgentState,
+  text: string,
+  attachments?: string[],
+  id?: string,
+): AgentState {
+  const msg: TranscriptMessage = {
+    kind: "user",
+    text,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+    ...(id ? { id } : {}),
+  };
   return { ...state, messages: [...state.messages, msg] };
 }
 
@@ -73,6 +95,43 @@ export function reduceAgent(state: AgentState, event: AgentEvent): AgentState {
       const extracted = extractFromRaw(event.message);
       if (extracted.length === 0) return state;
       return { ...state, messages: [...state.messages, ...extracted] };
+    }
+    case "presence":
+      return { ...state, presence: event.logins };
+    case "queue":
+      return { ...state, queueDepth: event.depth };
+    case "message": {
+      // Upsert, not append. The sender receives its own message on both the
+      // turn stream and the session stream, and it already rendered an
+      // optimistic entry under this turnId.
+      const idx = event.turnId
+        ? state.messages.findIndex((m) => m.id === event.turnId)
+        : -1;
+      if (idx !== -1) {
+        // Adopt only the author. The wire text is the prompt, which has the
+        // attachment paths appended — taking it would replace the sender's
+        // chips with a raw path line.
+        const messages = state.messages.slice();
+        messages[idx] = { ...messages[idx], author: event.author };
+        return { ...state, messages };
+      }
+      const { text, attachments } = splitAttachments(event.text);
+      const msg: TranscriptMessage = {
+        kind: "user",
+        text,
+        author: event.author,
+        ...(event.turnId ? { id: event.turnId } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      };
+      return { ...state, messages: [...state.messages, msg] };
+    }
+    default: {
+      // Still fails the build if a future AgentEvent variant goes unhandled —
+      // but never returns undefined at runtime, so a client older than the
+      // host ignores unknown events instead of crashing the tab.
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return state;
     }
   }
 }

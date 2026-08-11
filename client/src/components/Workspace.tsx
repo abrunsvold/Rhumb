@@ -19,10 +19,12 @@ import { summarizeOp, isDelete } from "../lib/opSummary";
 import {
   openRegistryStream,
   getOntology,
+  getRoster,
   openPendingStream,
   openInfraPendingStream,
   resolvePending,
   resolveInfraPending,
+  type RosterEntry,
 } from "../lib/tauri";
 import { buildLineage, buildSurfaceLineage } from "../lib/lineage";
 import type { OntologySnapshot } from "../lib/types";
@@ -41,6 +43,10 @@ export function Workspace({
   const active = chat.store.tabs.find((t) => t.key === chat.store.activeKey) ?? null;
   const [surfTabs, setSurfTabs] = useState<Tab[]>([]);
   const [activeSurf, setActiveSurf] = useState<string | null>(null);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  useEffect(() => {
+    getRoster(agentBase).then(setRoster).catch(() => setRoster([]));
+  }, [agentBase]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   // The ontology snapshot is owned here, not in OntologyPanel: the MAP tree,
   // the SurfaceFrame breadcrumb and the telemetry counts all read it, and a
@@ -103,12 +109,13 @@ export function Workspace({
     // standing insert/update grant for the surface. Duplicated here for the
     // same reason the surfaceId half of the invariant is duplicated below.
     const grantTrust = decision === "approve" && trust && !isDelete(item);
+    let conflict: Awaited<ReturnType<typeof resolvePending>> = null;
     try {
       if (item.origin === "data") {
-        await resolvePending(dashboardBase, item.pendingId, decision, grantTrust);
+        conflict = await resolvePending(dashboardBase, item.pendingId, decision, grantTrust);
       } else {
         // Infra actions have no trust concept: there is no fourth argument.
-        await resolveInfraPending(agentBase, item.pendingId, decision);
+        conflict = await resolveInfraPending(agentBase, item.pendingId, decision);
       }
     } catch (err) {
       // The host never confirmed the decision, so the item stays in `pending`
@@ -116,6 +123,20 @@ export function Workspace({
       // vanish from the operator's view while still queued server-side.
       const detail = err instanceof Error ? err.message : String(err);
       setResolved((r) => [...r, { pendingId: item.pendingId, summary, outcome: `Could not resolve — ${detail}` }]);
+      return;
+    }
+    if (conflict) {
+      // Everyone in the room sees the same card, so someone else may have
+      // decided between this card rendering and this click. The host answered
+      // 409 naming the winner: the DECISION stood, just not this user's — so
+      // the card is spent, not retryable, and any trust intent this user had
+      // is dropped (their approval never happened; a standing grant needs one).
+      // The host's decision field is an internal status name ("executing",
+      // "executed", "failed"...) — map it to plain wording, never echo it.
+      const who = conflict.by || "someone else";
+      const what = conflict.decision === "denied" ? "denied" : "approved";
+      setResolved((r) => [...r, { pendingId: item.pendingId, summary, outcome: `Already ${what} by ${who}.` }]);
+      setPending((p) => p.filter((x) => x.pendingId !== item.pendingId));
       return;
     }
     const outcome =
@@ -228,6 +249,8 @@ export function Workspace({
             <AgentPanel
               tab={active}
               slashCommands={active.agent.slashCommands}
+              roster={roster}
+              me={chat.me}
               onSend={(text, files) => chat.send(active.key, text, files)}
               pending={pending}
               resolved={resolved}
@@ -271,6 +294,11 @@ export function Workspace({
         nodes={ontology ? ontology.nodes : null}
         queued={pending.length}
         syncedAt={ontology?.syncedAt ?? null}
+        // Room state for the ACTIVE session only — the bar tracks whichever
+        // conversation the operator is looking at, like the TopBar title.
+        presence={active?.agent.presence ?? []}
+        turnDepth={active?.agent.queueDepth ?? 0}
+        roster={roster}
       />
     </div>
   );

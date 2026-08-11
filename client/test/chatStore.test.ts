@@ -61,3 +61,26 @@ describe("chatStore", () => {
     expect(s.tabs[0].stale).toBe(true);
   });
 });
+
+describe("room store helpers", () => {
+  it("stamps the turn id onto the optimistic user message", () => {
+    const s = openTab(emptyStore, "s1", "t");
+    const next = addUserMessage(s, "s1", "hello", ["a.png"], "turn-1");
+    expect(next.tabs[0].agent.messages[0]).toEqual({
+      kind: "user",
+      text: "hello",
+      attachments: ["a.png"],
+      id: "turn-1",
+    });
+  });
+
+  // Review F4: the host replays the room's current depth on subscribe, so a
+  // (re)connecting client trusts the wire instead of zeroing its own state —
+  // the replayed frame lands through the ordinary queue reducer.
+  it("adopts a replayed queue depth through the ordinary reducer", () => {
+    let s = openTab(emptyStore, "s1", "t");
+    s = reduceEvent(s, "s1", { type: "queue", depth: 3 });
+    s = reduceEvent(s, "s1", { type: "queue", depth: 1 });
+    expect(s.tabs[0].agent.queueDepth).toBe(1);
+  });
+});

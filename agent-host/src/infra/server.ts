@@ -39,7 +39,7 @@ export function makeCanUseTool(
         message: `Queued for operator approval as ${action.pendingId}. It will execute only if the operator approves — do not retry; note the proposal in your report.`,
       };
     }
-    const { decision } = deps.pending.enqueue(gatedTool, input);
+    const { action, decision } = deps.pending.enqueue(gatedTool, input);
     let d: "approve" | "deny";
     try {
       d = await decision;
@@ -47,7 +47,11 @@ export function makeCanUseTool(
       appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input, decision: "error", error: String(e) });
       return { behavior: "deny", message: "Infrastructure action could not be confirmed." };
     }
-    appendInfraAudit(deps.auditPath, { ts: deps.now(), tool: toolName, input, decision: d === "approve" ? "approved" : "denied" });
+    appendInfraAudit(deps.auditPath, {
+      ts: deps.now(), tool: toolName, input,
+      decision: d === "approve" ? "approved" : "denied",
+      actor: deps.pending.get(action.pendingId)?.resolvedBy,
+    });
     return d === "approve"
       ? { behavior: "allow", updatedInput: input }
       : { behavior: "deny", message: "Operator denied this infrastructure action." };
