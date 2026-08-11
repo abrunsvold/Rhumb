@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApprovalCard, ApprovalQueue } from "../src/components/ApprovalCard";
 import type { PendingItem } from "../src/lib/pendingStore";
@@ -95,6 +95,47 @@ describe("ApprovalCard", () => {
   it("names an infra group by the same summary it displays", () => {
     render(<ApprovalCard item={infra} onResolve={vi.fn()} />);
     expect(screen.getByRole("group", { name: "Run grow_disk" })).toBeTruthy();
+  });
+
+  // Workspace's resolve is async and the card stays mounted until it settles.
+  // Without an in-flight guard a double-click issues two resolve calls: the
+  // host 500s the second (the pending is already resolved) and the transcript
+  // records both "Approved…" and "Could not resolve…" for the same write.
+  it("issues exactly one resolve for a double-activated Approve", async () => {
+    let release!: () => void;
+    const onResolve = vi.fn(() => new Promise<void>((r) => (release = () => r())));
+    render(<ApprovalCard item={write} onResolve={onResolve} />);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await userEvent.click(approve);
+    await userEvent.click(approve);
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    release();
+  });
+
+  it("blocks Not yet while an Approve is in flight (and vice versa)", async () => {
+    let release!: () => void;
+    const onResolve = vi.fn(() => new Promise<void>((r) => (release = () => r())));
+    render(<ApprovalCard item={write} onResolve={onResolve} />);
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await userEvent.click(screen.getByRole("button", { name: "Not yet" }));
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith("approve", false);
+    release();
+  });
+
+  // A failed resolve leaves the pending in place (Workspace keeps it for
+  // retry), so the card must re-enable once the attempt settles.
+  it("re-enables the buttons after the resolve settles", async () => {
+    let release!: () => void;
+    const onResolve = vi.fn(() => new Promise<void>((r) => (release = () => r())));
+    render(<ApprovalCard item={write} onResolve={onResolve} />);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await userEvent.click(approve);
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => release());
+    expect((approve as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(approve);
+    expect(onResolve).toHaveBeenCalledTimes(2);
   });
 });
 

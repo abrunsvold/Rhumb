@@ -14,7 +14,9 @@ export function ApprovalQueue({
 }: {
   pending: PendingItem[];
   resolved: ResolvedItem[];
-  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
+  // May return a promise: ApprovalCard awaits it to keep its buttons disabled
+  // for exactly as long as the resolve round-trip is in flight.
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void | Promise<void>;
 }) {
   return (
     // A pending write arrives unannounced — the operator may be typing in the
@@ -58,10 +60,26 @@ export function ApprovalCard({
   onResolve,
 }: {
   item: PendingItem;
-  onResolve: (decision: "approve" | "deny", trust: boolean) => void;
+  onResolve: (decision: "approve" | "deny", trust: boolean) => void | Promise<void>;
 }) {
   const [trust, setTrust] = useState(false);
   const [open, setOpen] = useState(false);
+  // The resolve round-trip is async and this card stays mounted until it
+  // settles. Without this guard a double-click issues two resolve calls for
+  // the same pendingId: the host 500s the second (the pending is already
+  // resolved) and the transcript records both "Approved…" and "Could not
+  // resolve…" for one write. Cleared in `finally` because a FAILED resolve
+  // leaves the pending in place for retry — the card must come back to life.
+  const [busy, setBusy] = useState(false);
+  async function decide(decision: "approve" | "deny", trustFlag: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onResolve(decision, trustFlag);
+    } finally {
+      setBusy(false);
+    }
+  }
   // Infra actions have no trust concept at all, and the server re-gates a
   // DELETE even on a trusted surface — so neither may offer the checkbox.
   const trustable = item.origin === "data" && !!item.surfaceId && !isDelete(item);
@@ -96,14 +114,16 @@ export function ApprovalCard({
       )}
       <div className="flex flex-wrap items-center gap-3.5">
         <button
-          onClick={() => onResolve("approve", trust)}
-          className="flex-none whitespace-nowrap rounded-sm bg-accent px-4 py-2.5 text-[13px] text-bg"
+          onClick={() => void decide("approve", trust)}
+          disabled={busy}
+          className="flex-none whitespace-nowrap rounded-sm bg-accent px-4 py-2.5 text-[13px] text-bg disabled:opacity-40"
         >
           Approve
         </button>
         <button
-          onClick={() => onResolve("deny", false)}
-          className="flex-none whitespace-nowrap rounded-sm border border-line-strong px-4 py-2.5 text-[13px] text-muted"
+          onClick={() => void decide("deny", false)}
+          disabled={busy}
+          className="flex-none whitespace-nowrap rounded-sm border border-line-strong px-4 py-2.5 text-[13px] text-muted disabled:opacity-40"
         >
           Not yet
         </button>

@@ -16,7 +16,7 @@ export function AgentPanel({
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
   pending: PendingItem[];
   resolved: ResolvedItem[];
-  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void | Promise<void>;
 }) {
   return (
     <div className="flex h-full flex-col bg-panel">
