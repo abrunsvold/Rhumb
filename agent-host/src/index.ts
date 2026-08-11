@@ -27,7 +27,12 @@ import { createGatedExecutor } from "./infra/executor.js";
 import { appendInfraAudit } from "./infra/audit.js";
 import type { GatedTool, PendingAction } from "./infra/types.js";
 import { createFleetOps, type FleetTask, type SpawnContext } from "./fleet/ops.js";
-import { createFleetServer, FLEET_TOOL_NAMES, GATED_FLEET_TOOL_NAMES } from "./fleet/server.js";
+import {
+  createFleetServer,
+  FLEET_TOOL_NAMES,
+  GATED_FLEET_TOOL_NAMES,
+  preAllowedFleetToolNames,
+} from "./fleet/server.js";
 import { createInfraRouter } from "./infra/router.js";
 import { loadServiceConfig } from "./services/config.js";
 import { createLxcClient } from "./services/lxc.js";
@@ -649,10 +654,12 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     };
     // Only the read-only tools are pre-allowed; `spawn` is left out on
     // purpose so it falls through to canUseTool above — the same shape
-    // READ_TOOL_NAMES/GATED_TOOLS give the infra server.
+    // READ_TOOL_NAMES/GATED_TOOLS give the infra server. The exclusion
+    // itself lives in preAllowedFleetToolNames (server.ts) where a test
+    // pins it — see that function's doc comment.
     sessionExtraOptions.allowedTools = [
       ...((sessionExtraOptions.allowedTools as string[]) ?? []),
-      ...FLEET_TOOL_NAMES.filter((n) => !GATED_FLEET_TOOL_NAMES.has(n)),
+      ...preAllowedFleetToolNames(),
     ];
   }
 

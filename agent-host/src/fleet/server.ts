@@ -15,6 +15,16 @@ export const FLEET_TOOL_NAMES = [
  *  well-presented decision on the action that actually matters. */
 export const GATED_FLEET_TOOL_NAMES: ReadonlySet<string> = new Set(["mcp__fleet__spawn"]);
 
+/** The fleet tools buildApp pre-allows on the SDK's `allowedTools` list —
+ *  every fleet tool EXCEPT the gated ones. A pre-allowed tool is approved by
+ *  the SDK without ever consulting `canUseTool`, so `spawn` must be absent:
+ *  listing it here would silently remove the operator gate. Exported (rather
+ *  than inlined at the registration site) so `test/fleet-server.test.ts` can
+ *  pin the exclusion — deleting the filter goes red there. */
+export function preAllowedFleetToolNames(): string[] {
+  return FLEET_TOOL_NAMES.filter((n) => !GATED_FLEET_TOOL_NAMES.has(n));
+}
+
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true as const });
 

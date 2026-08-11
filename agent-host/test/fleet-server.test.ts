@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { FLEET_TOOL_NAMES, GATED_FLEET_TOOL_NAMES, createFleetServer } from "../src/fleet/server.js";
+import {
+  FLEET_TOOL_NAMES,
+  GATED_FLEET_TOOL_NAMES,
+  createFleetServer,
+  preAllowedFleetToolNames,
+} from "../src/fleet/server.js";
 import type { FleetOps, SpawnContext } from "../src/fleet/ops.js";
 
 const noopOps: FleetOps = {
@@ -44,6 +49,16 @@ describe("fleet server", () => {
     expect(GATED_FLEET_TOOL_NAMES.has("mcp__fleet__spawn")).toBe(true);
     expect(GATED_FLEET_TOOL_NAMES.has("mcp__fleet__check")).toBe(false);
     expect(GATED_FLEET_TOOL_NAMES.has("mcp__fleet__collect")).toBe(false);
+  });
+
+  // Review test-gap: buildApp pre-allows exactly this list on the SDK's
+  // allowedTools. `spawn` MUST be absent — a pre-allowed tool is approved by
+  // the SDK without ever consulting canUseTool, so listing spawn here would
+  // silently remove the operator gate while every other test stayed green.
+  // Deleting the filter inside preAllowedFleetToolNames turns this red.
+  it("pre-allows ONLY the ungated fleet tools — spawn must fall through to the operator gate", () => {
+    expect([...preAllowedFleetToolNames()].sort()).toEqual(["mcp__fleet__check", "mcp__fleet__collect"]);
+    expect(preAllowedFleetToolNames()).not.toContain("mcp__fleet__spawn");
   });
 
   it("constructs without touching ops", () => {
