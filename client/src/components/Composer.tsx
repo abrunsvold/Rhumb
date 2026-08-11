@@ -22,11 +22,9 @@ function fileToBase64(file: File): Promise<string> {
 export function Composer({
   slashCommands,
   onSend,
-  contextLabel,
 }: {
   slashCommands: string[];
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
-  contextLabel?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<StagedFile[]>([]);
@@ -161,7 +159,11 @@ export function Composer({
         </label>
         <span className="text-[11.5px] text-faint">/ for commands</span>
         <div className="flex-1" />
-        {draft.trim().length > 0 || files.length > 0 ? (
+        {/* The design mock shows a context-usage label ("18.4k of 200k
+            context") in this slot when the draft is empty. The host exposes no
+            such figure, so — like the permission-mode chip and the capability
+            badge — nothing renders here rather than a fabricated number. */}
+        {(draft.trim().length > 0 || files.length > 0) && (
           <button
             onClick={() => void submit()}
             disabled={sending}
@@ -170,8 +172,6 @@ export function Composer({
             {sending ? "Sending…" : "Send"}
             <span className="mn text-faint" aria-hidden>⏎</span>
           </button>
-        ) : (
-          contextLabel && <span className="text-[11.5px] text-faint">{contextLabel}</span>
         )}
       </div>
     </div>

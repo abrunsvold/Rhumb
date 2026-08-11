@@ -124,9 +124,4 @@ describe("Composer", () => {
     await userEvent.type(screen.getByRole("textbox"), "hi");
     expect(screen.getByRole("button", { name: /Send/ })).toBeTruthy();
   });
-
-  it("shows a context label when one is given and the draft is empty", () => {
-    render(<Composer slashCommands={[]} onSend={vi.fn()} contextLabel="18.4k of 200k context" />);
-    expect(screen.getByText("18.4k of 200k context")).toBeTruthy();
-  });
 });
