@@ -85,12 +85,13 @@ export function Transcript({
   busy: boolean;
   pending: PendingItem[];
   resolved: ResolvedItem[];
-  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void;
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void | Promise<void>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const prevLen = useRef(messages.length);
+  const prevPending = useRef(pending.length);
 
   function atBottom(el: HTMLDivElement): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -118,10 +119,15 @@ export function Transcript({
     if (!el) return;
     if (stickToBottom.current) {
       el.scrollTop = el.scrollHeight;
-    } else if (messages.length > prevLen.current) {
+    } else if (messages.length > prevLen.current || pending.length > prevPending.current) {
+      // A new approval card is appended below the fold exactly like a new
+      // message, and the modal it replaced was unmissable — so it raises the
+      // same pill. Tracked as its own ref rather than a combined length: a
+      // pending resolving (-1) while a message arrives (+1) must still pill.
       setShowJump(true);
     }
     prevLen.current = messages.length;
+    prevPending.current = pending.length;
   }, [messages, busy, pending.length, resolved.length]);
 
   return (

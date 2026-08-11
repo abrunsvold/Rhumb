@@ -224,4 +224,27 @@ describe("Transcript", () => {
     render(<Transcript {...noApprovals} messages={[]} busy />);
     expect(screen.getByText("Working…")).toBeTruthy();
   });
+
+  // The modal this queue replaced was unmissable; an inline card appended
+  // below the fold is not. A pending arriving while the operator is scrolled
+  // up must raise the same jump pill a new message does — the effect already
+  // re-runs on pending.length, but the pill condition only watched messages.
+  it("shows the jump pill when a pending approval arrives while scrolled up", () => {
+    const one: TranscriptMessage[] = [{ kind: "text", text: "first" }];
+    const { rerender, getByTestId, queryByTestId } = render(
+      <Transcript {...noApprovals} messages={one} busy={false} />,
+    );
+    const container = getByTestId("transcript");
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 300, scrollTop: 0 });
+    fireEvent.wheel(container);
+    expect(queryByTestId("jump-latest")).toBeNull();
+
+    const pending: PendingItem[] = [
+      { origin: "data", pendingId: "p1", source: "printers", op: { kind: "update", table: "jobs" }, surfaceId: "farm" },
+    ];
+    rerender(<Transcript messages={one} busy={false} pending={pending} resolved={[]} onResolve={() => {}} />);
+
+    expect(container.scrollTop).toBe(0); // still not auto-scrolled…
+    expect(queryByTestId("jump-latest")).toBeTruthy(); // …but now signposted
+  });
 });
