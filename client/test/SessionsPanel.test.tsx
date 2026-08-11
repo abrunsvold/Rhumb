@@ -161,6 +161,15 @@ describe("groupSessions", () => {
     expect(groups[0].label).toBe("Previous 30 days");
   });
 
+  // NaN comparisons are all false, so an unparseable timestamp used to fall
+  // through to the "Previous 30 days" tail — a definite age claim the client
+  // cannot support. It belongs in its own bucket instead.
+  it("puts a session with an unparseable lastActiveAt under Unknown, not a definite age bucket", () => {
+    const groups = groupSessions([at("not-a-date")], now);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe("Unknown");
+  });
+
   it("keeps host order within a bucket", () => {
     const groups = groupSessions(
       [at("2026-08-10T09:00:00.000Z"), at("2026-08-10T11:00:00.000Z")],

@@ -27,10 +27,15 @@ export function groupSessions(
     { label: "Today", items: [] },
     { label: "Previous 7 days", items: [] },
     { label: "Previous 30 days", items: [] },
+    { label: "Unknown", items: [] },
   ];
   for (const s of list) {
-    const age = now - Date.parse(s.lastActiveAt);
-    const i = age < DAY_MS ? 0 : age < 7 * DAY_MS ? 1 : 2;
+    const t = Date.parse(s.lastActiveAt);
+    const age = now - t;
+    // An unparseable timestamp used to fall through to "Previous 30 days" —
+    // NaN fails every comparison — which is a definite age claim the client
+    // cannot support. Its own bucket says what is actually known: nothing.
+    const i = Number.isNaN(t) ? 3 : age < DAY_MS ? 0 : age < 7 * DAY_MS ? 1 : 2;
     buckets[i].items.push(s);
   }
   return buckets.filter((b) => b.items.length > 0);
