@@ -28,7 +28,7 @@ export interface AuditEntry {
   source: string;
   surfaceId: string | null;
   op: DataOp;
-  decision: "executed" | "denied" | "error";
+  decision: "executed" | "denied" | "error" | "trust-granted";
   rowCount?: number;
   error?: string;
   auth?: "approval" | "trust";

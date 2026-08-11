@@ -84,7 +84,10 @@ export class PendingQueue {
       // "executing" (not "pending") at its own synchronous guard check and
       // bails as "already-resolved", mirroring agent-host's PendingActions,
       // which sets `settled = true` before its own async work.
-      this.status.set(pendingId, { status: "executing" });
+      // The actor rides the synchronous record too: a concurrent resolve that
+      // loses THIS race is answered from this very status object, and a 409
+      // that names nobody (`by: ""`) tells the loser nothing (review F5).
+      this.status.set(pendingId, { status: "executing", ...(actor ? { actor } : {}) });
       try {
         const result = await executeWrite(this.deps, w.source, w.op, w.surfaceId, "approval", actor);
         this.status.set(pendingId, { status: "executed", result, ...(actor ? { actor } : {}) });

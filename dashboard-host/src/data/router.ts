@@ -3,6 +3,7 @@ import { findSource } from "./sources.js";
 import { buildSql } from "./sql.js";
 import { executeWrite, type PendingQueue } from "./writes.js";
 import { loadTrust, isTrusted, addTrust } from "./trust.js";
+import { appendAudit } from "./audit.js";
 import type { DataSource, DataOp, QueryExecutor } from "./types.js";
 
 export interface DataRouterDeps {
@@ -107,6 +108,11 @@ export function createDataRouter(deps: DataRouterDeps): Router {
       // approve (or approve/deny) at once. First decision wins; the loser is
       // told who won rather than being handed a confusing 404 — parity with
       // the infra router's PendingActions.resolve.
+      //
+      // Deliberate (review F7): returning HERE also drops the loser's
+      // trustSurface flag. Their approval never happened, and a standing
+      // auto-execute rule must ride on an approval that did — the winner's
+      // decision stands alone, unqualified by the loser's checkbox.
       const settled = deps.queue.get(req.params.id);
       return void res.status(409).json({
         error: "already resolved",
@@ -115,7 +121,22 @@ export function createDataRouter(deps: DataRouterDeps): Router {
       });
     }
     if (decision === "approve" && trustSurface && pending?.surfaceId) {
-      addTrust(deps.trustPath, { source: pending.source, surfaceId: pending.surfaceId });
+      const actor = deps.actorOf?.(req) ?? "";
+      // The grant is a standing trust-model decision, so it is attributed on
+      // the pair itself AND audited like every other decision (review F3):
+      // without this, every later auth:"trust" write is untraceable to the
+      // human choice that allowed it.
+      addTrust(deps.trustPath, {
+        source: pending.source,
+        surfaceId: pending.surfaceId,
+        ...(actor ? { grantedBy: actor } : {}),
+        grantedAt: deps.now(),
+      });
+      appendAudit(deps.auditPath, {
+        ts: deps.now(), source: pending.source, surfaceId: pending.surfaceId,
+        op: pending.op, decision: "trust-granted",
+        ...(actor ? { actor } : {}),
+      });
     }
     res.json({ ok: true });
   });
