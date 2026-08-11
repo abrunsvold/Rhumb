@@ -5,9 +5,21 @@ export interface FleetCaps {
   maxPerSpawn: number;
   maxConcurrent: number;
   maxDepth: number;
+  /** Ceiling on a single `collect` call's model-supplied `waitMs` (review
+   *  finding 2). `waitMs` is the one model-directed quantity the host did
+   *  not bound: uncapped, a model passing a day's worth of milliseconds
+   *  holds the MCP tool call — and the foreground turn — open for a day of
+   *  polls against any agent reporting "working". Clamped in
+   *  `createFleetOps().collect`, never left to the model's judgment. */
+  maxCollectWaitMs: number;
 }
 
-const DEFAULTS: FleetCaps = { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 };
+const DEFAULTS: FleetCaps = {
+  maxPerSpawn: 8,
+  maxConcurrent: 8,
+  maxDepth: 1,
+  maxCollectWaitMs: 10 * 60_000,
+};
 
 // Strict: the whole trimmed value must be one or more ASCII digits. This
 // rejects "3.7" (truncation), "1e3" (parseInt stops at "e", silently giving
@@ -36,6 +48,7 @@ export function loadFleetCaps(env: NodeJS.ProcessEnv): FleetCaps {
     maxPerSpawn: positiveInt(env, "RHUMB_FLEET_MAX_PER_SPAWN", DEFAULTS.maxPerSpawn),
     maxConcurrent: positiveInt(env, "RHUMB_FLEET_MAX_CONCURRENT", DEFAULTS.maxConcurrent),
     maxDepth: positiveInt(env, "RHUMB_FLEET_MAX_DEPTH", DEFAULTS.maxDepth),
+    maxCollectWaitMs: positiveInt(env, "RHUMB_FLEET_MAX_COLLECT_WAIT_MS", DEFAULTS.maxCollectWaitMs),
   };
 }
 

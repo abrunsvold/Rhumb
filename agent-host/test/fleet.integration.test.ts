@@ -95,7 +95,7 @@ describe.skipIf(!available)("fleet (live, localhost)", () => {
       const ops = createFleetOps({
         backend,
         registry,
-        caps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
+        caps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 },
         spec,
         mintName: () => {
           const n = `fleet-live-${randomUUID().slice(0, 8)}`;

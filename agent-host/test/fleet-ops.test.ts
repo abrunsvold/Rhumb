@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createFleetOps, PLACEMENT_LOCAL_ONLY_ERROR } from "../src/fleet/ops.js";
+import { createFleetOps, PLACEMENT_LOCAL_ONLY_ERROR, clampCollectWaitMs } from "../src/fleet/ops.js";
 import { createAgentRegistry, type AgentRegistry } from "../src/agents.js";
 import type { AgentBackend, AgentRef } from "../src/backends/types.js";
 import { EMPTY_COMPLETION_RESULT } from "../src/backends/mngr.js";
@@ -23,7 +23,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 // Fix round 1: distinct values so a breach test can tell WHICH cap fired —
 // the original 8/8 fixture couldn't distinguish maxPerSpawn from
 // maxConcurrent.
-const CAPS = { maxPerSpawn: 3, maxConcurrent: 8, maxDepth: 1 };
+const CAPS = { maxPerSpawn: 3, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 };
 const SPEC = { model: "m", workspace: "/ws", permissionMode: "acceptEdits", extraOptions: {} };
 
 /** Records sends; ensure() binds a fake nativeId. */
@@ -102,7 +102,7 @@ describe("fleet spawn", () => {
   it("REJECTS a batch that would exceed maxConcurrent (distinct from maxPerSpawn), minting nothing extra", async () => {
     // Fix round 1, I1: previously only maxPerSpawn was ever exercised.
     // maxPerSpawn is generous here (5) so only the CONCURRENT cap can fire.
-    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 2, maxDepth: 1 } });
+    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 2, maxDepth: 1, maxCollectWaitMs: 600_000 } });
     const first = await ops.spawn([{ prompt: "a" }, { prompt: "b" }], { parentAgentId: null, depth: 0 });
     expect(first.every((o) => o.ok)).toBe(true); // exactly fills the cap: 2/2
 
@@ -242,7 +242,7 @@ describe("fleet spawn placement (final review, I2)", () => {
 
 describe("fleet spawn concurrency (C3)", () => {
   it("serializes check-then-mint so two concurrent spawns cannot jointly exceed maxConcurrent", async () => {
-    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 3, maxDepth: 1 } });
+    const { ops } = makeOps({ caps: { maxPerSpawn: 5, maxConcurrent: 3, maxDepth: 1, maxCollectWaitMs: 600_000 } });
     const ctx = { parentAgentId: null, depth: 0 };
 
     const [r1, r2] = await Promise.allSettled([
@@ -398,7 +398,7 @@ describe("fleet liveCount reconciliation (I1 + fix round 2 R2)", () => {
     // second spawn could never succeed again. This branch of liveCount had
     // no test at all before fix round 2.
     const { ops } = makeOps({
-      caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+      caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1, maxCollectWaitMs: 600_000 },
       liveness: async () => new Map([["agent-native-rhumb-1", { state: "DONE" }]]),
     });
     const first = await ops.spawn([{ prompt: "a" }], { parentAgentId: null, depth: 0 });
@@ -423,7 +423,7 @@ describe("fleet liveCount reconciliation (I1 + fix round 2 R2)", () => {
       };
       const { ops } = makeOps({
         backend: brokenBackend,
-        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1, maxCollectWaitMs: 600_000 },
         now: () => nowMs,
       });
 
@@ -481,7 +481,7 @@ describe("fleet liveCount reconciliation (I1 + fix round 2 R2)", () => {
       });
       const { ops } = makeOps({
         registry: legacyRegistry,
-        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1 },
+        caps: { maxPerSpawn: 5, maxConcurrent: 1, maxDepth: 1, maxCollectWaitMs: 600_000 },
       });
 
       // maxConcurrent: 1, and the legacy record alone should already
@@ -670,4 +670,51 @@ describe("fleet check/collect", () => {
       expect(await ops.collect([id])).toEqual([{ agentId: id, status: "done", result: null }]);
     },
   );
+});
+
+describe("collect waitMs clamp (review finding 2: host-enforced, never model-enforced)", () => {
+  // Every other model-directed quantity is bounded by the host; waitMs was
+  // the one that wasn't. A model passing waitMs: 86_400_000 would hold the
+  // MCP tool call — and the foreground turn — open for a day of polls
+  // against any agent reporting "working".
+  it("clamps a huge model-supplied waitMs to the host ceiling", () => {
+    expect(clampCollectWaitMs(86_400_000, 600_000)).toBe(600_000);
+  });
+
+  it("passes a within-ceiling waitMs through unchanged", () => {
+    expect(clampCollectWaitMs(20, 600_000)).toBe(20);
+    expect(clampCollectWaitMs(600_000, 600_000)).toBe(600_000);
+  });
+
+  it("clamps non-finite, negative, and absent waitMs to 0", () => {
+    expect(clampCollectWaitMs(Number.NaN, 600_000)).toBe(0);
+    expect(clampCollectWaitMs(Number.POSITIVE_INFINITY, 600_000)).toBe(0);
+    expect(clampCollectWaitMs(-5, 600_000)).toBe(0);
+    expect(clampCollectWaitMs(undefined, 600_000)).toBe(0);
+  });
+
+  it("an unknowable ceiling fails CLOSED (no wait), never open", () => {
+    // A missing/NaN cap must not become an unbounded wait: Math.min(x, NaN)
+    // is NaN, and a NaN deadline never expires — the exact fail-open the
+    // clamp exists to prevent, one level up.
+    expect(clampCollectWaitMs(5_000, Number.NaN)).toBe(0);
+    expect(clampCollectWaitMs(5_000, 0)).toBe(0);
+  });
+
+  it("collect() actually applies the clamp: a huge waitMs against a working agent returns within the ceiling", async () => {
+    // Ceiling of 10ms, request of 60s. Unclamped, this loop would poll a
+    // RUNNING agent for the full 60s and blow vitest's test timeout —
+    // deleting the clamp in collect() turns this test red by hanging.
+    const { ops } = makeOps({
+      caps: { ...CAPS, maxCollectWaitMs: 10 },
+      liveness: async () => new Map([["agent-native-rhumb-1", { state: "RUNNING" }]]),
+      pollIntervalMs: 1,
+    });
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    const started = Date.now();
+    const collected = await ops.collect([id], 60_000);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(collected).toEqual([{ agentId: id, status: "working", result: null }]);
+  });
 });

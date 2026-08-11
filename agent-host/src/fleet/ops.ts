@@ -84,6 +84,24 @@ export interface FleetOps {
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 
+/** The wait `collect` will actually honour for a model-supplied `waitMs`
+ *  (review finding 2). Host-enforced, like every other model-directed
+ *  quantity in this module: `waitMs` arrives straight off the tool schema
+ *  (`z.number().optional()`, no bound), and unclamped it lets the model hold
+ *  the MCP tool call — and the foreground turn — open arbitrarily long
+ *  polling any agent that reports "working".
+ *
+ *  Non-finite or non-positive requests clamp to 0 (poll once, return). An
+ *  unknowable CEILING also clamps to 0 — fail closed: `Math.min(x, NaN)` is
+ *  `NaN`, and a `NaN` deadline never expires (`Date.now() >= NaN` is always
+ *  false), which would turn a missing cap into an unbounded poll loop — the
+ *  exact fail-open this function exists to prevent, one level up. */
+export function clampCollectWaitMs(requested: number | undefined, ceilingMs: number): number {
+  if (requested === undefined || !Number.isFinite(requested) || requested <= 0) return 0;
+  if (!Number.isFinite(ceilingMs) || ceilingMs <= 0) return 0;
+  return Math.min(requested, ceilingMs);
+}
+
 /** Minimal in-process mutex (fix round 1, C3). Serializes calls to `fn` so
  *  that the SECOND caller's synchronous prefix cannot even begin running
  *  until the FIRST caller's `fn` has fully settled (resolved or rejected).
@@ -647,7 +665,9 @@ export function createFleetOps(deps: {
     },
 
     async collect(agentIds, waitMs = 0) {
-      const deadline = Date.now() + waitMs;
+      // Review finding 2: the model's requested wait is honoured only up to
+      // the host's ceiling — see clampCollectWaitMs.
+      const deadline = Date.now() + clampCollectWaitMs(waitMs, caps.maxCollectWaitMs);
       for (;;) {
         const statuses = await Promise.all(agentIds.map(async (a) => ({ agentId: a, status: await statusFor(a) })));
         // Settlement check: "working" clearly means "not done yet, keep

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { loadFleetCaps, checkCaps, capBreachMessage } from "../src/fleet/caps.js";
 
-const CAPS = { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 };
+const CAPS = { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 };
 
 describe("loadFleetCaps", () => {
-  it("defaults to 8/8/1", () => {
+  it("defaults to 8/8/1 with a 10-minute collect-wait ceiling", () => {
     expect(loadFleetCaps({})).toEqual(CAPS);
   });
 
@@ -13,7 +13,17 @@ describe("loadFleetCaps", () => {
       RHUMB_FLEET_MAX_PER_SPAWN: "3",
       RHUMB_FLEET_MAX_CONCURRENT: "4",
       RHUMB_FLEET_MAX_DEPTH: "2",
-    })).toEqual({ maxPerSpawn: 3, maxConcurrent: 4, maxDepth: 2 });
+      RHUMB_FLEET_MAX_COLLECT_WAIT_MS: "30000",
+    })).toEqual({ maxPerSpawn: 3, maxConcurrent: 4, maxDepth: 2, maxCollectWaitMs: 30_000 });
+  });
+
+  it("rejects a malformed collect-wait ceiling at load, like every other cap", () => {
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_COLLECT_WAIT_MS: "forever" })).toThrow(
+      /RHUMB_FLEET_MAX_COLLECT_WAIT_MS/,
+    );
+    expect(() => loadFleetCaps({ RHUMB_FLEET_MAX_COLLECT_WAIT_MS: "0" })).toThrow(
+      /RHUMB_FLEET_MAX_COLLECT_WAIT_MS/,
+    );
   });
 
   it("rejects non-numeric and non-positive values at load", () => {

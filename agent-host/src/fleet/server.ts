@@ -151,7 +151,9 @@ export function createFleetServer(ops: FleetOps, ctx: () => SpawnContext) {
       tool(
         "collect",
         "Fetch results from previously spawned agents. Optionally waits up to waitMs " +
-          "for agents still working to finish. Getting PARTIAL results back when the wait " +
+          "for agents still working to finish (the host caps the honoured wait — 10 minutes " +
+          "by default — so a larger waitMs is silently clamped, not an error). Getting " +
+          "PARTIAL results back when the wait " +
           "expires is normal, not an error — agents still working come back with " +
           "status 'working' and a null result; call collect again later for those ids." +
           NO_LIVENESS_IN_THIS_BUILD +

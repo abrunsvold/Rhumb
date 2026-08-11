@@ -29,7 +29,7 @@ describe("loadConfig", () => {
       watchdogMinutes: null,
       agentBackend: "sdk",
       fleetEnabled: false,
-      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
+      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 },
     });
   });
 
@@ -51,7 +51,7 @@ describe("loadConfig", () => {
       watchdogMinutes: null,
       agentBackend: "sdk",
       fleetEnabled: false,
-      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 },
+      fleetCaps: { maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 },
     });
   });
 
@@ -156,7 +156,7 @@ describe("fleet caps in config", () => {
   const base = { CLAUDE_CODE_OAUTH_TOKEN: "tok", RHUMB_ALLOWED_USERS: "you@example.com" } as NodeJS.ProcessEnv;
 
   it("exposes defaults", () => {
-    expect(loadConfig({ ...base }).fleetCaps).toEqual({ maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1 });
+    expect(loadConfig({ ...base }).fleetCaps).toEqual({ maxPerSpawn: 8, maxConcurrent: 8, maxDepth: 1, maxCollectWaitMs: 600_000 });
   });
 
   it("fails at load on a malformed cap", () => {
