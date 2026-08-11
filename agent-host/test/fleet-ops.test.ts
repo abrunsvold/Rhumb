@@ -672,6 +672,31 @@ describe("fleet check/collect", () => {
   );
 });
 
+describe("collect settlement (review finding 4: unknown is SETTLED, deliberately)", () => {
+  it("an \"unknown\" status settles collect immediately rather than burning the wait budget", async () => {
+    // Pinning a deliberate choice, not an oversight. In the shipped build
+    // liveness is stubbed to null, so EVERY bound agent reads "unknown" —
+    // treating "unknown" as unsettled would make every collect() with a
+    // wait poll out its entire budget on a status that structurally cannot
+    // change within this call. Same logic as "blocked": return the honest
+    // status now, let the caller decide to poll again later. If this choice
+    // is revisited when real liveness lands (where "unknown" becomes a
+    // transient read hiccup rather than a permanent ceiling), this test is
+    // the place that decision must be made explicitly — a change that makes
+    // "unknown" unsettled turns this test into a 60s hang.
+    const { ops } = makeOps({
+      liveness: async () => null, // UNKNOWABLE — the shipped build's reality
+      pollIntervalMs: 1,
+    });
+    const out = await ops.spawn([{ prompt: "x" }], { parentAgentId: null, depth: 0 });
+    const id = (out[0] as { ok: true; agentId: string }).agentId;
+    const started = Date.now();
+    const collected = await ops.collect([id], 60_000);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(collected).toEqual([{ agentId: id, status: "unknown", result: null }]);
+  });
+});
+
 describe("collect waitMs clamp (review finding 2: host-enforced, never model-enforced)", () => {
   // Every other model-directed quantity is bounded by the host; waitMs was
   // the one that wasn't. A model passing waitMs: 86_400_000 would hold the

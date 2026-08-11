@@ -681,6 +681,19 @@ export function createFleetOps(deps: {
         // `resultFor` only ever produces a result for "done"), which is
         // the actionable signal — poll again later, after prompting a
         // human, rather than have `collect` sit there hoping.
+        //
+        // "unknown" is ALSO settled, deliberately (review finding 4). The
+        // project rule is "unknowable keeps waiting", but in this build
+        // liveness is stubbed to null, so "unknown" is every bound agent's
+        // PERMANENT status — unsettled, it would make every collect() with
+        // a wait burn its full budget on a status that structurally cannot
+        // change within this call. Returning "unknown" is honest reporting
+        // (the caller learns the fleet cannot see the agent right now),
+        // not a false answer. REVISIT when real liveness lands: there,
+        // "unknown" can also be a transient `mngr list` hiccup, and
+        // settling on it ends a long wait early — the pinning test in
+        // test/fleet-ops.test.ts ("unknown is SETTLED, deliberately") is
+        // where that trade must be re-decided, explicitly.
         const settled = statuses.every((s) => s.status !== "working");
         if (settled || Date.now() >= deadline) {
           return Promise.all(
