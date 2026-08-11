@@ -4,15 +4,17 @@
 
 Most ways of working with a coding agent leave you with a chat transcript. The agent can build dashboards and live-data UIs, but the moment the session ends you can't *keep* or *interact with* what it made. Rhumb lets the agent **materialize durable, interactive surfaces** that run as real services on your box, reachable from a desktop client over a [Tailscale](https://tailscale.com) mesh, and persist across sessions.
 
+**What "self-hosted" means here:** you host the *agent runtime and everything it produces* — the Claude Code process, its workspace, your databases, and the services it stands up. Inference is not local: the agent host calls Claude over the Anthropic API (or an Anthropic-compatible endpoint you choose). Rhumb is not a local-model stack, and running one is not a prerequisite.
+
 > **Status:** early, actively built, not yet production-hardened. **All seven roadmap subsystems are now implemented** — the agent host, the dashboard host, the data endpoint, the infrastructure capability (Proxmox/LXC + database provisioning), spawned container-isolated services, the Tauri v2 desktop client, and the persistent ontology (see [Roadmap](#roadmap)).
 
 ---
 
 ## Why Rhumb
 
-- **Use your existing Claude subscription — or an API key or gateway instead.** In the default mode, server-side Claude Code runs under your normal interactive login rather than pay-per-token billing; api-key and gateway modes are also supported (see below).
+- **Use your existing Claude subscription — or an API key or gateway instead.** In the default mode, server-side Claude Code authenticates with your normal interactive login rather than pay-per-token billing; api-key and gateway modes are also supported (see below).
 - **Outputs are durable, not disposable.** The agent builds dashboards and apps that stay running and reachable at stable URLs.
-- **Your compute, your data.** Nothing lives in a hosted SaaS. Everything durable — the agent, your data, the apps it builds — runs on a box you control.
+- **No hosted Rhumb, no third-party data plane.** There's no SaaS in the middle: the agent process, your databases, and the apps it builds all live on a box you control. Model calls go out to Anthropic like any other API client; your data and your tools stay put.
 - **The agent operates your infrastructure.** On the roadmap: it can manage VMs and provision databases to support real work, not just read data.
 - **Full applications, not just static dashboards.** The agent can spawn complete backend services, each isolated in its own Proxmox-managed container.
 
@@ -40,7 +42,7 @@ Rhumb authenticates Claude one of three ways, selected with `RHUMB_LLM_PROVIDER`
 |---|---|---|
 | `subscription` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Uses your existing Claude subscription rather than pay-per-token billing. Carries the personal-tool constraint below. |
 | `api-key` | `ANTHROPIC_API_KEY` | Ordinary pay-per-token API access. No personal-tool constraint. |
-| `gateway` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` (**required** — use `none` for an auth-free gateway), explicit `RHUMB_MODEL` | Point Rhumb at an Anthropic-compatible endpoint — a LiteLLM proxy, an internal gateway, or a self-hosted open model behind one. Nothing need leave your network. |
+| `gateway` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` (**required** — use `none` for an auth-free gateway), explicit `RHUMB_MODEL` | Point Rhumb at any Anthropic-compatible endpoint: a LiteLLM proxy, a corporate gateway, or a translating proxy in front of some other model. Rhumb speaks the Anthropic Messages API and nothing else — it does not run or translate models itself. See [docs/setup-manual.md](docs/setup-manual.md) for the caveats. |
 
 **The personal-tool constraint applies to `subscription` mode only.** That mode
 authenticates with an OAuth token tied to your own Claude subscription, and
@@ -66,13 +68,13 @@ your stored login.
 
 ## Architecture
 
-Two sides, joined over Tailscale:
+Two sides joined over Tailscale, plus one outbound call to the model API:
 
 ```
   Laptop (Tauri client)                 Proxmox host (server)
   ┌─────────────────────┐    Tailscale   ┌──────────────────────────────┐
-  │ Agent panel (chat)  │◄──────────────►│ Agent host (Claude Code)     │
-  │ Canvas (dashboards) │                │ Dashboard host (+ registry)  │
+  │ Agent panel (chat)  │◄──────────────►│ Agent host (Claude Code)     │──► Anthropic API
+  │ Canvas (dashboards) │                │ Dashboard host (+ registry)  │    (or your gateway)
   │ Connection layer    │                │ Data endpoint (read/write)   │
   └─────────────────────┘                │ Infra capability (Proxmox/DB)│
                                          │ Ontology (markdown graph)    │
@@ -80,7 +82,7 @@ Two sides, joined over Tailscale:
                                          └──────────────────────────────┘
 ```
 
-**Principle:** everything durable lives **server-side**. The client is a rich remote window; the heavy lifting and your Claude credentials stay on the box where the compute is. Subsystems are joined by a shared `RHUMB_WORKSPACE` folder — a file-as-contract: the agent writes surfaces into it, the dashboard host serves them.
+**Principle:** everything durable lives **server-side**. The client is a rich remote window; the state, the workspace, and your Claude credentials stay on the box. The one thing that leaves the box is the model request itself — the agent host is an API client, and prompts and tool results go to Anthropic (or the endpoint you configured) the same way they would from `claude` in a terminal. Subsystems are joined by a shared `RHUMB_WORKSPACE` folder — a file-as-contract: the agent writes surfaces into it, the dashboard host serves them.
 
 ### Packages
 
@@ -94,7 +96,7 @@ Two sides, joined over Tailscale:
 
 ## Quickstart
 
-**Prerequisites:** a Linux box with systemd on your [Tailscale](https://tailscale.com) tailnet, [Node.js](https://nodejs.org) 20+, and Claude credentials (a subscription, an API key, or an Anthropic-compatible gateway).
+**Prerequisites:** a Linux box with systemd on your [Tailscale](https://tailscale.com) tailnet, [Node.js](https://nodejs.org) 20+, and Claude credentials (a subscription, an API key, or an Anthropic-compatible gateway). No GPU, no model weights — the box runs the agent and the tools it builds, not inference.
 
 ```sh
 git clone https://github.com/abrunsvold/Rhumb && cd Rhumb
@@ -154,7 +156,7 @@ Rhumb is built as a sequence of self-contained plans (spec → plan → TDD impl
 **Guiding principles** — what stays true regardless of what gets built:
 
 - **Durable by default.** Everything the agent makes is a real, persistent service, not a disposable chat artifact. If you can't keep it and come back to it, it doesn't belong in Rhumb.
-- **Your compute, your data.** Nothing durable lives in a hosted SaaS. The agent, your data, and the tools it builds all run on hardware you control.
+- **Your compute, your data.** Nothing durable lives in a hosted SaaS. The agent process, your data, and the tools it builds all run on hardware you control. The model is a remote API dependency, not a component you have to host.
 - **The agent operates the system, not just reads it.** The aim is an agent that can provision databases, manage containers, and stand up services — each gated behind confirmation, but genuinely operational.
 - **Single-operator by design.** Rhumb is shaped for one person running it on their own credentials (see [the note above](#before-you-deploy-the-personal-tool-shape-comes-from-anthropics-terms)). That constraint keeps the security model honest.
 
