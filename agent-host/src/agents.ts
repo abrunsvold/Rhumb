@@ -13,10 +13,21 @@ export interface AgentRecord {
   createdAt: string;
   lastActiveAt: string;
   status: "active" | "stopped";
+  /** The principal that spawned this one, or null for an operator-initiated
+   *  root agent. Recorded, never inferred: the audit must be able to answer
+   *  "spawned by whom" without reconstructing it. */
+  parentAgentId: string | null;
+  /** 0 for a root agent, parent.depth + 1 for a spawned one. Carried so the
+   *  depth cap has a mechanism even where P1 cannot exceed it. */
+  depth: number;
 }
 
 export interface AgentRegistry {
-  create(name: string, backend: BackendId): AgentRecord;
+  create(
+    name: string,
+    backend: BackendId,
+    lineage?: { parentAgentId: string | null; depth: number },
+  ): AgentRecord;
   get(agentId: string): AgentRecord | undefined;
   bind(agentId: string, nativeId: string): boolean;
   touch(agentId: string): boolean;
@@ -27,7 +38,15 @@ export interface AgentRegistry {
 function load(indexPath: string): AgentRecord[] {
   try {
     const raw = JSON.parse(readFileSync(indexPath, "utf8"));
-    return Array.isArray(raw) ? (raw as AgentRecord[]) : [];
+    // Older on-disk records predate parentAgentId/depth; normalise on read
+    // so existing indexes stay loadable without a migration step.
+    return Array.isArray(raw)
+      ? (raw as AgentRecord[]).map((r) => ({
+          ...r,
+          parentAgentId: r.parentAgentId ?? null,
+          depth: typeof r.depth === "number" ? r.depth : 0,
+        }))
+      : [];
   } catch {
     // Missing or corrupt: start empty, same posture as sessions.ts.
     return [];
@@ -43,7 +62,7 @@ export function createAgentRegistry(deps: {
   const persist = () => atomicWriteFileSync(deps.indexPath, JSON.stringify(records, null, 2));
 
   return {
-    create(name, backend) {
+    create(name, backend, lineage) {
       const stamp = deps.now();
       const rec: AgentRecord = {
         agentId: deps.id(),
@@ -53,6 +72,8 @@ export function createAgentRegistry(deps: {
         createdAt: stamp,
         lastActiveAt: stamp,
         status: "active",
+        parentAgentId: lineage?.parentAgentId ?? null,
+        depth: lineage?.depth ?? 0,
       };
       records.push(rec);
       persist();

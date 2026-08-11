@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { ConnectionScreen } from "./components/ConnectionScreen";
 import { Workspace } from "./components/Workspace";
-import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { agentBaseOf, dashboardBaseOf, getConfig, setConfig, type AppConfig } from "./lib/tauri";
 
 export function App() {
@@ -33,10 +32,7 @@ export function App() {
   if (!config) return <ConnectionScreen onConnected={setConfigState} />;
   const agentBase = agentBaseOf(config);
   const dashboardBase = dashboardBaseOf(config);
-  return (
-    <>
-      <Workspace agentBase={agentBase} dashboardBase={dashboardBase} onDisconnect={disconnect} />
-      <ConfirmationDialog agentBase={agentBase} dashboardBase={dashboardBase} />
-    </>
-  );
+  // Approvals render inline in the transcript (Workspace owns both pending
+  // streams); there is no longer a modal layered over the app.
+  return <Workspace agentBase={agentBase} dashboardBase={dashboardBase} onDisconnect={disconnect} />;
 }

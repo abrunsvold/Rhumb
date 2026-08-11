@@ -4,6 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { AgentPanel } from "../src/components/AgentPanel";
 import { initialAgentState } from "../src/lib/agentEvents";
 
+const noApprovals = { pending: [], resolved: [], onResolve: () => {} };
+const noRoom = { roster: [], me: null };
+
 function tab(over: Partial<any> = {}) {
   return {
     key: "s1", title: "One", openTurns: 0, unread: false, stale: false,
@@ -14,18 +17,18 @@ function tab(over: Partial<any> = {}) {
 describe("AgentPanel (presentational)", () => {
   it("renders the transcript for its tab and forwards sends", async () => {
     const onSend = vi.fn().mockResolvedValue(true);
-    render(<AgentPanel tab={tab()} slashCommands={[]} roster={[]} me={null} onSend={onSend} />);
+    render(<AgentPanel {...noApprovals} {...noRoom} tab={tab()} slashCommands={[]} onSend={onSend} />);
     await userEvent.type(screen.getByRole("textbox"), "hi{Enter}");
     expect(onSend).toHaveBeenCalledWith("hi", []);
   });
 
-  it("shows thinking while the tab has open turns", () => {
-    render(<AgentPanel tab={tab({ openTurns: 1 })} slashCommands={[]} roster={[]} me={null} onSend={vi.fn()} />);
-    expect(screen.getByText(/thinking/i)).toBeTruthy();
+  it("shows a busy indicator while the tab has open turns", () => {
+    render(<AgentPanel {...noApprovals} {...noRoom} tab={tab({ openTurns: 1 })} slashCommands={[]} onSend={vi.fn()} />);
+    expect(screen.getByText(/working/i)).toBeTruthy();
   });
 
   it("shows a stale-stream notice", () => {
-    render(<AgentPanel tab={tab({ stale: true })} slashCommands={[]} roster={[]} me={null} onSend={vi.fn()} />);
+    render(<AgentPanel {...noApprovals} {...noRoom} tab={tab({ stale: true })} slashCommands={[]} onSend={vi.fn()} />);
     expect(screen.getByText(/reconnecting/i)).toBeTruthy();
   });
 });

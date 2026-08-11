@@ -61,6 +61,7 @@ const argvCreate = (
   credentialEnv: Record<string, string>,
   extraBlankedVars: readonly string[],
   spec: AgentSpec,
+  lineage: { parentAgentId: string | null; depth: number },
 ): string[] => [
   "create",
   name,
@@ -69,6 +70,16 @@ const argvCreate = (
   "-y",
   "--label",
   `${RHUMB_AGENT_ID_LABEL}=${agentId}`,
+  // Spawn lineage travels as mngr labels, not env: the RHUMB_* wildcard
+  // blanking below (credentialEnvFlags) erases any RHUMB_* env var, so an
+  // env-based channel would be silently destroyed. Labels round-trip
+  // through `mngr list --format json` instead (verified against 0.2.17,
+  // docs/dogfood/2026-08-03-mngr-phase0.md). `rhumb_parent_id` is omitted
+  // entirely for a root agent rather than emitted empty, so a later audit
+  // can distinguish "no parent" from "label missing".
+  ...(lineage.parentAgentId ? ["--label", `rhumb_parent_id=${lineage.parentAgentId}`] : []),
+  "--label",
+  `rhumb_depth=${lineage.depth}`,
   ...workspaceFlags(spec.workspace),
   ...credentialEnvFlags(credentialEnv, extraBlankedVars),
   // Per `mngr create --help`: "Arguments after -- are passed directly to
@@ -341,12 +352,70 @@ function warnAboutUncarriableSpec(spec: AgentSpec): void {
  *  parser — could read it as one. */
 const VALID_MNGR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** A parsed mngr transcript event. Extends the public TranscriptMessage with
+ *  the terminal-ness signal Rhumb needs internally; `transcript()` strips it
+ *  before returning, so the public shape (mirrored in client/) is unchanged. */
+export interface TranscriptEntry extends TranscriptMessage {
+  finishReason: string | null;
+}
+
+/** Reasons that mean "the model is done with this turn".
+ *
+ *  These are Claude's own Messages API `stop_reason` values, passed through
+ *  VERBATIM by mngr as `finish_reason` — confirmed by reading mngr's own
+ *  source (`~/.local/share/uv/tools/imbue-mngr/lib/python3.12/site-packages/
+ *  imbue/mngr_claude/resources/common_transcript_convert.py:154,217`:
+ *  `stop_reason = message.get("stop_reason")` then
+ *  `"finish_reason": stop_reason`). That means the full value space is
+ *  Claude's, not mngr's own vocabulary: `end_turn`, `tool_use`,
+ *  `max_tokens`, `stop_sequence`, and `null` are all reachable.
+ *
+ *  `"stop_sequence"` is observed live in docs/dogfood/2026-08-03-mngr-phase0.md;
+ *  `"end_turn"` is the ordinary "model finished talking" reason. Both are
+ *  terminal. `"max_tokens"` is ALSO terminal — a token-truncated answer is
+ *  still a finished turn (the model has stopped and will not add more);
+ *  treating it as non-terminal would poll for the rest of `replyTimeoutMs`
+ *  and then report "delivered but not yet answered" while a real, if
+ *  truncated, answer already sits in the transcript — the exact
+ *  hang-and-lose-the-answer failure this module exists to prevent, just via
+ *  a different reason string.
+ *
+ *  `"tool_use"` is DELIBERATELY excluded: it marks a segment that ends in a
+ *  tool call, i.e. the model is not done — exactly the narration-then-
+ *  tool-then-answer shape this task exists to see through.
+ *
+ *  Anything ELSE — including `null` and any reason string we have not seen
+ *  — is deliberately NON-terminal: treating an unrecognised reason as
+ *  terminal would reintroduce the bug this exists to fix, for any reason
+ *  string Claude's API adds in the future. */
+export const TERMINAL_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "stop_sequence",
+  "end_turn",
+  "max_tokens",
+]);
+
+export function isTerminalFinishReason(reason: string | null): boolean {
+  return reason !== null && TERMINAL_FINISH_REASONS.has(reason);
+}
+
+/** Emitted when a turn completes with a terminal reason but no text. Distinct
+ *  from a real answer AND from a timeout — with a fleet, "finished with nothing
+ *  to say" and "still working" must not look alike. */
+export const EMPTY_COMPLETION_RESULT = "(agent completed with no output)";
+
+/** The text to report for a terminal reply: the reply's own text, or
+ *  `EMPTY_COMPLETION_RESULT` if the model produced nothing. Shared by both
+ *  `send()` result-emission sites so they cannot drift apart. */
+function resultTextFor(reply: TranscriptEntry): string {
+  return reply.text.trim().length > 0 ? reply.text : EMPTY_COMPLETION_RESULT;
+}
+
 /** Maps one line of `mngr transcript --format jsonl` output to a
- *  TranscriptMessage. mngr's transcript is agent-agnostic and may carry
+ *  TranscriptEntry. mngr's transcript is agent-agnostic and may carry
  *  event types Rhumb has no use for, so unrecognised types — and
  *  unparseable lines, and lines whose expected text field isn't a string —
  *  are skipped rather than thrown or coerced to an empty string. */
-function parseTranscriptLine(line: string): TranscriptMessage | null {
+function parseTranscriptLine(line: string): TranscriptEntry | null {
   let event: unknown;
   try {
     event = JSON.parse(line);
@@ -355,11 +424,12 @@ function parseTranscriptLine(line: string): TranscriptMessage | null {
   }
   if (!event || typeof event !== "object") return null;
   const e = event as Record<string, unknown>;
+  const finishReason = typeof e.finish_reason === "string" ? e.finish_reason : null;
   if (e.type === "user_message") {
-    return typeof e.content === "string" ? { kind: "user", text: e.content } : null;
+    return typeof e.content === "string" ? { kind: "user", text: e.content, finishReason } : null;
   }
   if (e.type === "assistant_message") {
-    return typeof e.text === "string" ? { kind: "text", text: e.text } : null;
+    return typeof e.text === "string" ? { kind: "text", text: e.text, finishReason } : null;
   }
   return null;
 }
@@ -406,14 +476,23 @@ function isNoTranscriptYetError(stdout: string): boolean {
  *  If `before` itself is untrustworthy (`null` — the pre-send transcript
  *  read failed), there is no baseline to measure "new" against, so this
  *  conservatively returns `null` rather than guessing every entry in
- *  `after` is new. */
+ *  `after` is new.
+ *
+ *  3. Only a TERMINAL entry (`isTerminalFinishReason`) is eligible. A
+ *     tool-using turn emits narration, then a tool call, then its real
+ *     answer, each as a separate `assistant_message`; without this, `send()`
+ *     would return on the FIRST new text entry — the narration — and declare
+ *     the turn complete while the model is still working. An unrecognised
+ *     `finish_reason` (including none at all) is deliberately treated as
+ *     NON-terminal: see `isTerminalFinishReason`. */
 function newAssistantReply(
-  before: TranscriptMessage[] | null,
-  after: TranscriptMessage[] | null,
-): TranscriptMessage | null {
+  before: TranscriptEntry[] | null,
+  after: TranscriptEntry[] | null,
+): TranscriptEntry | null {
   if (!after || before === null) return null;
   for (let i = after.length - 1; i >= before.length; i--) {
-    if (after[i].kind === "text") return after[i];
+    const entry = after[i];
+    if (entry.kind === "text" && isTerminalFinishReason(entry.finishReason)) return entry;
   }
   return null;
 }
@@ -697,8 +776,8 @@ export function createMngrBackend(deps: {
    *  than dressing up as an answer. */
   async function waitForNewAssistantReply(
     nativeId: string,
-    before: TranscriptMessage[],
-  ): Promise<TranscriptMessage | null> {
+    before: TranscriptEntry[],
+  ): Promise<TranscriptEntry | null> {
     const deadline = Date.now() + replyTimeoutMs;
     for (;;) {
       const after = await fetchTranscript(nativeId);
@@ -731,10 +810,10 @@ export function createMngrBackend(deps: {
    *  narrow (that one error message) so any OTHER failure — a real
    *  unreadable transcript, a dead agent, a timeout — still returns `null`
    *  and still disables both checks. */
-  async function fetchTranscript(nativeId: string): Promise<TranscriptMessage[] | null> {
+  async function fetchTranscript(nativeId: string): Promise<TranscriptEntry[] | null> {
     const res = await exec(argvTranscript(nativeId));
     if (res.code !== 0) return isNoTranscriptYetError(res.stdout) ? [] : null;
-    const messages: TranscriptMessage[] = [];
+    const messages: TranscriptEntry[] = [];
     for (const line of res.stdout.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -807,7 +886,11 @@ export function createMngrBackend(deps: {
       return { agentId, nativeId: null, backend: "mngr", reason: "invalid-name" };
     }
 
-    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars, spec));
+    // The record's own lineage (recorded at registry.create time), never
+    // re-derived here — defaults to root when the record is absent (the
+    // invalid-name / unregistered-agentId edge cases above).
+    const lineage = { parentAgentId: existing?.parentAgentId ?? null, depth: existing?.depth ?? 0 };
+    const res = await exec(argvCreate(name, agentId, credentialEnv, extraBlankedVars, spec, lineage));
     if (res.code !== 0) {
       // A genuine create failure (mngr's own exit code says so). Leave the
       // principal unbound; send() reports it as an error event rather than
@@ -899,7 +982,7 @@ export function createMngrBackend(deps: {
           const reply = newAssistantReply(before, after) ?? (await waitForNewAssistantReply(nativeId, before));
           if (reply) {
             // Report what the transcript actually shows, not the exit code.
-            onEvent({ type: "result", result: reply.text, isError: false });
+            onEvent({ type: "result", result: resultTextFor(reply), isError: false });
             return { ...ref, nativeId };
           }
           // Submitted, but no NEW assistant reply ever landed. Do NOT
@@ -940,7 +1023,7 @@ export function createMngrBackend(deps: {
 
       const reply = await waitForNewAssistantReply(nativeId, before);
       if (reply) {
-        onEvent({ type: "result", result: reply.text, isError: false });
+        onEvent({ type: "result", result: resultTextFor(reply), isError: false });
         return { ...ref, nativeId };
       }
 
@@ -988,7 +1071,14 @@ export function createMngrBackend(deps: {
     },
 
     async transcript(ref) {
-      return ref.nativeId ? fetchTranscript(ref.nativeId) : null;
+      if (!ref.nativeId) return null;
+      const entries = await fetchTranscript(ref.nativeId);
+      if (entries === null) return null;
+      // Strip the internal finishReason field before returning — the public
+      // TranscriptMessage shape is hand-mirrored in
+      // client/src/lib/agentEvents.ts and must not gain a field the client
+      // doesn't know about.
+      return entries.map(({ finishReason: _ignored, ...m }) => m);
     },
   };
 }

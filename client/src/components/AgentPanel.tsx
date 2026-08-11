@@ -1,7 +1,7 @@
 import { Transcript } from "./Transcript";
 import { Composer, type StagedFile } from "./Composer";
-import { RoomStrip } from "./RoomStrip";
 import type { TabState } from "../lib/chatStore";
+import type { PendingItem, ResolvedItem } from "../lib/pendingStore";
 import type { RosterEntry } from "../lib/tauri";
 
 export function AgentPanel({
@@ -10,12 +10,18 @@ export function AgentPanel({
   roster,
   me,
   onSend,
+  pending,
+  resolved,
+  onResolve,
 }: {
   tab: TabState;
   slashCommands: string[];
   roster: RosterEntry[];
   me: string | null;
   onSend: (text: string, files: StagedFile[]) => Promise<boolean>;
+  pending: PendingItem[];
+  resolved: ResolvedItem[];
+  onResolve: (item: PendingItem, decision: "approve" | "deny", trust: boolean) => void | Promise<void>;
 }) {
   return (
     <div className="flex h-full flex-col bg-panel">
@@ -24,12 +30,15 @@ export function AgentPanel({
           Live updates interrupted — reconnecting…
         </div>
       )}
-      <RoomStrip
-        presence={tab.agent.presence}
-        queueDepth={tab.agent.queueDepth}
+      <Transcript
+        messages={tab.agent.messages}
         roster={roster}
+        me={me}
+        busy={tab.openTurns > 0}
+        pending={pending}
+        resolved={resolved}
+        onResolve={onResolve}
       />
-      <Transcript messages={tab.agent.messages} roster={roster} me={me} busy={tab.openTurns > 0} />
       <Composer slashCommands={slashCommands} roster={roster} onSend={onSend} />
     </div>
   );

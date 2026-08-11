@@ -8,6 +8,15 @@ export interface PendingItem {
   proposedBy?: string;    // infra: "interactive" | "watchdog"
 }
 
+// The outcome of a pending item the operator has already resolved. Pendings
+// carry no session id, so these are kept in Workspace state for the app's
+// lifetime rather than attributed to a conversation.
+export interface ResolvedItem {
+  pendingId: string;
+  summary: string;
+  outcome: string;
+}
+
 export function reducePending(list: PendingItem[], event: unknown, origin: "data" | "infra"): PendingItem[] {
   if (typeof event !== "object" || event === null) return list;
   const e = event as { type?: string; write?: Record<string, unknown>; action?: Record<string, unknown> };

@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { createMngrBackend, type ExecFn } from "../src/backends/mngr.js";
+import {
+  createMngrBackend,
+  isTerminalFinishReason,
+  TERMINAL_FINISH_REASONS,
+  EMPTY_COMPLETION_RESULT,
+  type ExecFn,
+} from "../src/backends/mngr.js";
 import { createAgentRegistry } from "../src/agents.js";
 import { PROVIDER_CREDENTIAL_VARS } from "../src/provider.js";
 import { STRIPPED_ENV_VARS } from "../src/env.js";
@@ -448,7 +454,7 @@ describe("mngr backend", () => {
           return messageSent
             ? {
                 code: 0,
-                stdout: `${JSON.stringify({ type: "assistant_message", role: "assistant", text: "reborn-pong" })}\n`,
+                stdout: `${JSON.stringify({ type: "assistant_message", role: "assistant", text: "reborn-pong", finish_reason: "stop_sequence" })}\n`,
                 stderr: "",
               }
             : { code: 0, stdout: "", stderr: "" };
@@ -956,6 +962,7 @@ describe("mngr backend", () => {
               type: "assistant_message",
               role: "assistant",
               text: "stale reply from a previous turn",
+              finish_reason: "stop_sequence",
             })}\n`,
             stderr: "",
           };
@@ -1027,7 +1034,7 @@ describe("mngr backend", () => {
             transcriptCalls === 1
               ? ""
               : `${JSON.stringify({ type: "user_message", role: "user", content: "hello" })}\n${JSON.stringify(
-                  { type: "assistant_message", role: "assistant", text: "pong" },
+                  { type: "assistant_message", role: "assistant", text: "pong", finish_reason: "stop_sequence" },
                 )}\n`;
           return { code: 0, stdout, stderr: "" };
         }
@@ -1210,12 +1217,12 @@ describe("mngr backend", () => {
           transcriptCalls += 1;
           const priorTurn = [
             { type: "user_message", role: "user", content: "first question" },
-            { type: "assistant_message", role: "assistant", text: "first answer" },
+            { type: "assistant_message", role: "assistant", text: "first answer", finish_reason: "stop_sequence" },
           ];
           const thisTurn = [
             ...priorTurn,
             { type: "user_message", role: "user", content: "hello" },
-            { type: "assistant_message", role: "assistant", text: "second answer" },
+            { type: "assistant_message", role: "assistant", text: "second answer", finish_reason: "stop_sequence" },
           ];
           const lines = transcriptCalls === 1 ? priorTurn : thisTurn;
           return { code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" };
@@ -1253,7 +1260,7 @@ describe("mngr backend", () => {
     // a PREVIOUS turn's answer is present.
     const staticTranscript = [
       { type: "user_message", role: "user", content: "first question" },
-      { type: "assistant_message", role: "assistant", text: "first answer" },
+      { type: "assistant_message", role: "assistant", text: "first answer", finish_reason: "stop_sequence" },
     ];
     const backend = createMngrBackend({
       exec: async (argv) => {
@@ -1311,7 +1318,7 @@ describe("mngr backend", () => {
           if (transcriptCalls === 1) return { code: 0, stdout: "", stderr: "" };
           const lines: unknown[] = [{ type: "user_message", role: "user", content: "hello" }];
           if (transcriptCalls >= 5) {
-            lines.push({ type: "assistant_message", role: "assistant", text: "pong" });
+            lines.push({ type: "assistant_message", role: "assistant", text: "pong", finish_reason: "stop_sequence" });
           }
           return { code: 0, stdout: lines.map((l) => JSON.stringify(l)).join("\n") + "\n", stderr: "" };
         }
@@ -1458,7 +1465,7 @@ describe("mngr backend", () => {
             stdout:
               [
                 { type: "user_message", role: "user", content: "hello" },
-                { type: "assistant_message", role: "assistant", text: "pong" },
+                { type: "assistant_message", role: "assistant", text: "pong", finish_reason: "stop_sequence" },
               ]
                 .map((l) => JSON.stringify(l))
                 .join("\n") + "\n",
@@ -1502,6 +1509,7 @@ describe("mngr backend", () => {
               type: "assistant_message",
               role: "assistant",
               text: "stale reply from a previous turn",
+              finish_reason: "stop_sequence",
             })}\n`,
             stderr: "",
           };
@@ -1984,3 +1992,151 @@ runBackendConformance(
     });
   },
 );
+
+describe("terminal finish_reason", () => {
+  it("treats stop_sequence and end_turn as terminal", () => {
+    expect(isTerminalFinishReason("stop_sequence")).toBe(true);
+    expect(isTerminalFinishReason("end_turn")).toBe(true);
+    expect(TERMINAL_FINISH_REASONS.has("stop_sequence")).toBe(true);
+  });
+
+  it("treats null and UNRECOGNISED reasons as NON-terminal (fail closed)", () => {
+    expect(isTerminalFinishReason(null)).toBe(false);
+    expect(isTerminalFinishReason("tool_use")).toBe(false);
+    expect(isTerminalFinishReason("some_future_reason")).toBe(false);
+  });
+
+  // mngr passes Claude's own Messages API `stop_reason` through verbatim as
+  // `finish_reason` (confirmed against mngr's source,
+  // common_transcript_convert.py:154,217 — see TERMINAL_FINISH_REASONS's doc
+  // comment). That value space includes `max_tokens` (a token-truncated
+  // turn) as well as `stop_sequence`/`end_turn`, and `tool_use` (a segment
+  // that ends in a tool call, i.e. the model is not done). A truncated
+  // answer is still a FINISHED turn — treating it as non-terminal would
+  // poll out the full reply timeout and then report "not yet answered"
+  // while a real, if truncated, answer already sits in the transcript.
+  it("treats max_tokens as terminal (a truncated answer is still a finished turn) and tool_use as non-terminal", () => {
+    expect(isTerminalFinishReason("max_tokens")).toBe(true);
+    expect(TERMINAL_FINISH_REASONS.has("max_tokens")).toBe(true);
+    expect(isTerminalFinishReason("tool_use")).toBe(false);
+  });
+});
+
+describe("send() waits for a TERMINAL assistant message", () => {
+  // Narration (no finish_reason) then the real answer (stop_sequence).
+  // Pre-P0 this returned the narration.
+  it("returns the terminal answer, not an earlier non-terminal segment", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+
+    let transcriptCalls = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv.includes("transcript")) {
+          transcriptCalls++;
+          // 1st read = pre-send baseline (empty).
+          if (transcriptCalls === 1) return { code: 0, stdout: "", stderr: "" };
+          // 2nd read = narration only, NOT terminal.
+          if (transcriptCalls === 2) {
+            return {
+              code: 0,
+              stdout: JSON.stringify({ type: "assistant_message", text: "Let me look...", finish_reason: "tool_use" }),
+              stderr: "",
+            };
+          }
+          // 3rd read = narration + the real terminal answer.
+          return {
+            code: 0,
+            stdout: [
+              JSON.stringify({ type: "assistant_message", text: "Let me look...", finish_reason: "tool_use" }),
+              JSON.stringify({ type: "assistant_message", text: "The answer is 42.", finish_reason: "stop_sequence" }),
+            ].join("\n"),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyPollIntervalMs: 1,
+      replyTimeoutMs: 1000,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "q", (e) => events.push(e));
+
+    const last = events.at(-1) as { type: string; result?: string };
+    expect(last.type).toBe("result");
+    expect(last.result).toBe("The answer is 42.");
+    expect(last.result).not.toBe("Let me look...");
+  });
+
+  it("reports an empty terminal reply as complete-with-no-output, never a bare empty result", async () => {
+    const registry = makeRegistry();
+    const rec = registry.create("probe", "mngr");
+    registry.bind(rec.agentId, "agent-x");
+
+    let n = 0;
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        if (argv.includes("transcript")) {
+          n++;
+          if (n === 1) return { code: 0, stdout: "", stderr: "" };
+          return {
+            code: 0,
+            stdout: JSON.stringify({ type: "assistant_message", text: "", finish_reason: "stop_sequence" }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+      replyPollIntervalMs: 1,
+      replyTimeoutMs: 1000,
+    });
+
+    const events: AgentEvent[] = [];
+    await backend.send({ agentId: rec.agentId, nativeId: "agent-x", backend: "mngr" }, "q", (e) => events.push(e));
+
+    const last = events.at(-1) as { type: string; result?: string };
+    expect(last.type).toBe("result");
+    // Must be self-describing, not "" — and pinned to the exported constant
+    // so the contract survives a wording change rather than a regex guess.
+    expect(last.result).toBe(EMPTY_COMPLETION_RESULT);
+    expect(last.result).not.toBe("");
+  });
+
+  it("stamps lineage onto the mngr agent as labels, not as env", async () => {
+    const calls: string[][] = [];
+    const registry = makeRegistry();
+    const parent = registry.create("parent", "mngr");
+    const child = registry.create("child", "mngr", { parentAgentId: parent.agentId, depth: 1 });
+    const backend = createMngrBackend({
+      exec: async (argv) => {
+        calls.push(argv);
+        if (argv.includes("list")) {
+          return { code: 0, stdout: JSON.stringify({ agents: [] }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      registry,
+      credentialEnv: {},
+      spec: CONFORMANCE_SPEC,
+    });
+
+    await backend.ensure(child.agentId, CONFORMANCE_SPEC);
+
+    const create = calls.find((c) => c.includes("create")) ?? [];
+    const labels = create.filter((_, i) => create[i - 1] === "--label");
+    expect(labels).toContain(`rhumb_parent_id=${parent.agentId}`);
+    expect(labels).toContain("rhumb_depth=1");
+    // Lineage must NOT be smuggled through the environment, which the RHUMB_*
+    // blanking would erase.
+    const envArgs = create.filter((_, i) => create[i - 1] === "--env");
+    expect(envArgs.some((e) => e.startsWith("RHUMB_PARENT_ID="))).toBe(false);
+  });
+});

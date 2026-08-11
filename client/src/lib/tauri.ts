@@ -69,6 +69,19 @@ export function checkHealth(base: string): Promise<boolean> {
   return invoke<boolean>("check_health", { base });
 }
 
+// The host exposes no latency figure, so the client measures its own round
+// trip through the Rust proxy. That includes proxy overhead, which is the
+// number the operator actually experiences.
+export async function checkHealthTimed(base: string): Promise<{ ok: boolean; ms: number }> {
+  const started = performance.now();
+  try {
+    const ok = await checkHealth(base);
+    return { ok, ms: Math.round(performance.now() - started) };
+  } catch {
+    return { ok: false, ms: Math.round(performance.now() - started) };
+  }
+}
+
 // Probe an identity-gated route (registry) before persisting config: /healthz
 // is open, so health checks alone cannot tell a non-allowlisted device apart
 // from a working one. Resolves to the HTTP status (200 allowlisted, 403 not).
