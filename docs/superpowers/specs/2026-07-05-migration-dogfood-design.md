@@ -26,7 +26,7 @@ Why this change: Moonraker exposes `extruder`/`heater_bed` temperatures every po
 
 ### Phase 0 — deploy the fix stack
 
-Ship branch tip `2f0f179` to the box (`micropx-pve.tail731306.ts.net`): build `agent-host` + `dashboard-host` locally, tarball-deploy per the established convention (backup `/root/rhumb` first), restart `rhumbr-agent.service` / `rhumbr-dashboard.service`, health-check. Rebuild the Tauri client from the branch.
+Ship branch tip `2f0f179` to the box (`micropx-pve.tailnet.ts.net`): build `agent-host` + `dashboard-host` locally, tarball-deploy per the established convention (backup `/root/rhumb` first), restart `rhumbr-agent.service` / `rhumbr-dashboard.service`, health-check. Rebuild the Tauri client from the branch.
 
 Confirm the new capabilities are live before the turn:
 - `redeploy_service` present in the agent's infra tool set.

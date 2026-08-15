@@ -13,7 +13,7 @@
 - **Observe, don't rescue.** During the turn (Task 4) issue NO manual commands against the box, containers, or DB. If the agent stalls or fails, that is the finding. Manual intervention is allowed only after the turn is declared over.
 - **Findings drive the roadmap** — the run log records every friction point as an F-numbered finding with severity; the write-up (Task 6) ranks them.
 - **Client bugs get filed, not fixed mid-run.** If the client blocks a step, fall back to raw HTTP for that step (commands in Task 4) and record the client failure as a finding.
-- **Box:** `micropx-pve.tail731306.ts.net` (`$BOX`), SSH as root. Tailscale serve fronts both hosts: dashboard at `https://$BOX/`, agent at `https://$BOX/agent`. Direct ports on the box: agent `127.0.0.1:8787`, dashboard `127.0.0.1:8788`.
+- **Box:** `micropx-pve.tailnet.ts.net` (`$BOX`), SSH as root. Tailscale serve fronts both hosts: dashboard at `https://$BOX/`, agent at `https://$BOX/agent`. Direct ports on the box: agent `127.0.0.1:8787`, dashboard `127.0.0.1:8788`.
 - **Run log:** all outputs and timestamps are pasted into `docs/dogfood/2026-07-04-day2-filament.md` as you go (created in Task 2, committed in Task 6). Timestamps in local time, `date '+%H:%M:%S'`.
 
 ---
@@ -37,13 +37,13 @@ date '+%H:%M:%S'
 - [ ] **Step 2: Discover the deployed stack layout**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "systemctl list-units --all --no-pager | grep -i rhumb"
+ssh root@micropx-pve.tailnet.ts.net "systemctl list-units --all --no-pager | grep -i rhumb"
 ```
 
 Expected: two units (agent host + dashboard host; names contain `rhumb`). Record the exact unit names as `$AGENT_UNIT` and `$DASH_UNIT`. Then for each:
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "systemctl cat $AGENT_UNIT"
+ssh root@micropx-pve.tailnet.ts.net "systemctl cat $AGENT_UNIT"
 ```
 
 Record from the unit file / EnvironmentFile: `WorkingDirectory` → `$REPO_DIR` (repo root is its parent if WorkingDirectory points at `agent-host/`), `RHUMB_WORKSPACE` → `$WS`, `RHUMB_CONTROL_TOKEN` → `$TOKEN`, `RHUMB_DEPLOY_KEY` → `$DEPLOY_KEY`. If the env lives in a separate file, `cat` it.
@@ -51,7 +51,7 @@ Record from the unit file / EnvironmentFile: `WorkingDirectory` → `$REPO_DIR` 
 - [ ] **Step 3: Confirm current deployed revision (expect PR #21-era, behind main)**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR && git log --oneline -1 && git status --short"
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR && git log --oneline -1 && git status --short"
 ```
 
 Expected: HEAD at or near `93081f0` (PR #21 merge), clean tree. If the tree is dirty, record what's dirty in the run log before proceeding (do not discard silently).
@@ -59,7 +59,7 @@ Expected: HEAD at or near `93081f0` (PR #21 merge), clean tree. If the tree is d
 - [ ] **Step 4: Update to current main**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR && git fetch origin && git checkout main && git pull --ff-only && git log --oneline -1"
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR && git fetch origin && git checkout main && git pull --ff-only && git log --oneline -1"
 ```
 
 Expected: HEAD = `adce272` (merge of PR #23) or newer.
@@ -67,8 +67,8 @@ Expected: HEAD = `adce272` (merge of PR #23) or newer.
 - [ ] **Step 5: Rebuild both hosts**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR/agent-host && npm ci && npm run build"
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR/dashboard-host && npm ci && npm run build"
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR/agent-host && npm ci && npm run build"
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR/dashboard-host && npm ci && npm run build"
 ```
 
 Expected: both builds exit 0. Record wall time of each.
@@ -76,7 +76,7 @@ Expected: both builds exit 0. Record wall time of each.
 - [ ] **Step 6: Restart and health-check**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "systemctl restart $AGENT_UNIT $DASH_UNIT && sleep 3 && curl -s http://127.0.0.1:8787/healthz && curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/"
+ssh root@micropx-pve.tailnet.ts.net "systemctl restart $AGENT_UNIT $DASH_UNIT && sleep 3 && curl -s http://127.0.0.1:8787/healthz && curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/"
 ```
 
 Expected: `{"ok":true}` and `200`. If the agent host refuses to start, check `journalctl -u $AGENT_UNIT -n 50` — the likely cause is a new required env var introduced since PR #21 (that itself is a finding: record it).
@@ -127,7 +127,7 @@ Create `docs/dogfood/2026-07-04-day2-filament.md` locally:
 - [ ] **Step 2: Extract the printers datasource connection**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cat $WS/data-sources.json"
+ssh root@micropx-pve.tailnet.ts.net "cat $WS/data-sources.json"
 ```
 
 Record the printers entry's id and connection string → `$DB`. (Do NOT paste the password into the run log — record host/db/user only.)
@@ -137,7 +137,7 @@ Record the printers entry's id and connection string → `$DB`. (Do NOT paste th
 Run via the deployed agent-host's `pg` (no `psql` on the box — finding F2 from run 1):
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR/agent-host && DB='$DB' node -e '
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR/agent-host && DB='$DB' node -e '
 const {Client}=require(\"pg\");
 (async()=>{const c=new Client({connectionString:process.env.DB});await c.connect();
 const t=await c.query(\"select table_name from information_schema.tables where table_schema='\''public'\'' order by 1\");
@@ -154,14 +154,14 @@ Expected: ~3 tables (printers / jobs / telemetry, whatever run 1 named them), te
 - [ ] **Step 4: Snapshot service + surface + ontology state**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cat $WS/services.json"
+ssh root@micropx-pve.tailnet.ts.net "cat $WS/services.json"
 ```
 
 Record the poller entry: service name, container id (`$CTR_ID`, expected 105), container IP (`$CTR_IP`), health URL (`$POLLER_HEALTH`), status (expected `healthy`). Then:
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "curl -s $POLLER_HEALTH; curl -s -o /dev/null -w ' surface:%{http_code}\n' http://127.0.0.1:8788/surfaces/printer-tracker/"
-ssh root@micropx-pve.tail731306.ts.net "ls $WS/ontology && grep -ril printer $WS/ontology | sort"
+ssh root@micropx-pve.tailnet.ts.net "curl -s $POLLER_HEALTH; curl -s -o /dev/null -w ' surface:%{http_code}\n' http://127.0.0.1:8788/surfaces/printer-tracker/"
+ssh root@micropx-pve.tailnet.ts.net "ls $WS/ontology && grep -ril printer $WS/ontology | sort"
 ```
 
 Expected: poller `{"ok":true,...}`, `surface:200`, ontology files including `datasource-printers`, `service-printer-poller`, `container-105`, `dashboard-printer-tracker`. Paste all into the run log.
@@ -182,7 +182,7 @@ git commit -m "docs(dogfood): day-2 run log — phase 0/1 baseline"
 
 **Interfaces:**
 - Consumes: `$TOKEN` from Task 1.
-- Produces: a connected client session against `https://micropx-pve.tail731306.ts.net` with the sessions panel populated.
+- Produces: a connected client session against `https://micropx-pve.tailnet.ts.net` with the sessions panel populated.
 
 - [ ] **Step 1: Launch the client**
 
@@ -194,7 +194,7 @@ Expected: Tauri window opens to the connection screen (first Rust build ~4 min i
 
 - [ ] **Step 2: Connect over tailnet identity**
 
-In the connection screen use the serve origin (agent base `https://micropx-pve.tail731306.ts.net/agent`, dashboard base `https://micropx-pve.tail731306.ts.net`) and `$TOKEN` as the control token — or the zero-entry/autodiscovery path if offered (PR #21 feature; prefer it, and record whether it worked).
+In the connection screen use the serve origin (agent base `https://micropx-pve.tailnet.ts.net/agent`, dashboard base `https://micropx-pve.tailnet.ts.net`) and `$TOKEN` as the control token — or the zero-entry/autodiscovery path if offered (PR #21 feature; prefer it, and record whether it worked).
 
 Expected: shell loads, sessions panel lists existing sessions (index backfill from PR #23 should show prior on-disk transcripts — record whether it does).
 
@@ -203,7 +203,7 @@ Expected: shell loads, sessions panel lists existing sessions (index backfill fr
 Open the pending-actions UI in the client; it should be empty. Cross-check raw:
 
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" https://micropx-pve.tail731306.ts.net/agent/infra/pending
+curl -s -H "Authorization: Bearer $TOKEN" https://micropx-pve.tailnet.ts.net/agent/infra/pending
 ```
 
 Expected: `{"pending":[]}`. Any discrepancy between client UI and raw endpoint is a finding.
@@ -239,9 +239,9 @@ Rules of engagement:
 Raw-HTTP fallback (ONLY if the client's pending UI fails — record as a client finding):
 
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" https://micropx-pve.tail731306.ts.net/agent/infra/pending
+curl -s -H "Authorization: Bearer $TOKEN" https://micropx-pve.tailnet.ts.net/agent/infra/pending
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"decision":"approve"}' https://micropx-pve.tail731306.ts.net/agent/infra/pending/<ID>/resolve
+  -d '{"decision":"approve"}' https://micropx-pve.tailnet.ts.net/agent/infra/pending/<ID>/resolve
 ```
 
 > **STALE (kept for the historical record):** identity mode requires the `Sec-Rhumb-Control: 1` shell header instead of Bearer auth — this recipe 403s against a current deployment. See "Driving and approving over HTTP" in `agent-host/README.md`. Discovered as a finding during the run this plan drove.
@@ -270,7 +270,7 @@ Re-run the Task 2 Step 3 counts/schema command unchanged. Pass: every baseline t
 In the same output, confirm a new filament column exists (on the jobs/history table) with a numeric type. Then:
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "cd $REPO_DIR/agent-host && DB='$DB' node -e '
+ssh root@micropx-pve.tailnet.ts.net "cd $REPO_DIR/agent-host && DB='$DB' node -e '
 const {Client}=require(\"pg\");
 (async()=>{const c=new Client({connectionString:process.env.DB});await c.connect();
 const r=await c.query(process.env.Q);console.log(JSON.stringify(r.rows,null,1));await c.end();})()
@@ -282,14 +282,14 @@ with `Q` set to a select of the newest few rows of the filament-bearing table (e
 - [ ] **Step 3: Criterion 2 — service healthy, hands-off**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "curl -s $POLLER_HEALTH && cat $WS/services.json"
-ssh root@micropx-pve.tail731306.ts.net "ssh -i $DEPLOY_KEY -o StrictHostKeyChecking=no root@$CTR_IP 'systemctl is-active printer-poller 2>/dev/null || systemctl list-units --no-pager | grep -i poller'"
+ssh root@micropx-pve.tailnet.ts.net "curl -s $POLLER_HEALTH && cat $WS/services.json"
+ssh root@micropx-pve.tailnet.ts.net "ssh -i $DEPLOY_KEY -o StrictHostKeyChecking=no root@$CTR_IP 'systemctl is-active printer-poller 2>/dev/null || systemctl list-units --no-pager | grep -i poller'"
 ```
 
 Pass: health `{"ok":true,...}`, registry `healthy`, unit `active`, **and** the Task 4 log shows zero manual interventions. Also check for restart storms since the turn started:
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "ssh -i $DEPLOY_KEY root@$CTR_IP 'journalctl -u printer-poller --since \"<turn start time>\" | grep -c Started'"
+ssh root@micropx-pve.tailnet.ts.net "ssh -i $DEPLOY_KEY root@$CTR_IP 'journalctl -u printer-poller --since \"<turn start time>\" | grep -c Started'"
 ```
 
 Expected: small number (one redeploy restart is normal; dozens = crash loop finding).
@@ -297,7 +297,7 @@ Expected: small number (one redeploy restart is normal; dozens = crash loop find
 - [ ] **Step 4: Criterion 4 — surface renders the field**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/surfaces/printer-tracker/ && curl -s http://127.0.0.1:8788/surfaces/printer-tracker/ | grep -ci filament"
+ssh root@micropx-pve.tailnet.ts.net "curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/surfaces/printer-tracker/ && curl -s http://127.0.0.1:8788/surfaces/printer-tracker/ | grep -ci filament"
 ```
 
 Pass: `200` and grep count ≥ 1. Also eyeball the rendered dashboard in a browser / the client canvas and record a sentence on what it actually shows.
@@ -305,7 +305,7 @@ Pass: `200` and grep count ≥ 1. Also eyeball the rendered dashboard in a brows
 - [ ] **Step 5: Criterion 5 — ontology consistent**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "ls $WS/ontology && grep -ril printer $WS/ontology | sort"
+ssh root@micropx-pve.tailnet.ts.net "ls $WS/ontology && grep -ril printer $WS/ontology | sort"
 ```
 
 Pass: all four baseline entries still present and linked; any new/changed entries coherent. Diff against the Task 2 output.

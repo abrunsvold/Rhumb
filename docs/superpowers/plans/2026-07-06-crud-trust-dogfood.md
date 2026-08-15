@@ -6,14 +6,14 @@
 
 **Architecture:** Operational run, not a code plan — the platform's build agent writes whatever the tool needs. Our tasks: snapshot the baseline, connect the client, drive the build turn, run the write session (trust ladder + probes), verify ground truth, write findings. Box code is already merged-main (no deploy). Box-specific values are discovered in D1 and reused as shell variables.
 
-**Tech Stack:** SSH to `micropx-pve.tail731306.ts.net`; `node`+`pg` from the deployed dashboard-host/agent-host `node_modules` (no `psql`); `curl`; the Tauri client via `npm run tauri:dev` in `client/` driven by computer-use; the dashboard-host `/data/*` write API.
+**Tech Stack:** SSH to `micropx-pve.tailnet.ts.net`; `node`+`pg` from the deployed dashboard-host/agent-host `node_modules` (no `psql`); `curl`; the Tauri client via `npm run tauri:dev` in `client/` driven by computer-use; the dashboard-host `/data/*` write API.
 
 ## Global Constraints
 
 - **Observe, don't rescue** applies to the BUILD turn (D3): no manual box/DB/container commands during it. The WRITE session (D4) is the opposite — the operator is actively using and probing the surface, so curl/devtools are expected there.
 - **Two facts the run characterizes** (from the code map): trust is per-(source, surface) only — one "trust this surface" approval auto-executes every future write (any table, any op incl. DELETE); DDL (`CREATE/ALTER/DROP TABLE`) is in no gate's vocabulary (F17).
 - **Route facts** (dashboard-host `/data/*`, verified): write = `POST /data/:source/write` with header `x-rhumb-surface-token: <surface token>`, body `{op:{kind:"insert"|"update"|"delete"|"select", table, ...}}` → 202 `{pendingId}` if untrusted, or `{status:"executed"}` if trusted. `source.mode` must be `read-write` (else 403). `/data/:source/pending*` is behind the `Sec-Rhumb-Control: 1` shell guard (browser JS can't set it). Trust approval = `POST /data/:source/pending/:id/resolve` body `{"decision":"approve","trustSurface":true}`. Identifiers pass `ident()` whitelist `^[A-Za-z_][A-Za-z0-9_]*$` (throws before SQL is built).
-- **Box facts:** `$BOX`=micropx-pve.tail731306.ts.net (SSH root); `$WS`=/root/rhumbr-workspace; data files under `$WS`: `data-sources.json`, `data-trust.json`, `data-audit.jsonl`; `$REPO_DIR`=/root/rhumb; serve fronts dashboard at `https://$BOX/`, agent at `https://$BOX/agent`. Control token in `/root/rhumb.env` (`RHUMB_CONTROL_TOKEN`) — never persist its value.
+- **Box facts:** `$BOX`=micropx-pve.tailnet.ts.net (SSH root); `$WS`=/root/rhumbr-workspace; data files under `$WS`: `data-sources.json`, `data-trust.json`, `data-audit.jsonl`; `$REPO_DIR`=/root/rhumb; serve fronts dashboard at `https://$BOX/`, agent at `https://$BOX/agent`. Control token in `/root/rhumb.env` (`RHUMB_CONTROL_TOKEN`) — never persist its value.
 - **Branch:** `dogfood/crud-trust` off main (cd1266e). No product-code changes — only the run-log doc + commits.
 - **No secrets** in the run log, runsheet, or reports (DB passwords, control token, OAuth, surface tokens).
 - **Run log:** `docs/dogfood/2026-07-06-crud-trust.md`, timestamps local (`date '+%H:%M:%S'`), pasted-evidence discipline — every criterion gets command + output.
@@ -47,7 +47,7 @@
 - [ ] **Step 2: Snapshot the data-plane baseline (read-only).**
 
 ```bash
-ssh root@micropx-pve.tail731306.ts.net "echo '--- data-sources ---'; cat $WS/data-sources.json 2>/dev/null || echo '(absent)'; echo '--- data-trust ---'; cat $WS/data-trust.json 2>/dev/null || echo '(absent)'; echo '--- data-audit (line count + tail) ---'; wc -l $WS/data-audit.jsonl 2>/dev/null || echo '(absent)'; tail -3 $WS/data-audit.jsonl 2>/dev/null"
+ssh root@micropx-pve.tailnet.ts.net "echo '--- data-sources ---'; cat $WS/data-sources.json 2>/dev/null || echo '(absent)'; echo '--- data-trust ---'; cat $WS/data-trust.json 2>/dev/null || echo '(absent)'; echo '--- data-audit (line count + tail) ---'; wc -l $WS/data-audit.jsonl 2>/dev/null || echo '(absent)'; tail -3 $WS/data-audit.jsonl 2>/dev/null"
 ```
 
 Record into Phase 0/1: the data-source ids present (expect just `printers`, mode likely `read-write` from prior runs — note its mode), whether `data-trust.json` exists and its contents (expect `[]`/absent — trust starts clean), and the `data-audit.jsonl` line count (the "before" count so new writes are countable). Redact any connection-string passwords.
@@ -75,13 +75,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Launch.** `cd client && npm ci && npm run tauri:dev` (background; the client was already rebuilt+tested this session, so this is a warm build). Wait for the window (computer-use).
 
-- [ ] **Step 2: Connect.** Use manual Server URL `https://micropx-pve.tail731306.ts.net` (F14 GUI autodiscovery is a known-open chip — go straight to manual). Confirm the shell loads and the sessions panel populates. Record the client PIDs (`ps` by process name: `target/debug/app`, vite, tauri, npm) so D3 can confirm liveness.
+- [ ] **Step 2: Connect.** Use manual Server URL `https://micropx-pve.tailnet.ts.net` (F14 GUI autodiscovery is a known-open chip — go straight to manual). Confirm the shell loads and the sessions panel populates. Record the client PIDs (`ps` by process name: `target/debug/app`, vite, tauri, npm) so D3 can confirm liveness.
 
 - [ ] **Step 3: Verify both pending surfaces reachable.** The build turn will use the INFRA pending queue (provision_database) and the write session the DATA pending queue. Raw cross-check both are empty:
 
 ```bash
-curl -s -H "Sec-Rhumb-Control: 1" https://micropx-pve.tail731306.ts.net/agent/infra/pending
-curl -s -H "Sec-Rhumb-Control: 1" https://micropx-pve.tail731306.ts.net/data/printers/pending
+curl -s -H "Sec-Rhumb-Control: 1" https://micropx-pve.tailnet.ts.net/agent/infra/pending
+curl -s -H "Sec-Rhumb-Control: 1" https://micropx-pve.tailnet.ts.net/data/printers/pending
 ```
 
 Expect `{"pending":[]}`. (Second one proves the data-pending control plane is up and shell-guarded.)
@@ -141,7 +141,7 @@ This phase is interactive operator use — curl and reading the surface's inject
 ```bash
 curl -s -X POST -H "x-rhumb-surface-token: <SURFACE_TOKEN>" -H 'content-type: application/json' \
   -d '{"op":{"kind":"delete","table":"<spool_table>","where":{"id":<some_id>}}}' \
-  https://micropx-pve.tail731306.ts.net/data/<SOURCE_ID>/write
+  https://micropx-pve.tailnet.ts.net/data/<SOURCE_ID>/write
 ```
 
 Record whether it returned `{"status":"executed"}` (trust covers DELETE — the coarseness finding) or `{"status":"pending"}` (it re-gated). Either way it's a finding about the trust model's real scope.
@@ -149,8 +149,8 @@ Record whether it returned `{"status":"executed"}` (trust covers DELETE — the 
 - [ ] **Step 3: Adversarial probe — self-approve guard.** Attempt to read/resolve the data pending queue WITHOUT the shell header (simulating the surface's own page JS):
 
 ```bash
-curl -s -o /dev/null -w 'no-header:%{http_code}\n' https://micropx-pve.tail731306.ts.net/data/<SOURCE_ID>/pending
-curl -s -o /dev/null -w 'with-header:%{http_code}\n' -H "Sec-Rhumb-Control: 1" https://micropx-pve.tail731306.ts.net/data/<SOURCE_ID>/pending
+curl -s -o /dev/null -w 'no-header:%{http_code}\n' https://micropx-pve.tailnet.ts.net/data/<SOURCE_ID>/pending
+curl -s -o /dev/null -w 'with-header:%{http_code}\n' -H "Sec-Rhumb-Control: 1" https://micropx-pve.tailnet.ts.net/data/<SOURCE_ID>/pending
 ```
 
 Expect `no-header:403` and `with-header:200` — the surface cannot bless its own write.
@@ -160,7 +160,7 @@ Expect `no-header:403` and `with-header:200` — the surface cannot bless its ow
 ```bash
 curl -s -X POST -H "x-rhumb-surface-token: <SURFACE_TOKEN>" -H 'content-type: application/json' \
   -d '{"op":{"kind":"insert","table":"bad name; drop table x","values":{"material":"x"}}}' \
-  https://micropx-pve.tail731306.ts.net/data/<SOURCE_ID>/write
+  https://micropx-pve.tailnet.ts.net/data/<SOURCE_ID>/write
 ```
 
 Record the outcome — it should fail (the `ident()` whitelist throws before SQL is built; audit records `error`, no injection). If the surface is trusted this errors inline (500 `write failed`); log which.

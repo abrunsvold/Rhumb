@@ -14,7 +14,7 @@
 
 - Node `>=20`, ESM (`"type": "module"`), TypeScript strict; host tests live in `<pkg>/test/*.test.ts` and run with `npm test` (vitest + supertest).
 - Client TS tests live in `client/test/*.test.tsx?`; Rust tests are inline `#[cfg(test)]` modules run with `cargo test` from `client/src-tauri`.
-- New env vars: `RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g. `anderson.brunsvold@gmail.com`), `RHUMB_INSECURE_DEV` (`"1"` enables dev mode).
+- New env vars: `RHUMB_ALLOWED_USERS` (comma-separated tailnet logins, e.g. `you@example.com`), `RHUMB_INSECURE_DEV` (`"1"` enables dev mode).
 - Identity header: `Tailscale-User-Login` (read case-insensitively via Express `req.get`). Shell header: `Sec-Rhumb-Control: 1`.
 - Fail closed: in identity mode (dev flag unset), hosts refuse to start with an empty allowlist and bind `127.0.0.1` only.
 - Dev mode (`RHUMB_INSECURE_DEV=1`) restores today's exact behavior: bind all interfaces, optional control token, no identity checks.

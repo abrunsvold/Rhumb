@@ -127,7 +127,7 @@ The redeploy self-report named container **105**, while the M2 baseline had the 
 ### F19 — F14 "loud discovery" does not render live in the GUI process *(MEDIUM / client)*
 PR #28's F14 fix makes discovery failures loud by surfacing a per-peer diagnostic report instead of a blank list — **verified in unit tests, but it did NOT render live.** In the packaged/dev Tauri GUI, clicking **Rescan** produced the **bare legacy empty message**, not the diagnostic report (reproduced). Localized to `discover_hosts()` returning empty *inside the Tauri process* — most likely `find_tailscale_bin` failing to resolve the `tailscale` binary under the GUI's restricted `PATH`, so the discovery command bails before the diagnostic-render path the unit test exercises. The tested render is correct; the gap is **upstream**, in the Rust discovery command as it runs in the GUI process. Manual connect works throughout (the reliable path is preserved), so this is a qualification on the F14 claim, not a regression — but "make the failure loud" is **not achieved live**.
 
-**Reproduction evidence (pasted verbatim):** Rescan showed only the bare legacy **"No Rhumb servers found on your tailnet."** with no "Scanned N peers" diagnostic; reproduced across **two Rescan clicks + one full dev-server restart**. Meanwhile, from this Mac: `tailscale status` showed `micropx-pve.tail731306.ts.net` **online**, and `curl https://micropx-pve.tail731306.ts.net/.well-known/rhumb.json` returned a **valid 200 manifest** — so discovery *should* have matched. Localized (via source review) to `discover_hosts()` in the Rust layer returning an empty report **inside the Tauri process** (most likely `find_tailscale_bin()` / the `tailscale status` subprocess failing under the GUI's restricted `PATH`) — **not** the render layer (`ConnectionScreen`'s diagnostic block renders correctly once a report is set). This is present-but-empty-at-runtime, not absent-from-build. Connected via manual Server URL for the rest of the turn (the reliable path #28 deliberately preserves).
+**Reproduction evidence (pasted verbatim):** Rescan showed only the bare legacy **"No Rhumb servers found on your tailnet."** with no "Scanned N peers" diagnostic; reproduced across **two Rescan clicks + one full dev-server restart**. Meanwhile, from this Mac: `tailscale status` showed `micropx-pve.tailnet.ts.net` **online**, and `curl https://micropx-pve.tailnet.ts.net/.well-known/rhumb.json` returned a **valid 200 manifest** — so discovery *should* have matched. Localized (via source review) to `discover_hosts()` in the Rust layer returning an empty report **inside the Tauri process** (most likely `find_tailscale_bin()` / the `tailscale status` subprocess failing under the GUI's restricted `PATH`) — **not** the render layer (`ConnectionScreen`'s diagnostic block renders correctly once a report is set). This is present-but-empty-at-runtime, not absent-from-build. Connected via manual Server URL for the rest of the turn (the reliable path #28 deliberately preserves).
 
 **Action:** fix `discover_hosts()` to work in the GUI process — resolve the `tailscale` binary robustly under the GUI's `PATH` (absolute-path / `find_tailscale_bin` hardening) — **or** surface the empty-report diagnostic even on the `find_tailscale_bin = None` path so the loud report renders regardless of binary resolution. Either lands the F14 intent live.
 
@@ -140,7 +140,7 @@ PR #28's F14 fix makes discovery failures loud by surfacing a per-peer diagnosti
 
 ## Phase 3 — ground-truth verification
 
-_Operator: M5 ground-truth pass via direct SSH to `root@micropx-pve.tail731306.ts.net` (trusted box), read-only only (SELECT/information_schema, cat, ls, systemctl status, journalctl, pct list/config/exec read-only). No mutations. All commands and raw output below are pasted verbatim (creds redacted)._
+_Operator: M5 ground-truth pass via direct SSH to `root@micropx-pve.tailnet.ts.net` (trusted box), read-only only (SELECT/information_schema, cat, ls, systemctl status, journalctl, pct list/config/exec read-only). No mutations. All commands and raw output below are pasted verbatim (creds redacted)._
 
 ### C1 — CLEAN CUTOVER (headline, F11/F18) — **PASS**
 
@@ -251,9 +251,9 @@ The relationship label `container-105` was already correct only by coincidence �
 
 From this Mac, over the tailnet (real identity, not loopback):
 ```
-$ curl -s -o /dev/null -w '%{http_code}\n' https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/
+$ curl -s -o /dev/null -w '%{http_code}\n' https://micropx-pve.tailnet.ts.net/surfaces/printer-tracker/
 200
-$ curl -s https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/ | grep -ci 'nozzle\|bed\|temp'
+$ curl -s https://micropx-pve.tailnet.ts.net/surfaces/printer-tracker/ | grep -ci 'nozzle\|bed\|temp'
 30
 ```
 Box loopback (`ssh … curl 127.0.0.1:8788/surfaces/printer-tracker/`) → `403` — this is the tailnet-identity gate from Phase 1 baseline, not breakage (baseline was also 403 on loopback; consistent, expected).

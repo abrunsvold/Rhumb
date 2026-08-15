@@ -947,7 +947,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: everything above, deployed to the box; the staged filament-fixed poller at `<workspace>/services/printer-poller` on the box (present since the day-2 turn).
 
-Preconditions and box facts (from the day-2 run): box `root@micropx-pve.tail731306.ts.net`; deployed stack `/root/rhumb` under units `rhumbr-agent.service`/`rhumbr-dashboard.service`; workspace `/root/rhumbr-workspace`; live poller = container 105 @ 192.168.1.95:8080, registry `services.json` entry `printer-poller`; deploy key `/root/rhumb-deploy`. Operator approval flows through the client or `POST /agent/infra/pending/<id>/resolve` with header `Sec-Rhumb-Control: 1`.
+Preconditions and box facts (from the day-2 run): box `root@micropx-pve.tailnet.ts.net`; deployed stack `/root/rhumb` under units `rhumbr-agent.service`/`rhumbr-dashboard.service`; workspace `/root/rhumbr-workspace`; live poller = container 105 @ 192.168.1.95:8080, registry `services.json` entry `printer-poller`; deploy key `/root/rhumb-deploy`. Operator approval flows through the client or `POST /agent/infra/pending/<id>/resolve` with header `Sec-Rhumb-Control: 1`.
 
 - [ ] **Step 1: Deploy the branch to the box** (tarball convention, backup first — same procedure as the day-2 Phase 0, agent-host only): build locally (`cd agent-host && npm ci && npm run build`), tar source, push, build on box, restart `rhumbr-agent.service`, verify `curl -s http://127.0.0.1:8787/healthz` → `{"ok":true}`.
 
