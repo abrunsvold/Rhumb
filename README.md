@@ -10,6 +10,18 @@ Most ways of working with a coding agent leave you with a chat transcript. The a
 
 ---
 
+## What it looks like
+
+![The Rhumb desktop client: a session list on the left, the agent transcript in the middle with an inline approval card, and a live agent-built surface on the right](docs/images/workspace.png)
+
+The desktop client, connected to a live box. Left: sessions, grouped by age. Middle: the transcript — this one is an unattended watchdog run reconciling the ontology against live state, ending in an approval card for the `redeploy_service` it wants to run. Right: a filament-inventory surface the agent built and the dashboard host serves, running against its own Postgres table. The strip along the bottom counts what exists: surfaces, ontology nodes, edges, and anything held in the approval queue.
+
+![The MAP tab showing the ontology as an indented dependency tree, from dashboards down through services, containers, and nodes](docs/images/map.png)
+
+The **MAP** tab is the persistent ontology, drawn as a dependency tree: dashboards at the root, and everything they rest on nested underneath — the datasource behind a surface, the container a service runs in, the node that container sits on. Selecting a node opens its properties and edges in the right pane. Nothing here is hand-maintained; the agent writes the graph as it builds.
+
+---
+
 ## Why Rhumb
 
 - **Use your existing Claude subscription — or an API key or gateway instead.** In the default mode, server-side Claude Code authenticates with your normal interactive login rather than pay-per-token billing; api-key and gateway modes are also supported (see below).
@@ -70,17 +82,9 @@ your stored login.
 
 Two sides joined over Tailscale, plus one outbound call to the model API:
 
-```
-  Laptop (Tauri client)                 Proxmox host (server)
-  ┌─────────────────────┐    Tailscale   ┌──────────────────────────────┐
-  │ Agent panel (chat)  │◄──────────────►│ Agent host (Claude Code)     │──► Anthropic API
-  │ Canvas (dashboards) │                │ Dashboard host (+ registry)  │    (or your gateway)
-  │ Connection layer    │                │ Data endpoint (read/write)   │
-  └─────────────────────┘                │ Infra capability (Proxmox/DB)│
-                                         │ Ontology (markdown graph)    │
-                                         │ Workspace folder             │
-                                         └──────────────────────────────┘
-```
+<img src="docs/images/architecture.svg" alt="Rhumb architecture: a Tauri client on your laptop reaches an agent host and a dashboard host on your Proxmox box over a Tailscale mesh. The React webview never talks to the hosts directly — a Rust proxy does, because it can set the control header browser JavaScript cannot. The agent host calls the Anthropic API, the only data that leaves the box. Every write and infrastructure action parks in an approval queue and reaches Postgres or an LXC container only after you approve it in the transcript. Both hosts are joined by a shared workspace folder." width="100%">
+
+Two details the box list above can't show. **The webview never reaches a host itself** — identity-mode hosts require a `Sec-Rhumb-Control` header that browser JavaScript is forbidden from setting, so every call goes through the client's Rust proxy (which is also why the hosts need no CORS). And **writes are gated, not trusted**: a row insert or a container redeploy parks in an approval queue and surfaces as a card in your transcript; nothing touches Postgres or Proxmox until you approve it.
 
 **Principle:** everything durable lives **server-side**. The client is a rich remote window; the state, the workspace, and your Claude credentials stay on the box. The one thing that leaves the box is the model request itself — the agent host is an API client, and prompts and tool results go to Anthropic (or the endpoint you configured) the same way they would from `claude` in a terminal. Subsystems are joined by a shared `RHUMB_WORKSPACE` folder — a file-as-contract: the agent writes surfaces into it, the dashboard host serves them.
 
