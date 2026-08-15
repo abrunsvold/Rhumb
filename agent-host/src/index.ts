@@ -43,7 +43,7 @@ import { createServiceOps } from "./services/ops.js";
 import { createHealthGate, createNetProbes } from "./services/health.js";
 import { createDataSourceResolver } from "./services/datasource.js";
 import { readManifest } from "./services/manifest.js";
-import { createWatchdog, watchdogDisallowedTools, WATCHDOG_PROMPT } from "./watchdog.js";
+import { createWatchdog, makeWatchdogTurn, watchdogDisallowedTools } from "./watchdog.js";
 import { loadOntologyConfig } from "./ontology/config.js";
 import { createOntologyOps, ONTOLOGY_TOOL_NAMES } from "./ontology/ops.js";
 import { createOntologyServer } from "./ontology/server.js";
@@ -846,12 +846,11 @@ export function buildApp(deps: { config: Config; query: QueryFn }): Express {
     });
     app.locals.watchdog = createWatchdog({
       intervalMs: deps.config.watchdogMinutes * 60_000,
-      runTurn: () =>
-        watchdogManager.run(WATCHDOG_PROMPT, undefined, (e) => {
-          if (e.type === "session" && e.sessionId) {
-            sessions.upsertFromTurn(e.sessionId, `Watchdog — ${new Date().toISOString().slice(0, 16).replace("T", " ")}`);
-          }
-        }),
+      runTurn: makeWatchdogTurn({
+        run: (prompt, onEvent) => watchdogManager.run(prompt, undefined, onEvent),
+        onSession: (sessionId) =>
+          sessions.upsertFromTurn(sessionId, `Watchdog — ${new Date().toISOString().slice(0, 16).replace("T", " ")}`),
+      }),
       log: (m) => console.error(m),
     });
   }
