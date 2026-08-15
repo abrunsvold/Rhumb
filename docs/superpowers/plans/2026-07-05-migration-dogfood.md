@@ -6,14 +6,14 @@
 
 **Architecture:** Operational run, not a code plan — the platform's build agent writes whatever code the change needs. Our tasks: deploy the branch-tip fix stack to the box, snapshot the baseline, connect the fixed client, drive one turn from it, verify ground truth (headline: clean blue-green cutover), and write findings. Box-specific values are recorded in Task M1 and reused as shell variables.
 
-**Tech Stack:** SSH to `micropx-pve.tail731306.ts.net`; `node` + `pg` from the deployed agent-host `node_modules` (no `psql`); `curl`; the Tauri client via `npm run tauri:dev` in `client/` driven by computer-use; `systemctl`/`journalctl`/`pct`.
+**Tech Stack:** SSH to `micropx-pve.tailnet.ts.net`; `node` + `pg` from the deployed agent-host `node_modules` (no `psql`); `curl`; the Tauri client via `npm run tauri:dev` in `client/` driven by computer-use; `systemctl`/`journalctl`/`pct`.
 
 ## Global Constraints
 
 - **Observe, don't rescue.** During the turn (Task M4) issue NO manual commands against the box/DB/containers. If the agent stalls or fails, that is the finding.
 - **The headline pass criterion is the clean cutover** (Task M5 C1): exactly one poller container, registry moved to a new containerId+deployId, old container gone, three-way provenance match. This is the inverse of day-2's orphaned-106 failure and the whole reason the run exists.
 - **Findings drive the roadmap;** the write-up (Task M6) ranks them. If C1 passes, PRs #25/#26/#28 are validated for merge; if it regresses, that is the top finding and merge waits.
-- **Box facts** (recorded, from prior runs): `$BOX`=micropx-pve.tail731306.ts.net (SSH root); `$REPO_DIR`=/root/rhumb; `$WS`=/root/rhumbr-workspace; units `rhumbr-agent.service`/`rhumbr-dashboard.service`; `$ENV_FILE`=/root/rhumb.env (control token `RHUMB_CONTROL_TOKEN` lives here — never paste its value); `$DEPLOY_KEY`=/root/rhumb-deploy. Serve fronts `https://$BOX/` (dashboard) and `https://$BOX/agent`. Poller currently container **106**, deployId `20260704212359-d25440`.
+- **Box facts** (recorded, from prior runs): `$BOX`=micropx-pve.tailnet.ts.net (SSH root); `$REPO_DIR`=/root/rhumb; `$WS`=/root/rhumbr-workspace; units `rhumbr-agent.service`/`rhumbr-dashboard.service`; `$ENV_FILE`=/root/rhumb.env (control token `RHUMB_CONTROL_TOKEN` lives here — never paste its value); `$DEPLOY_KEY`=/root/rhumb-deploy. Serve fronts `https://$BOX/` (dashboard) and `https://$BOX/agent`. Poller currently container **106**, deployId `20260704212359-d25440`.
 - **Branch under test:** `fix/client-chat-discovery` tip `2f0f179` (carries all of PR #25/#26/#28). No repo code changes in this run — only the dogfood run-log doc + commits.
 - **No secrets** in the run log, runsheet, or reports (DB passwords, control token, OAuth token).
 - **Run log:** `docs/dogfood/2026-07-05-migration.md`, timestamps local (`date '+%H:%M:%S'`), pasted-evidence discipline (the project was burned once by a false success — every criterion gets command + output).

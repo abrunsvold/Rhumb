@@ -8,7 +8,7 @@
 Task 1 updated the box from a non-git, tarball-deployed tree to current `main` (adce272-equivalent), 23 steps, ~13 min wall time (14:17:13–14:30:21). Headline findings:
 
 - **No deployment mechanism exists in the repo.** `/root/rhumb` has no `.git` anywhere; the box was populated by copying locally-built tarballs (source built on Mac, tar'd, scp'd, extracted, then `npm ci && npm run build` run **on the box** — the real convention, confirmed by linux-x64 native binaries and root-owned `node_modules`/`dist` vs. `501:staff`-owned `src`). No `deploy.sh`, no Makefile target, nothing derivable from the repo. This is the single biggest on-ramp friction finding.
-- **SSH known_hosts gap:** the Tailscale hostname (`micropx-pve.tail731306.ts.net`) wasn't pre-registered in `~/.ssh/known_hosts` even though the same host key was already trusted under its IP addresses. Fixed by appending a hostname-keyed line after verifying byte-identical key via `ssh-keyscan`.
+- **SSH known_hosts gap:** the Tailscale hostname (`micropx-pve.tailnet.ts.net`) wasn't pre-registered in `~/.ssh/known_hosts` even though the same host key was already trusted under its IP addresses. Fixed by appending a hostname-keyed line after verifying byte-identical key via `ssh-keyscan`.
 - **RHUMB_ALLOWED_USERS env drift:** after rebuilding+restarting on the updated `main` (post PR #21 tailnet-identity work), both hosts crash-looped with `RHUMB_ALLOWED_USERS is required`. Predicted by the brief; fixed by appending the user's own existing value (`fcomposites@github`, copied verbatim from `/root/rhumb-pr21.env`) to `/root/rhumb.env`.
 - **Stale plan assumption — health check drift:** the brief expected `dashboard / → 200`; post-identity the dashboard fails closed and returns 403 without a Tailscale identity header on a bare loopback curl. Correct check is `/healthz → {"ok":true}` on both hosts, which passes.
 - **Serve repoint pending user authorization:** `tailscale serve` on the box still routes the tailnet HTTPS origin to the old pr21 stack (9787/9788); the updated stack (8787/8788) is healthy but loopback-only until serve is repointed — session's permission classifier deferred this live-ingress change to the user. Not done as part of Task 1 or this task.
@@ -231,10 +231,10 @@ Both printers idle (`standby`), `filament_used=0` on current rows — this is th
 ### C4 — surface renders filament: **PASS**
 
 ```
-curl -s -o /dev/null -w '%{http_code}' https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/
+curl -s -o /dev/null -w '%{http_code}' https://micropx-pve.tailnet.ts.net/surfaces/printer-tracker/
 → 200
 
-curl -s https://micropx-pve.tail731306.ts.net/surfaces/printer-tracker/ | grep -ci filament
+curl -s https://micropx-pve.tailnet.ts.net/surfaces/printer-tracker/ | grep -ci filament
 → 4
 ```
 Rendered page contains a per-printer status-card row (`Filament used` → `(filament_used/1000).toFixed(2) + " m"`) and a job-history table column (`<th>...Filament...</th>` with the same mm→m formatting) — confirming the agent's claim that the dashboard already displayed filament both on the live card and in job history, unchanged by this turn.

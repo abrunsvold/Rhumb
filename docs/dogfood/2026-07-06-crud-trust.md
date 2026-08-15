@@ -7,7 +7,7 @@
 
 ## Phase 0/1 — client ready + baseline
 
-Read-only snapshot taken via SSH against `micropx-pve.tail731306.ts.net` (WS=`/root/rhumbr-workspace`, REPO_DIR=`/root/rhumb`), before any live CRUD/trust turn.
+Read-only snapshot taken via SSH against `micropx-pve.tailnet.ts.net` (WS=`/root/rhumbr-workspace`, REPO_DIR=`/root/rhumb`), before any live CRUD/trust turn.
 
 **data-sources.json** — one existing source:
 - id `printers`, type `postgres`, mode `read-write` (connection string password redacted)
@@ -83,7 +83,7 @@ Timezone: EDT. Driver: computer-use (Task D3 recorder, packaged-app retry).
 ### Discover-first results (replace the brief's placeholders)
 - **Write target TABLE:** `filament_spools` (reads go through the `spool_inventory` view). Source: `printers` (reused RW source; no new source). Both read from the surface JS: `write({kind:"insert", table:"filament_spools", values})`, `update` with `values:{remaining_g, updated_at}, where:{id}`, `delete` with `where:{id}`; reads via `query("spool_inventory")`.
 - **Insert value columns (from surface JS):** `material, color, remaining_g, color_hex, brand, name, notes` (+ `total_weight_g`).
-- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tail731306.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: an earlier read of this — that the surface HTML served 200 unauthenticated — was **superseded, see F25 / Phase 4**: that 200 was authorized serve-path access with an injected tailnet identity; the raw loopback route returns 403, so the HTML is identity-gated, not public.)
+- **Surface token source:** read from the surface's **served HTML** at `https://micropx-pve.tailnet.ts.net/surfaces/filament-spools/` — the injected shim sets it in `<meta name="rhumb-surface-token" content="…">` and the `window.fetch` wrapper (`X-Rhumb-Surface-Token`). Value is NOT persisted anywhere in this repo. (Note: an earlier read of this — that the surface HTML served 200 unauthenticated — was **superseded, see F25 / Phase 4**: that 200 was authorized serve-path access with an injected tailnet identity; the raw loopback route returns 403, so the HTML is identity-gated, not public.)
 - **Real row ids used:** id `2` = Spool One (update target), id `3` = Spool Two (DELETE probe target).
 
 ### Baseline (start of Phase 3, pre-writes)

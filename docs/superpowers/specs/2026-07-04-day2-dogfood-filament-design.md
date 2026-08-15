@@ -29,7 +29,7 @@ Alternatives considered and rejected for this round: job-history pruning (DB-onl
 
 ### Phase 0 — update the box
 
-The box (`micropx-pve.tail731306.ts.net`) runs the PR #21 stack; main is two merges ahead (#22 platform shell + first-class sessions — includes agent-host session-index backfill; #23 follow-ups). Bring the box to current main before the run.
+The box (`micropx-pve.tailnet.ts.net`) runs the PR #21 stack; main is two merges ahead (#22 platform shell + first-class sessions — includes agent-host session-index backfill; #23 follow-ups). Bring the box to current main before the run.
 
 This phase is deliberately part of the dogfood: the first run flagged "redeploy after env change is ~15 manual steps" as an on-ramp roadmap signal. Count and time the steps again; that friction is a **finding**, not overhead.
 
