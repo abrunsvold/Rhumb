@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createWatchdog, watchdogDisallowedTools, WATCHDOG_PROMPT } from "../src/watchdog.js";
+import { createWatchdog, makeWatchdogTurn, watchdogDisallowedTools, WATCHDOG_PROMPT } from "../src/watchdog.js";
 import { GATED_TOOLS } from "../src/infra/server.js";
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -76,5 +76,63 @@ describe("WATCHDOG_PROMPT", () => {
     expect(WATCHDOG_PROMPT).toMatch(/Never retry/);
     expect(WATCHDOG_PROMPT).toMatch(/proposal id/);
     expect(WATCHDOG_PROMPT).toMatch(/destroy operations are unavailable/i);
+  });
+});
+
+// A turn that fails must not look like a turn that worked. The backend contract
+// resolves on failure (backend-conformance: "send never throws"), so these pin
+// that makeWatchdogTurn reads the error channel and rejects — which is what
+// makes createWatchdog's log path reachable at all.
+describe("makeWatchdogTurn", () => {
+  it("resolves when the turn ends with a healthy result", async () => {
+    const turn = makeWatchdogTurn({
+      run: async (_p, onEvent) => {
+        onEvent({ type: "session", sessionId: "s1" });
+        onEvent({ type: "result", result: "All healthy", isError: false });
+      },
+    });
+    await expect(turn()).resolves.toBeUndefined();
+  });
+
+  it("rejects when the backend emits an error event", async () => {
+    const turn = makeWatchdogTurn({
+      run: async (_p, onEvent) => {
+        onEvent({ type: "session", sessionId: "s1" });
+        onEvent({ type: "error", message: "rate limited" });
+      },
+    });
+    await expect(turn()).rejects.toThrow("rate limited");
+  });
+
+  it("rejects when the terminal result carries isError", async () => {
+    const turn = makeWatchdogTurn({
+      run: async (_p, onEvent) => {
+        onEvent({ type: "result", result: "auth expired", isError: true });
+      },
+    });
+    await expect(turn()).rejects.toThrow("auth expired");
+  });
+
+  it("still reports the session id for a turn that later fails", async () => {
+    const onSession = vi.fn();
+    const turn = makeWatchdogTurn({
+      onSession,
+      run: async (_p, onEvent) => {
+        onEvent({ type: "session", sessionId: "s9" });
+        onEvent({ type: "error", message: "boom" });
+      },
+    });
+    await expect(turn()).rejects.toThrow("boom");
+    expect(onSession).toHaveBeenCalledWith("s9");
+  });
+
+  it("a failing turn is logged by the watchdog rather than lost", async () => {
+    const log = vi.fn();
+    const runTurn = makeWatchdogTurn({
+      run: async (_p, onEvent) => { onEvent({ type: "error", message: "529 overloaded" }); },
+    });
+    const w = createWatchdog({ intervalMs: 1000, runTurn, log });
+    expect(await w.tick()).toBe("ran");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("529 overloaded"));
   });
 });
