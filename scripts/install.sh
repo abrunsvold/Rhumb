@@ -36,15 +36,25 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+LIVE_ENV_FILE=/etc/rhumb/rhumb.env
+
 if [ "$DRY_RUN" = 1 ]; then
   STAGE_DIR="${STAGE_DIR:-$(mktemp -d)}"
   mkdir -p "$STAGE_DIR"
   ENV_FILE="$STAGE_DIR/rhumb.env"
   UNIT_DIR="$STAGE_DIR"
 else
-  ENV_FILE=/etc/rhumb/rhumb.env
+  ENV_FILE="$LIVE_ENV_FILE"
   UNIT_DIR=/etc/systemd/system
 fi
+
+# Where this run WRITES ($ENV_FILE) and where existing settings are READ from
+# ($LIVE_ENV_FILE) are different questions, and only a dry run separates them.
+# Reading defaults from $ENV_FILE meant a dry run looked in its own empty stage
+# dir, found no config, and rehearsed a FIRST install — demanding an OAuth token
+# from a box that already had one. So the one command meant to de-risk
+# `git pull && install.sh` could never exercise the path it was de-risking.
+SRC_ENV_FILE="$LIVE_ENV_FILE"
 
 RUN_USER="${SUDO_USER:-$(id -un)}"
 
@@ -124,9 +134,9 @@ CUR_API_KEY=""
 CUR_BASE_URL=""
 CUR_AUTH_TOKEN=""
 
-if [ -f "$ENV_FILE" ]; then
-  info "Existing config at $ENV_FILE — current values become the defaults"
-  env_get() { sed -n "s|^$1=||p" "$ENV_FILE" | tail -n1; }
+if [ -f "$SRC_ENV_FILE" ]; then
+  info "Existing config at $SRC_ENV_FILE — current values become the defaults"
+  env_get() { sed -n "s|^$1=||p" "$SRC_ENV_FILE" | tail -n1; }
   CUR_TOKEN="$(env_get CLAUDE_CODE_OAUTH_TOKEN)"
   CUR_USERS="$(env_get RHUMB_ALLOWED_USERS)"
   CUR_WORKSPACE="$(env_get RHUMB_WORKSPACE)"
@@ -138,11 +148,15 @@ if [ -f "$ENV_FILE" ]; then
   CUR_API_KEY="$(env_get ANTHROPIC_API_KEY)"
   CUR_BASE_URL="$(env_get ANTHROPIC_BASE_URL)"
   CUR_AUTH_TOKEN="$(env_get ANTHROPIC_AUTH_TOKEN)"
-  if grep -qxF "$MARKER" "$ENV_FILE"; then
-    OPTIONAL_SECTION="$(awk -v m="$MARKER" 'found; $0 == m { found = 1 }' "$ENV_FILE")"
+  if grep -qxF "$MARKER" "$SRC_ENV_FILE"; then
+    OPTIONAL_SECTION="$(awk -v m="$MARKER" 'found; $0 == m { found = 1 }' "$SRC_ENV_FILE")"
+  elif [ "$DRY_RUN" = 1 ]; then
+    # A dry run must not touch anything outside its stage dir, so it reports
+    # the backup it WOULD take rather than taking it.
+    warn "no optional-settings marker in existing $SRC_ENV_FILE — a real run would back it up to $SRC_ENV_FILE.bak; re-add any custom lines below the marker"
   else
-    cp "$ENV_FILE" "$ENV_FILE.bak"
-    warn "no optional-settings marker in existing $ENV_FILE — backed up to $ENV_FILE.bak; re-add any custom lines below the marker"
+    cp "$SRC_ENV_FILE" "$SRC_ENV_FILE.bak"
+    warn "no optional-settings marker in existing $SRC_ENV_FILE — backed up to $SRC_ENV_FILE.bak; re-add any custom lines below the marker"
   fi
 fi
 
@@ -174,9 +188,9 @@ warn_if_overridden() {
   [ -n "$__persisted" ] || return 0
   [ "$__ambient" != "$__persisted" ] || return 0
   if [ -n "$__secret" ]; then
-    warn "$__var is set in the environment and differs from the value persisted in $ENV_FILE — using the environment value, overriding the saved one"
+    warn "$__var is set in the environment and differs from the value persisted in $SRC_ENV_FILE — using the environment value, overriding the saved one"
   else
-    warn "$__var is set in the environment (\"$(redact_userinfo "$__ambient")\") and differs from the persisted value (\"$(redact_userinfo "$__persisted")\") in $ENV_FILE — using the environment value"
+    warn "$__var is set in the environment (\"$(redact_userinfo "$__ambient")\") and differs from the persisted value (\"$(redact_userinfo "$__persisted")\") in $SRC_ENV_FILE — using the environment value"
   fi
 }
 
